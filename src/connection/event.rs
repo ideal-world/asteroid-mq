@@ -7,13 +7,18 @@ pub enum ConnectionEvent {
     Hello {
         auth: ConnectionAuth,
     },
+    Close {
+        reason: Option<String>,
+    },
     Heartbeat {
         ts: u64,
     },
     EndpointOnline {
+        node: NodeId,
         endpoint: EndpointAddr,
     },
     EndpointOffline {
+        node: NodeId,
         endpoint: EndpointAddr,
     },
     Event {

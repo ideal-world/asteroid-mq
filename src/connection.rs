@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     error::Error,
     future::poll_fn,
-    sync::Arc,
+    sync::{Arc, Weak},
     task::{Context, Poll},
 };
 
@@ -18,13 +18,15 @@ pub struct Node {
     pub connections: HashMap<ConnectionId, ConnectionRef>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId {
     pub bytes: [u8; 16],
 }
 
 mod auth;
 mod event;
+mod routing;
+
 #[derive(Debug, Clone)]
 pub struct ConnectionRef {
     pub inner: Arc<Connection>,
@@ -33,6 +35,7 @@ pub struct ConnectionRef {
 #[derive(Debug)]
 pub struct Connection {
     pub peer: NodeId,
+    pub attached_node: Weak<Node>,
     pub auth: ConnectionAuth,
     pub authenticator: Box<dyn ConnectionAuthenticator>,
 }
@@ -110,6 +113,9 @@ impl Connection {
                         node_trace,
                     } => {
                         self.authenticator.auth_event(payload)?;
+                    }
+                    ConnectionEvent::Close { reason } => {
+                        return Err(ConnectionError::from_context("connection closed"));
                     }
                 },
                 Some(Err(err)) => {
