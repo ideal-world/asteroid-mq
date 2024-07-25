@@ -1,6 +1,6 @@
 use crate::{event::EventPayload, EndpointAddr};
 
-use super::{auth::ConnectionAuth, NodeId};
+use super::{auth::ConnectionAuth, routing::node_jump::NextJumpTable, NodeId};
 
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
@@ -26,8 +26,12 @@ pub enum ConnectionEvent {
         node_trace: NodeTrace,
     },
 }
-#[derive(Debug, Clone)]
 
+pub struct NodeRoutingInfo {
+    table: NextJumpTable
+}
+
+#[derive(Debug, Clone)]
 pub struct NodeTrace {
     pub source: NodeId,
     pub hops: Vec<NodeId>,

@@ -13,8 +13,7 @@ use crate::{
     Endpoint, EndpointAddr,
 };
 
-pub struct Publish<E> {
-    pub event: E,
+pub struct PubSubWorker {
 }
 impl Endpoint {
     fn subscribe<E: Event, A, H: EventHandler<A, E>>(&self, handler: H) {

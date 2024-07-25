@@ -28,7 +28,6 @@ impl NextJumpTable {
     pub fn clear(&mut self) {
         self.table.clear();
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -36,3 +35,5 @@ pub struct NextJump {
     pub id: NodeId,
     pub hops: u32,
 }
+
+

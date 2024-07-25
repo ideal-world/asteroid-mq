@@ -33,6 +33,22 @@ pub struct EventPayload {
     pub trace_id: TraceId,
     pub data: Bytes,
 }
+
+#[derive(Debug, Clone)]
+pub struct E2EMessage {
+    pub source: EndpointAddr,
+    pub target: EndpointAddr,
+    pub persistent: bool,
+    pub encoder: Encoder,
+    pub data: Bytes,
+}
+
+#[derive(Debug, Clone)]
+pub struct Encoder {
+    pub kind: EncoderKind,
+    pub code: Bytes,
+}
+
 pub trait EventHandler<A, E>: Clone
 where
     E: Event,

@@ -97,35 +97,35 @@ impl Connection {
             }
         };
         self.authenticator.auth_connect(peer_auth)?;
-        loop {
-            match poll_fn(|cx| self.poll_next_event(cx)).await {
-                Some(Ok(event)) => match event {
-                    ConnectionEvent::Hello { auth } => {}
-                    ConnectionEvent::Heartbeat { ts } => {}
-                    ConnectionEvent::EndpointOnline { endpoint } => {
-                        self.authenticator.auth_endpoint_online(endpoint)?;
-                    }
-                    ConnectionEvent::EndpointOffline { endpoint } => {
-                        self.authenticator.auth_endpoint_offline(endpoint)?;
-                    }
-                    ConnectionEvent::Event {
-                        payload,
-                        node_trace,
-                    } => {
-                        self.authenticator.auth_event(payload)?;
-                    }
-                    ConnectionEvent::Close { reason } => {
-                        return Err(ConnectionError::from_context("connection closed"));
-                    }
-                },
-                Some(Err(err)) => {
-                    return Err(ConnectionError::new(err, "poll next event"));
-                }
-                None => {
-                    return Err(ConnectionError::from_context("connection closed"));
-                }
-            }
-        }
+        // loop {
+        //     match poll_fn(|cx| self.poll_next_event(cx)).await {
+        //         Some(Ok(event)) => match event {
+        //             ConnectionEvent::Hello { auth } => {}
+        //             ConnectionEvent::Heartbeat { ts } => {}
+        //             ConnectionEvent::EndpointOnline { endpoint } => {
+        //                 self.authenticator.auth_endpoint_online(endpoint)?;
+        //             }
+        //             ConnectionEvent::EndpointOffline { endpoint } => {
+        //                 self.authenticator.auth_endpoint_offline(endpoint)?;
+        //             }
+        //             ConnectionEvent::Event {
+        //                 payload,
+        //                 node_trace,
+        //             } => {
+        //                 self.authenticator.auth_event(payload)?;
+        //             }
+        //             ConnectionEvent::Close { reason } => {
+        //                 return Err(ConnectionError::from_context("connection closed"));
+        //             }
+        //         },
+        //         Some(Err(err)) => {
+        //             return Err(ConnectionError::new(err, "poll next event"));
+        //         }
+        //         None => {
+        //             return Err(ConnectionError::from_context("connection closed"));
+        //         }
+        //     }
+        // }
         unimplemented!("start")
     }
 }
