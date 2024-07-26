@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-async-nats = "0.35.1"
 bytes = "1.6.1"
 futures-util = "0.3.30"
 tokio = { version = "1.39.1", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
+zeromq = { version = "*", default-features = false, features = ["async-std-runtime", "all-transport"] }

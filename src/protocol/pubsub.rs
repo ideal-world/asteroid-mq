@@ -6,24 +6,3 @@ use std::future::Future;
 
 use bytes::Bytes;
 
-use crate::{
-    codec::EncoderKind,
-    error::EventHandleError,
-    event::{Event, EventHandler},
-    Endpoint, EndpointAddr,
-};
-
-pub struct PubSubWorker {
-}
-impl Endpoint {
-    fn subscribe<E: Event, A, H: EventHandler<A, E>>(&self, handler: H) {
-        todo!("subscribe")
-    }
-    fn publish<E: Event>(&self, event: E) {
-        todo!("publish")
-    }
-}
-pub struct Subscribe<E> {
-    pub topic: &'static [u8],
-    pub handler: Box<dyn Fn(E) + Send>,
-}
