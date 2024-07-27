@@ -18,7 +18,6 @@ pub struct Node {
     pub connections: HashMap<ConnectionId, ConnectionRef>,
 }
 
-use zeromq::Endpoint;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId {

@@ -1,6 +1,7 @@
 {
     "cSpell.words": [
         "Bincode",
-        "kademlia"
+        "kademlia",
+        "Protobuf"
     ]
 }
