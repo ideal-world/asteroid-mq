@@ -2,7 +2,9 @@ use std::{borrow::Cow, mem::size_of};
 
 use bytes::{Buf as _, BufMut, Bytes, BytesMut};
 
-use super::{N2NAuth, N2NAuthEvent, N2NMessageEvent, NodeId, NodeInfo, NodeTrace};
+use super::{
+    event::N2NAuthEvent, N2NAuth, N2NMessageEvent, N2NUnreachableEvent, NodeId, NodeInfo, NodeTrace
+};
 #[derive(Debug)]
 pub struct NNDecodeError {
     pub parsing_type: &'static str,
@@ -173,5 +175,27 @@ impl NNCodecType for N2NAuthEvent {
     fn encode(&self, buf: &mut BytesMut) {
         self.info.encode(buf);
         self.auth.encode(buf);
+    }
+}
+
+impl NNCodecType for N2NUnreachableEvent {
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), NNDecodeError> {
+        let (to, bytes) = NodeId::decode(bytes)?;
+        let (unreachable_target, bytes) = NodeId::decode(bytes)?;
+        let (trace, bytes) = NodeTrace::decode(bytes)?;
+        Ok((
+            N2NUnreachableEvent {
+                unreachable_target,
+                to,
+                trace,
+            },
+            bytes,
+        ))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        self.to.encode(buf);
+        self.unreachable_target.encode(buf);
+        self.trace.encode(buf)
     }
 }

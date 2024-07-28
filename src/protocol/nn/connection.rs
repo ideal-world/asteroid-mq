@@ -1,12 +1,12 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
-use bytes::Bytes;
 use tokio::task::JoinHandle;
+
+use crate::protocol::nn::event::{N2NAuthEvent, N2NEventKind};
 
 use super::{
     codec::{NNCodecType, NNDecodeError},
-    N2NAuth, N2NAuthEvent, N2NEventId, N2NEventKind, N2NEventPacket, N2NMessageEvent, Node,
-    NodeInfo,
+    N2NAuth, N2NEventPacket, N2NMessageEvent, Node, NodeInfo,
 };
 
 pub mod tokio_tcp;
@@ -38,7 +38,7 @@ pub struct N2NSendError {
     pub raw_event: N2NEventPacket,
     pub error: Box<dyn std::error::Error + Send + Sync>,
 }
-use futures_util::{FutureExt, Sink, SinkExt, Stream, StreamExt};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 pub trait N2NConnection:
     Send
     + 'static
@@ -65,13 +65,16 @@ impl Deref for N2NConnectionRef {
 #[derive(Debug)]
 pub struct N2NConnectionInstance {
     pub config: ConnectionConfig,
-    pub handle: tokio::task::JoinHandle<()>,
     pub outbound: flume::Sender<N2NEventPacket>,
+    pub alive: Arc<std::sync::atomic::AtomicBool>,
     pub peer_info: NodeInfo,
     pub peer_auth: N2NAuth,
 }
 
 impl N2NConnectionInstance {
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(std::sync::atomic::Ordering::Relaxed)
+    }
     pub fn get_connection_ref(self: &Arc<Self>) -> N2NConnectionRef {
         N2NConnectionRef {
             inner: Arc::clone(self),
@@ -110,7 +113,6 @@ impl N2NConnectionInstance {
         let auth_event = N2NAuthEvent::decode(auth.payload)
             .map_err(|e| N2NConnectionError::new(N2NConnectionErrorKind::Decode(e), "decode auth"))?
             .0;
-
 
         tracing::debug!(auth=?auth_event, "received auth event");
         let (outbound_tx, outbound_rx) = flume::bounded::<N2NEventPacket>(1024);
@@ -151,18 +153,28 @@ impl N2NConnectionInstance {
             }
             Ok(stream)
         });
-        let handle = tokio::spawn(async move {
-            let selected = futures_util::future::select(ib_handle, ob_handle).await;
-            match selected {
-                futures_util::future::Either::Left(ib) => {
-                    // do log stuff here
+        let alive_flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let _handle = {
+            let alive_flag = Arc::clone(&alive_flag);
+            let attached_node = config.attached_node.clone();
+            let peer_id = auth_event.info.id;
+            tokio::spawn(async move {
+                let selected = futures_util::future::select(ib_handle, ob_handle).await;
+                match selected {
+                    futures_util::future::Either::Left(ib) => {
+                        // do log stuff here
+                    }
+                    futures_util::future::Either::Right(ob) => {}
                 }
-                futures_util::future::Either::Right(ob) => {}
-            }
-        });
+                alive_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                if let Some(node) = attached_node.upgrade() {
+                    node.remove_connection(peer_id);
+                }
+            })
+        };
         Ok(Self {
             config: config_clone,
-            handle,
+            alive: alive_flag,
             outbound: outbound_tx,
             peer_info: auth_event.info,
             peer_auth: auth_event.auth,

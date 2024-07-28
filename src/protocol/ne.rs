@@ -1,12 +1,6 @@
 use bytes::Bytes;
 
-use crate::EndpointAddr;
-
-pub enum MessageAck {
-    Received = 0,
-    Processed = 1,
-    Failed = 2,
-}
+use crate::endpoint::EndpointAddr;
 
 pub enum MessageStatus {
     ReadyToSend = 0,
@@ -31,3 +25,6 @@ pub struct ToEpMessage {
     pub status: MessageStatus,
 }
 
+pub enum MessageType {
+    Ack
+}

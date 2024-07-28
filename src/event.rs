@@ -2,7 +2,7 @@ use std::future::Future;
 
 use bytes::Bytes;
 
-use crate::{codec::EncoderKind, error::EventHandleError, EndpointAddr};
+use crate::{codec::EncoderKind, error::EventHandleError, endpoint::EndpointAddr};
 
 pub trait Event {
     const CODE: &'static [u8];

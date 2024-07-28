@@ -1,5 +1,6 @@
 pub mod codec;
 pub mod connection;
+pub mod event;
 
 use std::{
     borrow::Cow,
@@ -17,14 +18,23 @@ use connection::{
     N2NConnectionInstance, N2NConnectionRef,
 };
 use crossbeam::{epoch::Pointable, sync::ShardedLock};
+use event::{N2NAuth, N2NEventPacket, N2NMessageEvent, N2NUnreachableEvent, NodeKind, NodeTrace};
 use serde::{Deserialize, Serialize};
 
-use crate::EndpointAddr;
+use crate::endpoint::{Endpoint, EndpointAddr};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId {
     pub bytes: [u8; 16],
+}
+
+impl std::fmt::Debug for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("NodeId")
+            .field(&crate::util::hex(&self.bytes))
+            .finish()
+    }
 }
 impl NodeId {
     pub fn new() -> NodeId {
@@ -46,153 +56,6 @@ impl Default for NodeId {
         Self::new()
     }
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-
-pub struct NodeTrace {
-    pub source: NodeId,
-    pub hops: Vec<NodeId>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum NodeKind {
-    Cluster = 0,
-    Edge = 1,
-}
-
-impl From<u8> for NodeKind {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => NodeKind::Cluster,
-            1 => NodeKind::Edge,
-            _ => NodeKind::Edge,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct N2NEventId {
-    pub bytes: [u8; 16],
-}
-
-impl N2NEventId {
-    pub fn gen() -> Self {
-        thread_local! {
-            static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-        }
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let counter = COUNTER.with(|c| {
-            let v = c.get();
-            c.set(v.wrapping_add(1));
-            v
-        });
-        let eid = crate::util::executor_digest() as u32;
-        let mut bytes = [0; 16];
-        bytes[0..8].copy_from_slice(&timestamp.to_be_bytes());
-        bytes[8..12].copy_from_slice(&counter.to_be_bytes());
-        bytes[12..16].copy_from_slice(&eid.to_be_bytes());
-        Self { bytes }
-    }
-}
-
-#[repr(u8)]
-pub enum N2NEncodeKind {
-    Bincode = 0,
-    Json = 1,
-    Protobuf = 2,
-}
-#[derive(Debug)]
-pub struct N2NEventPacket {
-    pub header: N2NEventPacketHeader,
-    pub payload: Bytes,
-}
-#[derive(Debug)]
-pub struct N2NEventPacketHeader {
-    pub id: N2NEventId,
-    pub kind: N2NEventKind,
-    pub payload_size: u32,
-}
-
-impl N2NEventPacket {
-    pub fn kind(&self) -> N2NEventKind {
-        self.header.kind
-    }
-
-    pub fn auth(evt: N2NAuthEvent) -> Self {
-        let mut payload_buf = BytesMut::with_capacity(size_of::<N2NAuthEvent>());
-        evt.encode(&mut payload_buf);
-        Self {
-            header: N2NEventPacketHeader {
-                id: N2NEventId::gen(),
-                kind: N2NEventKind::Auth,
-                payload_size: payload_buf.len() as u32,
-            },
-            payload: payload_buf.into(),
-        }
-    }
-    pub fn message(evt: N2NMessageEvent) -> Self {
-        let mut payload_buf =
-            BytesMut::with_capacity(evt.payload.len() + size_of::<N2NMessageEvent>());
-        evt.encode(&mut payload_buf);
-        Self {
-            header: N2NEventPacketHeader {
-                id: N2NEventId::gen(),
-                kind: N2NEventKind::Message,
-                payload_size: payload_buf.len() as u32,
-            },
-            payload: payload_buf.into(),
-        }
-    }
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum N2NEventKind {
-    Auth = 0,
-    Message = 1,
-    Unreachable = 2,
-    Unknown = 255,
-}
-
-impl From<u8> for N2NEventKind {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => N2NEventKind::Auth,
-            1 => N2NEventKind::Message,
-            2 => N2NEventKind::Unreachable,
-            _ => N2NEventKind::Unknown,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct N2NAuthEvent {
-    pub info: NodeInfo,
-    pub auth: N2NAuth,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct N2NMessageEvent {
-    pub to: NodeId,
-    pub trace: NodeTrace,
-    pub payload: Bytes,
-}
-
-pub struct N2NUnreachableEvent {
-    pub to: NodeId,
-    pub trace: NodeTrace,
-}
-
-pub enum N2NEvent {
-    Auth(N2NAuthEvent),
-    Message(N2NMessageEvent),
-    Unreachable(N2NUnreachableEvent),
-}
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct N2NAuth {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
     pub id: NodeId,
@@ -211,7 +74,10 @@ impl Default for NodeInfo {
 #[derive(Debug, Default)]
 pub struct Node {
     info: NodeInfo,
-    ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
+    pub(crate) endpoints: ShardedLock<HashMap<EndpointAddr, Arc<Endpoint>>>,
+    // ne layer
+    pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
+    // nn layer
     n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
     connections: ShardedLock<HashMap<NodeId, Arc<N2NConnectionInstance>>>,
     auth: N2NAuth,
@@ -237,27 +103,123 @@ impl Node {
         self.info.id
     }
     pub async fn handle_message(&self, message_evt: N2NMessageEvent) {
+        self.record_routing_info(&message_evt.trace);
         if message_evt.to == self.id() {
             self.handle_message_as_desitination(message_evt).await;
         } else {
-            self.forward_message(message_evt).await;
+            self.forward_message(message_evt);
         }
     }
-    pub async fn handle_message_as_desitination(&self, message_evt: N2NMessageEvent) {}
+    pub async fn handle_message_as_desitination(&self, message_evt: N2NMessageEvent) {
+        tracing::trace!(message=?message_evt, "message received");
+    }
     pub fn get_connection(&self, to: NodeId) -> Option<N2NConnectionRef> {
         let connections = self.connections.read().unwrap();
-        connections.get(&to).map(|conn| conn.get_connection_ref())
+        let conn = connections.get(&to)?;
+        if conn.is_alive() {
+            Some(conn.get_connection_ref())
+        } else {
+            None
+        }
     }
 
-    pub async fn forward_message(&self, mut message_evt: N2NMessageEvent) {
+    pub fn remove_connection(&self, to: NodeId) {
+        self.connections.write().unwrap().remove(&to);
+    }
+    pub fn send_packet(&self, packet: N2NEventPacket, to: NodeId) -> Result<(), N2NEventPacket> {
+        let Some(conn) = self.get_connection(to) else {
+            return Err(packet);
+        };
+        if let Err(e) = conn.outbound.send(packet) {
+            tracing::error!(error=?e, "failed to send packet");
+            return Err(e.0);
+        }
+        Ok(())
+    }
+    pub fn report_unreachable(&self, raw: N2NMessageEvent) {
+        let source = raw.trace.source();
+        let prev_node = raw.trace.prev_node();
+        let unreachable_target = raw.to;
+        let unreachable_event = N2NUnreachableEvent {
+            to: source,
+            trace: NodeTrace {
+                source: self.id(),
+                hops: Vec::new(),
+            },
+            unreachable_target,
+        };
+        let packet = N2NEventPacket::unreachable(unreachable_event);
+        if let Err(packet) = self.send_packet(packet, prev_node) {
+            tracing::warn!(
+                id = ?packet.id(),
+                "trying to report unreachable but previous node lost connection"
+            );
+        }
+    }
+
+    pub fn record_routing_info(&self, trace: &NodeTrace) {
+        let prev_node = trace.prev_node();
+        let rg = self.n2n_routing_table.read().unwrap();
+        let mut update = Vec::new();
+        for (hop, node) in trace.trace_back().enumerate().skip(1) {
+            if let Some(routing) = rg.get(node) {
+                if routing.hops > hop as u32 {
+                    update.push((
+                        *node,
+                        N2nRoutingInfo {
+                            next_jump: prev_node,
+                            hops: hop as u32,
+                        },
+                    ));
+                }
+            } else {
+                update.push((
+                    *node,
+                    N2nRoutingInfo {
+                        next_jump: prev_node,
+                        hops: hop as u32,
+                    },
+                ));
+            }
+        }
+        if !update.is_empty() {
+            let mut wg = self.n2n_routing_table.write().unwrap();
+            for (node, info) in update {
+                wg.insert(node, info);
+            }
+        }
+    }
+
+    pub fn forward_message(&self, mut message_evt: N2NMessageEvent) {
         let Some(next_jump) = self.get_next_jump(message_evt.to) else {
-            todo!("handle unreachable");
+            self.report_unreachable(message_evt);
             return;
         };
         message_evt.trace.hops.push(self.id());
-        let packed = N2NEventPacket::message(message_evt);
+        if let Err(packet) = self.send_packet(N2NEventPacket::message(message_evt), next_jump) {
+            let raw_event = N2NMessageEvent::decode(packet.payload)
+                .expect("should be valid")
+                .0;
+            self.report_unreachable(raw_event);
+        }
     }
 
+    pub fn handle_unreachable(&self, unreachable_evt: N2NUnreachableEvent) {
+        let source = unreachable_evt.to;
+        let prev_node = unreachable_evt.trace.prev_node();
+        let unreachable_target = unreachable_evt.unreachable_target;
+        let mut routing_table = self.n2n_routing_table.write().unwrap();
+        if let Some(routing) = routing_table.get(&unreachable_target) {
+            if routing.next_jump == source {
+                routing_table.remove(&unreachable_target);
+            }
+        }
+        if let Some(routing) = routing_table.get(&source) {
+            if routing.next_jump == prev_node {
+                routing_table.remove(&source);
+            }
+        }
+    }
     pub fn get_next_jump(&self, to: NodeId) -> Option<NodeId> {
         let routing_table = self.n2n_routing_table.read().unwrap();
         routing_table.get(&to).map(|info| info.next_jump)
@@ -321,4 +283,5 @@ async fn test_nodes() {
             payload: Bytes::from_static(b"hello"),
         }))
         .unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 }
