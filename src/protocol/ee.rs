@@ -1,6 +1,7 @@
 use bytes::Bytes;
 
 use crate::{endpoint::EndpointAddr, interest::Interest};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageAckKind {
     Received = 0,
     Processed = 1,

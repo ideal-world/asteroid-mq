@@ -5,8 +5,7 @@ use tokio::task::JoinHandle;
 use crate::protocol::nn::event::{N2NAuthEvent, N2NEventKind};
 
 use super::{
-    codec::{NNCodecType, NNDecodeError},
-    N2NAuth, N2NEventPacket, N2NMessageEvent, Node, NodeInfo,
+    codec::{NNCodecType, NNDecodeError}, N2NAuth, N2NEventPacket, N2NMessageEvent, NodeInfo, NodeInner, NodeRef
 };
 
 pub mod tokio_tcp;
@@ -48,7 +47,7 @@ pub trait N2NConnection:
 }
 #[derive(Clone, Debug)]
 pub struct ConnectionConfig {
-    pub attached_node: std::sync::Weak<Node>,
+    pub attached_node: NodeRef,
     pub auth: N2NAuth,
 }
 pub struct N2NConnectionRef {

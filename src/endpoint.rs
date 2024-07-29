@@ -1,21 +1,24 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{self, Arc},
+};
 
 use crate::{
     interest::Interest,
     protocol::{
-        ee::{Message, MessageAck},
-        nn::{Node, NodeId},
+        ee::{Message, MessageAck, MessageAckKind, MessageId},
+        nn::{Node, NodeId, NodeInner, NodeRef},
     },
 };
 #[derive(Clone, Debug)]
 pub struct LocalEndpoint {
-    pub attached_node: std::sync::Weak<Node>,
+    pub attached_node: std::sync::Weak<NodeInner>,
     pub address: EndpointAddr,
 }
 
 impl LocalEndpoint {
     #[inline]
-    pub fn node(&self) -> Option<Arc<Node>> {
+    pub fn node(&self) -> Option<Arc<NodeInner>> {
         self.attached_node.upgrade()
     }
     pub async fn send_message(&self, message: Message) {
@@ -36,9 +39,9 @@ pub struct EndpointAddr {
 }
 
 impl Node {
-    pub fn create_endpoint(self: &Arc<Self>, addr: EndpointAddr) -> Arc<LocalEndpoint> {
+    pub fn create_endpoint(&self, addr: EndpointAddr) -> Arc<LocalEndpoint> {
         let ep = Arc::new(LocalEndpoint {
-            attached_node: Arc::downgrade(self),
+            attached_node: Arc::downgrade(&self.inner),
             address: addr,
         });
         self.local_endpoints
@@ -63,11 +66,10 @@ impl Node {
             unimplemented!("edge node")
         } else {
             match self.create_cluster_e2e_message_task(message) {
-                Ok(ack_wait_list) => {
-                },
+                Ok(ack_wait_list) => {}
                 Err(_) => todo!(),
             }
-            
+
             todo!()
         }
         // wait ack
@@ -89,19 +91,14 @@ impl Node {
                     // prefer local endpoint
                     if let Some(ep) = self.get_local_ep(ep) {
                         ep.push_message(message.clone());
-                        return Ok(AckWaitList {
-                            message,
-                            eps: vec![ep.address],
-                        });
+                        todo!("return wait list");
                     }
                 }
                 for ep in &ep_collect {
                     if let Some(remote_node) = self.get_remote_ep(ep) {
+                        
                         todo!("send to remote");
-                        return Ok(AckWaitList {
-                            message,
-                            eps: vec![*ep],
-                        });
+                        todo!("return wait list");
                     }
                 }
             }
@@ -111,10 +108,29 @@ impl Node {
 }
 
 pub struct AckWaitList {
-    pub message: Message,
+    pub message_id: MessageId,
+    pub expect_stage: Option<MessageAckKind>,
     pub eps: Vec<EndpointAddr>,
+    pub attached_node: NodeRef,
+    pub wait_map: HashMap<EndpointAddr, Option<MessageAckKind>>,
 }
 
-impl AckWaitList {
-    
+impl std::future::Future for AckWaitList {
+    type Output = Result<(), ()>;
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let Some(node) = self.attached_node.upgrade() else {
+            return std::task::Poll::Ready(Err(()));
+        };
+        let this = self.get_mut();
+        if this.expect_stage.is_none() {
+            return std::task::Poll::Ready(Ok(()));
+        }
+        for (addr, state) in &this.wait_map {
+            todo!("check ack state");
+        }
+        std::task::Poll::Pending
+    }
 }

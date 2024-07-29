@@ -7,8 +7,9 @@ use std::{
     collections::HashMap,
     mem::size_of,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    ops::Deref,
     str::FromStr,
-    sync::{self, Arc},
+    sync::{self, Arc, Weak},
 };
 
 use bytes::{Buf, Bytes, BytesMut};
@@ -21,7 +22,10 @@ use crossbeam::{epoch::Pointable, sync::ShardedLock};
 use event::{N2NAuth, N2NEventPacket, N2NMessageEvent, N2NUnreachableEvent, NodeKind, NodeTrace};
 use serde::{Deserialize, Serialize};
 
-use crate::{endpoint::{LocalEndpoint, EndpointAddr}, interest::InterestMap};
+use crate::{
+    endpoint::{EndpointAddr, LocalEndpoint},
+    interest::InterestMap,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -71,8 +75,9 @@ impl Default for NodeInfo {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct Node {
+#[derive(Debug)]
+pub struct NodeInner {
+    this: Weak<Self>,
     info: NodeInfo,
     pub(crate) local_endpoints: ShardedLock<HashMap<EndpointAddr, Arc<LocalEndpoint>>>,
     // ne layer
@@ -84,16 +89,61 @@ pub struct Node {
     auth: N2NAuth,
 }
 
+#[derive(Debug, Clone)]
+pub struct NodeRef {
+    inner: std::sync::Weak<NodeInner>,
+}
+
+impl NodeRef {
+    pub fn upgrade(&self) -> Option<Node> {
+        self.inner.upgrade().map(|inner| Node { inner })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub(crate) inner: Arc<NodeInner>,
+}
+
+impl Deref for Node {
+    type Target = NodeInner;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new_cyclic(|this| NodeInner {
+                this: this.clone(),
+                info: NodeInfo::default(),
+                local_endpoints: ShardedLock::new(HashMap::new()),
+                ep_routing_table: ShardedLock::new(HashMap::new()),
+                ep_interest_map: ShardedLock::new(InterestMap::new()),
+                n2n_routing_table: ShardedLock::new(HashMap::new()),
+                connections: ShardedLock::new(HashMap::new()),
+                auth: N2NAuth::default(),
+            }),
+        }
+    }
+}
+
 impl Node {
+    pub fn node_ref(&self) -> NodeRef {
+        NodeRef {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
     pub fn is_edge(&self) -> bool {
         matches!(self.info.kind, NodeKind::Edge)
     }
     pub async fn create_connection<C: N2NConnection>(
-        self: &Arc<Self>,
+        &self,
         conn: C,
     ) -> Result<(), N2NConnectionError> {
         let config = ConnectionConfig {
-            attached_node: Arc::downgrade(self),
+            attached_node: self.node_ref(),
             auth: self.auth.clone(),
         };
         let conn_inst = N2NConnectionInstance::init(config, conn).await?;
@@ -236,7 +286,7 @@ pub struct N2nRoutingInfo {
 }
 
 pub struct Connection {
-    pub attached_node: sync::Weak<Node>,
+    pub attached_node: sync::Weak<NodeInner>,
     pub peer_info: NodeInfo,
 }
 
@@ -246,7 +296,7 @@ async fn test_nodes() {
         .with_max_level(tracing::Level::TRACE)
         .init();
 
-    let node_server = <Arc<Node>>::default();
+    let node_server = Node::default();
     let server_id = node_server.id();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:10080")
         .await
@@ -254,7 +304,7 @@ async fn test_nodes() {
     tokio::spawn(async move {
         while let Ok((stream, peer)) = listener.accept().await {
             tracing::info!(peer=?peer, "new connection");
-            let node = Arc::clone(&node_server);
+            let node = node_server.clone();
             tokio::spawn(async move {
                 let conn = TokioTcp::new(stream);
                 node.create_connection(conn).await.unwrap();
@@ -262,7 +312,7 @@ async fn test_nodes() {
         }
     });
 
-    let node_client = <Arc<Node>>::default();
+    let node_client = Node::default();
     let client_id = node_client.id();
     let stream_client = tokio::net::TcpSocket::new_v4()
         .unwrap()
