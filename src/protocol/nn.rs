@@ -21,7 +21,7 @@ use crossbeam::{epoch::Pointable, sync::ShardedLock};
 use event::{N2NAuth, N2NEventPacket, N2NMessageEvent, N2NUnreachableEvent, NodeKind, NodeTrace};
 use serde::{Deserialize, Serialize};
 
-use crate::endpoint::{Endpoint, EndpointAddr};
+use crate::{endpoint::{LocalEndpoint, EndpointAddr}, interest::InterestMap};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -74,9 +74,10 @@ impl Default for NodeInfo {
 #[derive(Debug, Default)]
 pub struct Node {
     info: NodeInfo,
-    pub(crate) endpoints: ShardedLock<HashMap<EndpointAddr, Arc<Endpoint>>>,
+    pub(crate) local_endpoints: ShardedLock<HashMap<EndpointAddr, Arc<LocalEndpoint>>>,
     // ne layer
     pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
+    pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
     // nn layer
     n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
     connections: ShardedLock<HashMap<NodeId, Arc<N2NConnectionInstance>>>,
@@ -84,6 +85,9 @@ pub struct Node {
 }
 
 impl Node {
+    pub fn is_edge(&self) -> bool {
+        matches!(self.info.kind, NodeKind::Edge)
+    }
     pub async fn create_connection<C: N2NConnection>(
         self: &Arc<Self>,
         conn: C,
