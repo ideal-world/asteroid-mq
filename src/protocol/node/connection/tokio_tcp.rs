@@ -4,7 +4,7 @@ use bytes::{Bytes, BytesMut};
 use futures_util::{Sink, Stream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::protocol::nn::{event::{N2NEventId, N2NEventKind, N2NEventPacketHeader}, N2NEventPacket};
+use crate::protocol::node::{event::{N2NEventId, N2NEventKind, N2NEventPacketHeader}, N2NEventPacket};
 
 use super::{N2NConnection, N2NConnectionError, N2NConnectionErrorKind};
 #[derive(Debug)]

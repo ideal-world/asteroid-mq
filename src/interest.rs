@@ -1,15 +1,75 @@
 //! # Interest
 //! ## Match Interest
 //! (/)?(<path>|<*>|<**>)/*
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, HashSet},
+    hash::Hash,
+};
 
 use bytes::Bytes;
+
+#[derive(Debug, Clone)]
+pub struct Subject(pub(crate) Bytes);
+
+impl Subject {
+    pub fn new<B: Into<Bytes>>(bytes: B) -> Self {
+        Self(bytes.into())
+    }
+    pub fn segments(&self) -> SubjectSegments<'_> {
+        SubjectSegments {
+            inner: self.0.as_ref(),
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct SubjectSegments<'a> {
+    // stripped slash, always start with a non-slash byte
+    inner: &'a [u8],
+}
+
+impl<'a> Iterator for SubjectSegments<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.inner.is_empty() {
+            return None;
+        }
+        let mut slash_index = None;
+        for index in 0..self.inner.len() {
+            if self.inner[index] == b'/' {
+                slash_index.replace(index);
+                break;
+            }
+        }
+        if let Some(slash_index) = slash_index {
+            let next = &self.inner[0..slash_index];
+            let mut next_start = None;
+            for (bias, b) in self.inner[slash_index..].iter().enumerate() {
+                if *b != b'/' {
+                    next_start = Some(slash_index + bias);
+                    break
+                }
+            }
+            if let Some(next_start) = next_start {
+                self.inner = &self.inner[next_start..]
+            } else {
+                self.inner = &[];
+            }
+            Some(next)
+        } else {
+            let next = self.inner;
+            self.inner = &[];
+            Some(next)
+        }
+    }
+}
 
 /// # Interest
 /// ## Glob Match Interest
 /// (/)?(<path>|<*>|<**>)/*
 #[derive(Debug, Clone)]
 pub struct Interest(Bytes);
+
 impl Interest {
     pub fn new<B: Into<Bytes>>(bytes: B) -> Self {
         Self(bytes.into())
@@ -63,15 +123,16 @@ impl<T> Default for InterestMap<T> {
 
 #[derive(Debug)]
 pub struct InterestRadixTreeNode<T> {
-    value: Option<T>,
+    value: HashSet<T>,
     children: BTreeMap<Vec<u8>, InterestRadixTreeNode<T>>,
     any_child: Option<Box<InterestRadixTreeNode<T>>>,
     recursive_any_child: Option<Box<InterestRadixTreeNode<T>>>,
 }
+
 impl<T> Default for InterestRadixTreeNode<T> {
     fn default() -> Self {
         Self {
-            value: None,
+            value: HashSet::default(),
             children: BTreeMap::new(),
             any_child: None,
             recursive_any_child: None,
@@ -79,69 +140,95 @@ impl<T> Default for InterestRadixTreeNode<T> {
     }
 }
 
-impl<T> InterestRadixTreeNode<T> {
+impl<T> InterestRadixTreeNode<T>
+where
+    T: Hash + Eq + PartialEq,
+{
+    fn insert_recursive<'a>(
+        &mut self,
+        mut path: impl Iterator<Item = InterestSegment<'a>>,
+        value: T,
+    ) {
+        match path.next() {
+            Some(InterestSegment::Specific(seg)) => {
+                if let Some(child) = self.children.get_mut(seg) {
+                    child.insert_recursive(path, value)
+                } else {
+                    let mut child_tree = InterestRadixTreeNode::default();
+                    child_tree.insert_recursive(path, value);
+                    self.children.insert(seg.to_owned(), child_tree);
+                }
+            }
+            Some(InterestSegment::Any) => {
+                let child = self.any_child.get_or_insert_with(Default::default);
+                child.insert_recursive(path, value)
+            }
+            Some(InterestSegment::RecursiveAny) => {
+                let child = self
+                    .recursive_any_child
+                    .get_or_insert_with(Default::default);
+                child.insert_recursive(path, value)
+            }
+            None => {
+                self.value.insert(value);
+            }
+        }
+    }
     fn find_all_recursive<'a, 'i>(
         &'a self,
-        mut path: impl Iterator<Item = InterestSegment<'i>> + Clone,
-        collector: &mut Vec<&'a T>,
+        mut path: impl Iterator<Item = &'i [u8]> + Clone,
+        collector: &mut HashSet<&'a T>,
     ) {
-        if let Some(next_seg) = path.next() {
-            match next_seg {
-                InterestSegment::Specific(seg) => {
-                    if let Some(ref any) = self.any_child {
-                        any.find_all_recursive(path.clone(), collector)
-                    }
-                    if let Some(ref r_any) = self.recursive_any_child {
-                        r_any.find_all_recursive(path.clone(), collector)
-                    }
-                    if let Some(ref child) = self.children.get(seg.as_ref()) {
-                        child.find_all_recursive(path, collector)
-                    }
-                }
-                InterestSegment::Any => {
-                    if let Some(ref any) = self.any_child {
-                        any.find_all_recursive(path.clone(), collector)
-                    }
-                    if let Some(ref r_any) = self.recursive_any_child {
-                        r_any.find_all_recursive(path, collector)
-                    }
-                }
-                InterestSegment::RecursiveAny => {
-                    if let Some(ref r_any) = self.recursive_any_child {
-                        r_any.find_all_recursive(path, collector)
+        if let Some(seg) = path.next() {
+            if let Some(ref rac) = self.recursive_any_child {
+                let mut rest_path = path.clone();
+                collector.extend(&rac.value);
+                while let Some(recursive_seg) = rest_path.next() {
+                    if let Some(matched) = rac.children.get(recursive_seg) {
+                        matched.find_all_recursive(rest_path.clone(), collector)
                     }
                 }
             }
-        } else if let Some(ref value) = self.value {
-            collector.push(value)
+            if let Some(ref ac) = self.any_child {
+                ac.find_all_recursive(path.clone(), collector)
+            }
+            if let Some(child) = self.children.get(seg) {
+                child.find_all_recursive(path, collector)
+            }
+        } else {
+            collector.extend(&self.value)
         }
     }
 }
-impl<T> InterestMap<T> {
+impl<T> InterestMap<T>
+where
+    T: Hash + Eq + PartialEq,
+{
     pub fn new() -> Self {
         Self {
             root: InterestRadixTreeNode::default(),
         }
     }
 
-    pub fn insert(&mut self, path: &[OwnedInterestSegment], value: T) {
-        let mut current_node = &mut self.root;
-        for segment in path {
-            current_node = match segment {
-                OwnedInterestSegment::Specific(s) => {
-                    current_node.children.entry(s.clone()).or_default()
-                }
-                OwnedInterestSegment::Any => {
-                    current_node.any_child.get_or_insert_with(Default::default)
-                }
-                OwnedInterestSegment::RecursiveAny => current_node
-                    .recursive_any_child
-                    .get_or_insert_with(Default::default),
-            };
-        }
-        current_node.value = Some(value);
+    pub fn insert(&mut self, interest: Interest, value: T) {
+        self.root.insert_recursive(interest.as_segments(), value)
     }
-    pub fn find_all(&self, interest: &Interest) -> Vec<T> {
-        todo!("find all")
+    pub fn find(&self, subject: &Subject) -> HashSet<&T> {
+        let mut collector = HashSet::new();
+        self.root
+            .find_all_recursive(subject.segments(), &mut collector);
+        collector
     }
+}
+
+#[test]
+fn test_interest_map() {
+    let mut map = InterestMap::new();
+    let interest = Interest::new("event/**/user/a");
+    map.insert(interest, 1);
+    map.insert(Interest::new("event/**/user/*"), 2);
+
+    let values = map.find(&Subject::new("event/hello-world/user/a"));
+    assert!(values.contains(&1));
+    assert!(values.contains(&2));
 }

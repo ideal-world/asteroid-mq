@@ -1,7 +1,8 @@
 pub mod codec;
 pub mod connection;
 pub mod event;
-
+pub mod hold_message;
+pub mod wait_ack;
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -20,12 +21,16 @@ use connection::{
 };
 use crossbeam::{epoch::Pointable, sync::ShardedLock};
 use event::{N2NAuth, N2NEventPacket, N2NMessageEvent, N2NUnreachableEvent, NodeKind, NodeTrace};
+use hold_message::HoldMessage;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     endpoint::{EndpointAddr, LocalEndpoint},
-    interest::InterestMap,
+    interest::{Interest, InterestMap, Subject},
+    protocol::ee::{Message, MessageAckKind, MessageHeader, MessageTarget},
 };
+
+use super::ee::MessageId;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -83,6 +88,7 @@ pub struct NodeInner {
     // ne layer
     pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
     pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
+    pub(crate) hold_messages: ShardedLock<HashMap<MessageId, HoldMessage>>,
     // nn layer
     n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
     connections: ShardedLock<HashMap<NodeId, Arc<N2NConnectionInstance>>>,
@@ -121,6 +127,7 @@ impl Default for Node {
                 local_endpoints: ShardedLock::new(HashMap::new()),
                 ep_routing_table: ShardedLock::new(HashMap::new()),
                 ep_interest_map: ShardedLock::new(InterestMap::new()),
+                hold_messages: Default::default(),
                 n2n_routing_table: ShardedLock::new(HashMap::new()),
                 connections: ShardedLock::new(HashMap::new()),
                 auth: N2NAuth::default(),
@@ -302,14 +309,20 @@ async fn test_nodes() {
         .await
         .unwrap();
     tokio::spawn(async move {
-        while let Ok((stream, peer)) = listener.accept().await {
-            tracing::info!(peer=?peer, "new connection");
-            let node = node_server.clone();
+        {
+            let node_server = node_server.clone();
             tokio::spawn(async move {
-                let conn = TokioTcp::new(stream);
-                node.create_connection(conn).await.unwrap();
+                while let Ok((stream, peer)) = listener.accept().await {
+                    tracing::info!(peer=?peer, "new connection");
+                    let node = node_server.clone();
+                    tokio::spawn(async move {
+                        let conn = TokioTcp::new(stream);
+                        node.create_connection(conn).await.unwrap();
+                    });
+                }
             });
         }
+
     });
 
     let node_client = Node::default();
@@ -337,5 +350,23 @@ async fn test_nodes() {
             payload: Bytes::from_static(b"hello"),
         }))
         .unwrap();
+    let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**/user/user1")]);
+    tokio::spawn(async move {
+        loop {
+            let message = node_client_sender.next_message().await;
+            tracing::info!(?message, "recv message")
+        }
+    });
+    let ep = node_client.create_endpoint(None);
+    ep.send_message(Message {
+        header: MessageHeader {
+            message_id: MessageId::random(),
+            holder_node: node_client.id(),
+            ack_kind: Some(MessageAckKind::Processed),
+            target: MessageTarget::push(Some(Subject::new("events/hello-world/user/user1"))),
+        },
+        payload: Bytes::new(),
+    })
+    .await;
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 }

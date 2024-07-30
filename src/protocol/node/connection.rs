@@ -2,7 +2,7 @@ use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use tokio::task::JoinHandle;
 
-use crate::protocol::nn::event::{N2NAuthEvent, N2NEventKind};
+use crate::protocol::node::event::{N2NAuthEvent, N2NEventKind};
 
 use super::{
     codec::{NNCodecType, NNDecodeError}, N2NAuth, N2NEventPacket, N2NMessageEvent, NodeInfo, NodeInner, NodeRef

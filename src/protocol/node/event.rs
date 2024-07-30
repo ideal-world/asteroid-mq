@@ -1,5 +1,5 @@
 use std::mem::size_of;
-use crate::protocol::nn::codec::NNCodecType;
+use crate::protocol::node::codec::NNCodecType;
 use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 

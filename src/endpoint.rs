@@ -1,35 +1,76 @@
 use std::{
-    collections::{HashMap, HashSet},
-    sync::{self, Arc},
+    collections::{HashMap, HashSet, VecDeque},
+    sync::{self, Arc, Mutex},
 };
 
 use crate::{
-    interest::Interest,
+    interest::{Interest, Subject},
     protocol::{
         ee::{Message, MessageAck, MessageAckKind, MessageId},
-        nn::{Node, NodeId, NodeInner, NodeRef},
+        node::{wait_ack::WaitAck, Node, NodeId, NodeInner, NodeRef},
     },
 };
 #[derive(Clone, Debug)]
 pub struct LocalEndpoint {
-    pub attached_node: std::sync::Weak<NodeInner>,
+    pub attached_node: NodeRef,
+    pub interest: Vec<Interest>,
     pub address: EndpointAddr,
+    pub mail_box: flume::Receiver<Message>,
+    pub mail_addr: flume::Sender<Message>,
 }
 
 impl LocalEndpoint {
     #[inline]
-    pub fn node(&self) -> Option<Arc<NodeInner>> {
+    pub fn node(&self) -> Option<Node> {
         self.attached_node.upgrade()
     }
     pub async fn send_message(&self, message: Message) {
-        if let Some(node) = self.node() {}
-        todo!("send message")
+        if let Some(node) = self.node() {
+            if node.is_edge() {
+                todo!("send to edge")
+            } else {
+                node.create_cluster_e2e_message_task(message).await;
+            }
+        }
     }
-    pub async fn ack(&self, ack: MessageAck) {
-        todo!("ack message")
+    pub fn send_ack(&self, ack: MessageAck) {
+        if let Some(attached_node) = self.node() {
+            attached_node.ack_to_message(self.address, ack)
+        }
     }
     pub fn push_message(&self, message: Message) {
-        todo!("push message")
+        self.mail_addr
+            .send(message)
+            .expect("ep self hold the receiver");
+    }
+    pub async fn next_message(&self) -> Message {
+        self.mail_box
+            .recv_async()
+            .await
+            .expect("ep self hold a sender")
+    }
+}
+
+impl Message {
+    #[inline(always)]
+    pub fn ack(&self, kind: MessageAckKind) -> MessageAck {
+        MessageAck {
+            ack_to: self.id(),
+            holder: self.header.holder_node,
+            kind,
+        }
+    }
+    #[inline(always)]
+    pub fn ack_received(&self) -> MessageAck {
+        self.ack(MessageAckKind::Received)
+    }
+    #[inline(always)]
+    pub fn ack_processed(&self) -> MessageAck {
+        self.ack(MessageAckKind::Processed)
+    }
+    #[inline(always)]
+    pub fn ack_failed(&self) -> MessageAck {
+        self.ack(MessageAckKind::Failed)
     }
 }
 
@@ -38,41 +79,69 @@ pub struct EndpointAddr {
     pub bytes: [u8; 16],
 }
 
+impl EndpointAddr {
+    pub fn random() -> Self {
+        thread_local! {
+            static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let counter = COUNTER.with(|c| {
+            let v = c.get();
+            c.set(v.wrapping_add(1));
+            v
+        });
+        let eid = crate::util::executor_digest() as u32;
+        let mut bytes = [0; 16];
+        bytes[0..8].copy_from_slice(&timestamp.to_be_bytes());
+        bytes[8..12].copy_from_slice(&counter.to_be_bytes());
+        bytes[12..16].copy_from_slice(&eid.to_be_bytes());
+        Self { bytes }
+    }
+}
+
 impl Node {
-    pub fn create_endpoint(&self, addr: EndpointAddr) -> Arc<LocalEndpoint> {
+    pub fn create_endpoint(
+        &self,
+        interests: impl IntoIterator<Item = Interest>,
+    ) -> Arc<LocalEndpoint> {
+        let channel = flume::unbounded();
         let ep = Arc::new(LocalEndpoint {
-            attached_node: Arc::downgrade(&self.inner),
-            address: addr,
+            attached_node: self.node_ref(),
+            address: EndpointAddr::random(),
+            mail_box: channel.1,
+            mail_addr: channel.0,
+            interest: interests.into_iter().collect(),
         });
         self.local_endpoints
             .write()
             .unwrap()
-            .insert(addr, ep.clone());
+            .insert(ep.address, ep.clone());
+        {
+            let mut wg = self.ep_interest_map.write().unwrap();
+            for interest in &ep.interest {
+                tracing::debug!(map = ?&*wg);
+                wg.insert(interest.clone(), ep.address);
+            }
+            if self.is_edge() {
+                todo!("notify remote cluster node!")
+            }
+        }
         ep
     }
-    pub fn collect_addr_by_interests<'i>(
+    pub fn collect_addr_by_subjects<'i>(
         &self,
-        interests: impl Iterator<Item = &'i Interest>,
+        subjects: impl Iterator<Item = &'i Subject>,
     ) -> HashSet<EndpointAddr> {
         let mut ep_collect = HashSet::new();
         let rg = self.ep_interest_map.read().unwrap();
-        for interest in interests {
-            ep_collect.extend(rg.find_all(interest));
+        tracing::debug!(?rg);
+        for subject in subjects {
+            ep_collect.extend(rg.find(subject));
         }
         ep_collect
-    }
-    pub fn send_ep_message(self: &Arc<Self>, message: Message) {
-        if self.is_edge() {
-            unimplemented!("edge node")
-        } else {
-            match self.create_cluster_e2e_message_task(message) {
-                Ok(ack_wait_list) => {}
-                Err(_) => todo!(),
-            }
-
-            todo!()
-        }
-        // wait ack
     }
     pub fn get_local_ep(&self, ep: &EndpointAddr) -> Option<Arc<LocalEndpoint>> {
         self.local_endpoints.read().unwrap().get(ep).cloned()
@@ -80,27 +149,32 @@ impl Node {
     pub fn get_remote_ep(&self, ep: &EndpointAddr) -> Option<NodeId> {
         self.ep_routing_table.read().unwrap().get(ep).copied()
     }
-    pub fn create_cluster_e2e_message_task(&self, message: Message) -> Result<AckWaitList, ()> {
-        match &message.target {
-            crate::protocol::ee::Target::Durable(_) => todo!(),
-            crate::protocol::ee::Target::Online(_) => todo!(),
-            crate::protocol::ee::Target::Available(_) => todo!(),
-            crate::protocol::ee::Target::Push(target) => {
-                let ep_collect = self.collect_addr_by_interests(target.interests.iter());
+    pub async fn create_cluster_e2e_message_task(&self, message: Message) -> Result<(), ()> {
+        match &message.header.target {
+            crate::protocol::ee::MessageTarget::Durable(_) => todo!(),
+            crate::protocol::ee::MessageTarget::Online(_) => todo!(),
+            crate::protocol::ee::MessageTarget::Available(_) => todo!(),
+            crate::protocol::ee::MessageTarget::Push(target) => {
+                let ep_collect = self.collect_addr_by_subjects(target.subjects.iter());
+                tracing::trace!(?ep_collect);
                 for ep in &ep_collect {
                     // prefer local endpoint
                     if let Some(ep) = self.get_local_ep(ep) {
                         ep.push_message(message.clone());
-                        todo!("return wait list");
+                        let wait_ack = message
+                            .ack_kind()
+                            .map(|ack_kind| WaitAck::new(ack_kind, ep_collect));
+                        self.hold_message(message, wait_ack);
+                        return Ok(());
                     }
                 }
                 for ep in &ep_collect {
                     if let Some(remote_node) = self.get_remote_ep(ep) {
-                        
                         todo!("send to remote");
                         todo!("return wait list");
                     }
                 }
+                return Err(());
             }
         }
         todo!()
