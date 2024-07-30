@@ -1,6 +1,9 @@
 use bytes::Bytes;
-
-use crate::{endpoint::EndpointAddr, interest::{Interest, Subject}};
+pub mod event;
+use crate::{
+    endpoint::EndpointAddr,
+    interest::{Interest, Subject},
+};
 
 use super::node::NodeId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -40,20 +43,30 @@ impl MessageAckKind {
         *self == MessageAckKind::Failed
     }
 }
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 
 pub struct MessageId {
     pub bytes: [u8; 16],
 }
+
+impl std::fmt::Debug for MessageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("MessageId")
+            .field(&crate::util::dashed(&[
+                crate::util::hex(&self.bytes[0..4]),
+                crate::util::hex(&self.bytes[4..12]),
+                crate::util::hex(&self.bytes[12..16]),
+            ]))
+            .finish()
+    }
+}
+
 impl MessageId {
     pub fn random() -> Self {
         thread_local! {
             static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         }
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let timestamp = crate::util::timestamp_sec();
         let counter = COUNTER.with(|c| {
             let v = c.get();
             c.set(v.wrapping_add(1));
@@ -61,9 +74,9 @@ impl MessageId {
         });
         let eid = crate::util::executor_digest() as u32;
         let mut bytes = [0; 16];
-        bytes[0..8].copy_from_slice(&timestamp.to_be_bytes());
-        bytes[8..12].copy_from_slice(&counter.to_be_bytes());
-        bytes[12..16].copy_from_slice(&eid.to_be_bytes());
+        bytes[0..4].copy_from_slice(&eid.to_be_bytes());
+        bytes[4..12].copy_from_slice(&timestamp.to_be_bytes());
+        bytes[12..16].copy_from_slice(&counter.to_be_bytes());
         Self { bytes }
     }
 }
@@ -78,7 +91,7 @@ impl Message {
         self.header.message_id
     }
     pub fn ack_kind(&self) -> Option<MessageAckKind> {
-        self.header.ack_kind.clone()
+        self.header.ack_kind
     }
 }
 #[derive(Debug, Clone)]

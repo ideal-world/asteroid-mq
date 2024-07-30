@@ -60,10 +60,7 @@ impl N2NEventId {
         thread_local! {
             static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         }
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let timestamp = crate::util::timestamp_sec();
         let counter = COUNTER.with(|c| {
             let v = c.get();
             c.set(v.wrapping_add(1));

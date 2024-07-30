@@ -8,7 +8,7 @@ use crossbeam::sync::ShardedLock;
 
 use crate::{
     endpoint::EndpointAddr,
-    protocol::ee::{MessageAckKind, MessageId},
+    protocol::endpoint::{MessageAckKind, MessageId},
 };
 #[derive(Debug)]
 pub struct WaitAck {

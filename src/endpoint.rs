@@ -3,11 +3,17 @@ use std::{
     sync::{self, Arc, Mutex},
 };
 
+use bytes::Bytes;
+
 use crate::{
     interest::{Interest, Subject},
     protocol::{
-        ee::{Message, MessageAck, MessageAckKind, MessageId},
-        node::{wait_ack::WaitAck, Node, NodeId, NodeInner, NodeRef},
+        endpoint::{Message, MessageAck, MessageAckKind, MessageId},
+        node::{
+            event::{N2NEventPacket, N2NMessageEvent, NodeTrace},
+            wait_ack::WaitAck,
+            Node, NodeId, NodeInner, NodeRef,
+        },
     },
 };
 #[derive(Clone, Debug)]
@@ -84,10 +90,7 @@ impl EndpointAddr {
         thread_local! {
             static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         }
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let timestamp = crate::util::timestamp_sec();
         let counter = COUNTER.with(|c| {
             let v = c.get();
             c.set(v.wrapping_add(1));
@@ -151,10 +154,10 @@ impl Node {
     }
     pub async fn create_cluster_e2e_message_task(&self, message: Message) -> Result<(), ()> {
         match &message.header.target {
-            crate::protocol::ee::MessageTarget::Durable(_) => todo!(),
-            crate::protocol::ee::MessageTarget::Online(_) => todo!(),
-            crate::protocol::ee::MessageTarget::Available(_) => todo!(),
-            crate::protocol::ee::MessageTarget::Push(target) => {
+            crate::protocol::endpoint::MessageTarget::Durable(_) => todo!(),
+            crate::protocol::endpoint::MessageTarget::Online(_) => todo!(),
+            crate::protocol::endpoint::MessageTarget::Available(_) => todo!(),
+            crate::protocol::endpoint::MessageTarget::Push(target) => {
                 let ep_collect = self.collect_addr_by_subjects(target.subjects.iter());
                 tracing::trace!(?ep_collect);
                 for ep in &ep_collect {
@@ -170,8 +173,15 @@ impl Node {
                 }
                 for ep in &ep_collect {
                     if let Some(remote_node) = self.get_remote_ep(ep) {
-                        todo!("send to remote");
-                        todo!("return wait list");
+                        if let Some(next_jump) = self.get_next_jump(remote_node) {
+                            let message_event = self.new_n2n_message(remote_node, Bytes::new());
+                            match self.send_packet(N2NEventPacket::message(message_event), next_jump) {
+                                Ok(_) => {
+                                    
+                                },
+                                Err(_) => todo!(),
+                            }
+                        }
                     }
                 }
                 return Err(());

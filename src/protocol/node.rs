@@ -27,10 +27,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     endpoint::{EndpointAddr, LocalEndpoint},
     interest::{Interest, InterestMap, Subject},
-    protocol::ee::{Message, MessageAckKind, MessageHeader, MessageTarget},
+    protocol::endpoint::{Message, MessageAckKind, MessageHeader, MessageTarget},
 };
 
-use super::ee::MessageId;
+use super::endpoint::MessageId;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -41,17 +41,22 @@ pub struct NodeId {
 impl std::fmt::Debug for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("NodeId")
-            .field(&crate::util::hex(&self.bytes))
+            .field(&crate::util::dashed(&[
+                crate::util::hex(&self.bytes[0..8]),
+                crate::util::hex(&self.bytes[8..12]),
+                crate::util::hex(&self.bytes[12..16]),
+            ]))
             .finish()
     }
 }
 impl NodeId {
     pub fn new() -> NodeId {
-        static INSTANCE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static INSTANCE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let dg = crate::util::executor_digest();
         let mut bytes = [0; 16];
         bytes[0..8].copy_from_slice(&dg.to_be_bytes());
-        bytes[8..16].copy_from_slice(
+        bytes[8..12].copy_from_slice(&(crate::util::timestamp_sec() as u32).to_be_bytes());
+        bytes[12..16].copy_from_slice(
             &INSTANCE_ID
                 .fetch_add(1, sync::atomic::Ordering::SeqCst)
                 .to_be_bytes(),
@@ -144,6 +149,19 @@ impl Node {
     }
     pub fn is_edge(&self) -> bool {
         matches!(self.info.kind, NodeKind::Edge)
+    }
+    pub fn new_trace(&self) -> NodeTrace {
+        NodeTrace {
+            source: self.id(),
+            hops: Vec::new(),
+        }
+    }
+    pub fn new_n2n_message(&self, to: NodeId, payload: Bytes) -> N2NMessageEvent {
+        N2NMessageEvent {
+            to,
+            trace: self.new_trace(),
+            payload,
+        }
     }
     pub async fn create_connection<C: N2NConnection>(
         &self,
@@ -322,7 +340,14 @@ async fn test_nodes() {
                 }
             });
         }
-
+        let node_server_user =
+            node_server.create_endpoint(vec![Interest::new("events/**/user/user2")]);
+        tokio::spawn(async move {
+            loop {
+                let message = node_server_user.next_message().await;
+                tracing::info!(?message, "recv message in server node")
+            }
+        });
     });
 
     let node_client = Node::default();
@@ -350,7 +375,7 @@ async fn test_nodes() {
             payload: Bytes::from_static(b"hello"),
         }))
         .unwrap();
-    let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**/user/user1")]);
+    let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**/user/*")]);
     tokio::spawn(async move {
         loop {
             let message = node_client_sender.next_message().await;

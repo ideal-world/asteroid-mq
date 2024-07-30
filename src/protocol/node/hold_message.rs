@@ -2,7 +2,7 @@ use std::{task::Waker, time::Duration};
 
 use crate::{
     endpoint::EndpointAddr,
-    protocol::ee::{Message, MessageAck, MessageHeader, MessageId, MessageTarget},
+    protocol::endpoint::{Message, MessageAck, MessageHeader, MessageId, MessageTarget},
 };
 
 use super::{wait_ack::WaitAck, Node, NodeId};

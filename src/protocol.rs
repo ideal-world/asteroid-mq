@@ -1,3 +1,3 @@
 pub mod ne;
 pub mod node;
-pub mod ee;
+pub mod endpoint;
