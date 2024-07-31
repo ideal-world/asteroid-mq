@@ -230,7 +230,6 @@ impl Node {
                         for ep in &eps {
                             if let Some(ep) = self.get_local_ep(ep) {
                                 ep.push_message(message.clone());
-                                return Ok(());
                             }
                         }
                     } else if let Some(next_jump) = self.get_next_jump(node) {
@@ -288,7 +287,7 @@ impl Node {
                 return Err(());
             }
         }
-        todo!()
+        Ok(())
     }
 }
 

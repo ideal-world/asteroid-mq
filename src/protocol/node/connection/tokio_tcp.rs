@@ -5,7 +5,7 @@ use futures_util::{Sink, Stream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::protocol::node::{
-    event::{N2nPacketId, N2NPayloadKind, N2nPacketHeader},
+    event::{N2NPayloadKind, N2nPacketHeader, N2nPacketId},
     N2nPacket,
 };
 
@@ -73,15 +73,9 @@ impl Sink<N2nPacket> for TokioTcp {
     ) -> std::task::Poll<Result<(), Self::Error>> {
         let this = self.project();
         let inner = this.inner;
-        ready!(inner.poll_write_ready(cx).map_err(|e| {
+        inner.poll_write_ready(cx).map_err(|e| {
             N2NConnectionError::new(N2NConnectionErrorKind::Io(e), "failed to poll ready")
-        }))?;
-        if *this.write_state == WriteState::Ready {
-            std::task::Poll::Ready(Ok(()))
-        } else {
-            std::task::Poll::Pending
-        }
-
+        })
     }
 
     fn start_send(self: std::pin::Pin<&mut Self>, item: N2nPacket) -> Result<(), Self::Error> {
@@ -227,10 +221,7 @@ impl Stream for TokioTcp {
                         let payload = this.read_payload_buf.split().freeze();
                         *this.read_state = ReadState::ExpectingHeader;
                         *this.read_index = 0;
-                        return std::task::Poll::Ready(Some(Ok(N2nPacket {
-                            header,
-                            payload,
-                        })));
+                        return std::task::Poll::Ready(Some(Ok(N2nPacket { header, payload })));
                     } else {
                         let new_index = payload_size - remain;
                         *this.read_index = new_index;
