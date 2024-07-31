@@ -269,6 +269,10 @@ where
             }
         }
     }
+
+    pub fn interest_of(&self, value: &T) -> Option<&HashSet<Interest>> {
+        self.reverse.get(value)
+    }
 }
 
 #[test]

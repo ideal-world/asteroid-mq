@@ -52,12 +52,12 @@ impl_codec!(
 );
 #[derive(Debug)]
 pub struct EndpointSync {
-    pub routing: Vec<EpInfo>,
+    pub eps: Vec<EpInfo>,
 }
 
 impl_codec!(
     struct EndpointSync {
-        routing: Vec<EpInfo>,
+        eps: Vec<EpInfo>,
     }
 );
 

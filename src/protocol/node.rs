@@ -18,13 +18,10 @@ use bytes::{Buf, Bytes, BytesMut};
 use codec::CodecType;
 use connection::{
     tokio_tcp::TokioTcp, ConnectionConfig, N2NConnection, N2NConnectionError,
-    N2NConnectionInstance, N2NConnectionRef,
+    N2NConnectionErrorKind, N2NConnectionInstance, N2NConnectionRef,
 };
 use crossbeam::{epoch::Pointable, sync::ShardedLock};
-use event::{
-    N2NAuth, N2nPacket, N2nEvent, N2NUnreachableEvent, N2nEventKind, NodeKind,
-    NodeTrace,
-};
+use event::{N2NAuth, N2NUnreachableEvent, N2nEvent, N2nEventKind, N2nPacket, NodeKind, NodeTrace};
 use hold_message::HoldMessage;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -34,10 +31,13 @@ use crate::{
     protocol::endpoint::{
         EndpointAddr, EndpointOnline, LocalEndpoint, Message, MessageAckKind, MessageHeader,
         MessageTargetKind,
-    }, TimestampSec,
+    },
+    TimestampSec,
 };
 
-use super::endpoint::{CastMessage, DelegateMessage, EndpointOffline, MessageId};
+use super::endpoint::{
+    CastMessage, DelegateMessage, EndpointOffline, EndpointSync, EpInfo, MessageId,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -173,6 +173,25 @@ impl Node {
             kind: N2nEventKind::CastMessage,
         }
     }
+    pub fn get_ep_sync(&self) -> EndpointSync {
+        let ep_interest_map = self.ep_interest_map.read().unwrap();
+        let ep_latest_active = self.ep_latest_active.read().unwrap();
+        let mut eps = Vec::new();
+        for (ep, host) in self.ep_routing_table.read().unwrap().iter() {
+            if let Some(latest_active) = ep_latest_active.get(ep) {
+                eps.push(EpInfo {
+                    addr: *ep,
+                    host: *host,
+                    interests: ep_interest_map
+                        .interest_of(ep)
+                        .map(|s| s.iter().cloned().collect())
+                        .unwrap_or_default(),
+                    latest_active: *latest_active,
+                });
+            }
+        }
+        EndpointSync { eps }
+    }
     pub async fn create_connection<C: N2NConnection>(
         &self,
         conn: C,
@@ -182,17 +201,31 @@ impl Node {
             auth: self.auth.clone(),
         };
         let conn_inst = N2NConnectionInstance::init(config, conn).await?;
-
-        let mut wg = self.connections.write().unwrap();
-        let peer_id = conn_inst.peer_info.id;
-        wg.insert(peer_id, Arc::new(conn_inst));
-        self.n2n_routing_table.write().unwrap().insert(
-            peer_id,
-            N2nRoutingInfo {
-                next_jump: peer_id,
-                hops: 0,
-            },
-        );
+        let peer = conn_inst.peer_info.id;
+        {
+            let mut wg = self.connections.write().unwrap();
+            wg.insert(peer, Arc::new(conn_inst));
+            self.n2n_routing_table.write().unwrap().insert(
+                peer,
+                N2nRoutingInfo {
+                    next_jump: peer,
+                    hops: 0,
+                },
+            );
+        }
+        let sync_info = self.get_ep_sync();
+        self.send_packet(
+            N2nPacket::message(N2nEvent {
+                to: peer,
+                trace: self.new_trace(),
+                kind: N2nEventKind::EpSync,
+                payload: sync_info.encode_to_bytes(),
+            }),
+            peer,
+        )
+        .map_err(|_| {
+            N2NConnectionError::new(N2NConnectionErrorKind::Closed, "fail to send sync error")
+        })?;
         Ok(())
     }
     pub fn id(&self) -> NodeId {
@@ -271,7 +304,25 @@ impl Node {
                 }
             }
             event::N2nEventKind::EpSync => {
-                todo!("sync endpoint routing");
+                let Ok((evt, _)) = EndpointSync::decode(message_evt.payload) else {
+                    return;
+                };
+                tracing::debug!(?evt, "ep sync");
+                let mut active_wg = self.ep_latest_active.write().unwrap();
+                let mut routing_wg = self.ep_routing_table.write().unwrap();
+                let mut interest_wg = self.ep_interest_map.write().unwrap();
+                for ep in evt.eps {
+                    if let Some(existed_record) = active_wg.get(&ep.addr) {
+                        if *existed_record > ep.latest_active {
+                            continue;
+                        }
+                    }
+                    active_wg.insert(ep.addr, ep.latest_active);
+                    routing_wg.insert(ep.addr, ep.host);
+                    for interest in ep.interests {
+                        interest_wg.insert(interest, ep.addr);
+                    }
+                }
             }
         }
     }
@@ -308,11 +359,11 @@ impl Node {
             tracing::error!("failed to send packet no connection to {to:?}");
             return Err(packet);
         };
+        tracing::trace!(header = ?packet.header,"having connection, prepared to send packet");
         if let Err(e) = conn.outbound.send(packet) {
             tracing::error!(error=?e, "failed to send packet");
             return Err(e.0);
         }
-        tracing::trace!("send packet");
         Ok(())
     }
     pub fn report_unreachable(&self, raw: N2nEvent) {
@@ -376,9 +427,7 @@ impl Node {
         };
         message_evt.trace.hops.push(self.id());
         if let Err(packet) = self.send_packet(N2nPacket::message(message_evt), next_jump) {
-            let raw_event = N2nEvent::decode(packet.payload)
-                .expect("should be valid")
-                .0;
+            let raw_event = N2nEvent::decode(packet.payload).expect("should be valid").0;
             self.report_unreachable(raw_event);
         }
     }
@@ -418,7 +467,7 @@ pub struct Connection {
 #[tokio::test]
 async fn test_nodes() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::TRACE)
         .init();
 
     let node_server = Node::default();
@@ -427,6 +476,7 @@ async fn test_nodes() {
         .await
         .unwrap();
     tokio::spawn(async move {
+        let node_server_user = node_server.create_endpoint(vec![Interest::new("events/**")]);
         {
             let node_server = node_server.clone();
             tokio::spawn(async move {
@@ -440,15 +490,11 @@ async fn test_nodes() {
                 }
             });
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let node_server_user = node_server.create_endpoint(vec![Interest::new("events/**")]);
 
-        tokio::spawn(async move {
-            loop {
-                let message = node_server_user.next_message().await;
-                tracing::info!(?message, "recv message in server node")
-            }
-        });
+        loop {
+            let message = node_server_user.next_message().await;
+            tracing::info!(?message, "recv message in server node")
+        }
     });
 
     let node_client = Node::default();
@@ -459,23 +505,22 @@ async fn test_nodes() {
         .await
         .unwrap();
 
+    let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**")]);
     node_client
         .create_connection(TokioTcp::new(stream_client))
         .await
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     let server_conn = node_client.get_connection(server_id).unwrap();
-    let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**")]);
-    
+
     tokio::spawn(async move {
         loop {
             let message = node_client_sender.next_message().await;
             tracing::info!(?message, "recv message")
         }
     });
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     let ep = node_client.create_endpoint(None);
+    tokio::time::sleep(Duration::from_secs(1)).await;
     ep.send_message(Message {
         header: MessageHeader {
             message_id: MessageId::random(),

@@ -18,6 +18,7 @@ use std::{
 use crate::{
     interest::{Interest, Subject},
     protocol::node::{event::N2nPacket, wait_ack::WaitAck},
+    TimestampSec,
 };
 #[derive(Clone, Debug)]
 pub struct LocalEndpoint {
@@ -139,13 +140,23 @@ impl Node {
             .insert(ep.address, ep.clone());
         {
             let mut wg = self.ep_interest_map.write().unwrap();
+
             for interest in &ep.interest {
                 tracing::debug!(map = ?&*wg);
                 wg.insert(interest.clone(), ep.address);
             }
+
             if self.is_edge() {
                 todo!("notify remote cluster node!")
             }
+        }
+        {
+            let mut wg = self.ep_routing_table.write().unwrap();
+            wg.insert(ep.address, self.id());
+        }
+        {
+            let mut wg = self.ep_latest_active.write().unwrap();
+            wg.insert(ep.address, TimestampSec::now());
         }
         let payload = EndpointOnline {
             endpoint: ep.address,
@@ -267,9 +278,7 @@ impl Node {
                                 .ack_kind()
                                 .map(|ack_kind| WaitAck::new(ack_kind, ep_collect));
                             self.hold_message(message, wait_ack);
-                            match self
-                                .send_packet(N2nPacket::message(message_event), next_jump)
-                            {
+                            match self.send_packet(N2nPacket::message(message_event), next_jump) {
                                 Ok(_) => return Ok(()),
                                 Err(_) => todo!(),
                             }
