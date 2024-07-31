@@ -1,8 +1,7 @@
 use std::{task::Waker, time::Duration};
 
 use crate::{
-    endpoint::EndpointAddr,
-    protocol::endpoint::{Message, MessageAck, MessageHeader, MessageId, MessageTarget},
+    protocol::endpoint::{Message, MessageAck, MessageHeader, MessageId, MessageTargetKind, EndpointAddr},
 };
 
 use super::{wait_ack::WaitAck, Node, NodeId};

@@ -2,14 +2,20 @@
 //! ## Match Interest
 //! (/)?(<path>|<*>|<**>)/*
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
 };
 
 use bytes::Bytes;
 
+use crate::impl_codec;
+
 #[derive(Debug, Clone)]
 pub struct Subject(pub(crate) Bytes);
+
+impl_codec!(
+    struct Subject(Bytes)
+);
 
 impl Subject {
     pub fn new<B: Into<Bytes>>(bytes: B) -> Self {
@@ -47,7 +53,7 @@ impl<'a> Iterator for SubjectSegments<'a> {
             for (bias, b) in self.inner[slash_index..].iter().enumerate() {
                 if *b != b'/' {
                     next_start = Some(slash_index + bias);
-                    break
+                    break;
                 }
             }
             if let Some(next_start) = next_start {
@@ -67,9 +73,12 @@ impl<'a> Iterator for SubjectSegments<'a> {
 /// # Interest
 /// ## Glob Match Interest
 /// (/)?(<path>|<*>|<**>)/*
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Interest(Bytes);
 
+impl_codec!(
+    struct Interest(Bytes)
+);
 impl Interest {
     pub fn new<B: Into<Bytes>>(bytes: B) -> Self {
         Self(bytes.into())
@@ -111,12 +120,14 @@ pub enum OwnedInterestSegment {
 #[derive(Debug)]
 pub struct InterestMap<T> {
     root: InterestRadixTreeNode<T>,
+    reverse: HashMap<T, HashSet<Interest>>,
 }
 
 impl<T> Default for InterestMap<T> {
     fn default() -> Self {
         Self {
             root: Default::default(),
+            reverse: HashMap::default(),
         }
     }
 }
@@ -174,6 +185,32 @@ where
             }
         }
     }
+    fn delete_recursive<'a>(
+        &mut self,
+        mut path: impl Iterator<Item = InterestSegment<'a>>,
+        value: &T,
+    ) {
+        match path.next() {
+            Some(InterestSegment::Specific(seg)) => {
+                if let Some(child) = self.children.get_mut(seg) {
+                    child.delete_recursive(path, value)
+                }
+            }
+            Some(InterestSegment::Any) => {
+                if let Some(ref mut child) = self.any_child {
+                    child.delete_recursive(path, value)
+                }
+            }
+            Some(InterestSegment::RecursiveAny) => {
+                if let Some(ref mut child) = self.recursive_any_child {
+                    child.delete_recursive(path, value)
+                }
+            }
+            None => {
+                self.value.remove(value);
+            }
+        }
+    }
     fn find_all_recursive<'a, 'i>(
         &'a self,
         mut path: impl Iterator<Item = &'i [u8]> + Clone,
@@ -202,22 +239,35 @@ where
 }
 impl<T> InterestMap<T>
 where
-    T: Hash + Eq + PartialEq,
+    T: Hash + Eq + PartialEq + Clone,
 {
     pub fn new() -> Self {
         Self {
             root: InterestRadixTreeNode::default(),
+            reverse: HashMap::default(),
         }
     }
 
     pub fn insert(&mut self, interest: Interest, value: T) {
-        self.root.insert_recursive(interest.as_segments(), value)
+        self.root
+            .insert_recursive(interest.as_segments(), value.clone());
+        self.reverse.entry(value).or_default().insert(interest);
     }
+
     pub fn find(&self, subject: &Subject) -> HashSet<&T> {
         let mut collector = HashSet::new();
         self.root
             .find_all_recursive(subject.segments(), &mut collector);
         collector
+    }
+
+    pub fn delete(&mut self, value: &T) {
+        if let Some(interests) = self.reverse.remove(value) {
+            for interest in interests {
+                let mut path = interest.as_segments();
+                self.root.delete_recursive(&mut path, value);
+            }
+        }
     }
 }
 

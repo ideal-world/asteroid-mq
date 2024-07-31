@@ -11,26 +11,33 @@ use std::{
     ops::Deref,
     str::FromStr,
     sync::{self, Arc, Weak},
+    time::Duration,
 };
 
 use bytes::{Buf, Bytes, BytesMut};
-use codec::NNCodecType;
+use codec::CodecType;
 use connection::{
     tokio_tcp::TokioTcp, ConnectionConfig, N2NConnection, N2NConnectionError,
     N2NConnectionInstance, N2NConnectionRef,
 };
 use crossbeam::{epoch::Pointable, sync::ShardedLock};
-use event::{N2NAuth, N2NEventPacket, N2NMessageEvent, N2NUnreachableEvent, NodeKind, NodeTrace};
+use event::{
+    N2NAuth, N2nPacket, N2nEvent, N2NUnreachableEvent, N2nEventKind, NodeKind,
+    NodeTrace,
+};
 use hold_message::HoldMessage;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::{
-    endpoint::{EndpointAddr, LocalEndpoint},
     interest::{Interest, InterestMap, Subject},
-    protocol::endpoint::{Message, MessageAckKind, MessageHeader, MessageTarget},
+    protocol::endpoint::{
+        EndpointAddr, EndpointOnline, LocalEndpoint, Message, MessageAckKind, MessageHeader,
+        MessageTargetKind,
+    }, TimestampSec,
 };
 
-use super::endpoint::MessageId;
+use super::endpoint::{CastMessage, DelegateMessage, EndpointOffline, MessageId};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -93,6 +100,7 @@ pub struct NodeInner {
     // ne layer
     pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
     pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
+    pub(crate) ep_latest_active: ShardedLock<HashMap<EndpointAddr, TimestampSec>>,
     pub(crate) hold_messages: ShardedLock<HashMap<MessageId, HoldMessage>>,
     // nn layer
     n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
@@ -132,6 +140,7 @@ impl Default for Node {
                 local_endpoints: ShardedLock::new(HashMap::new()),
                 ep_routing_table: ShardedLock::new(HashMap::new()),
                 ep_interest_map: ShardedLock::new(InterestMap::new()),
+                ep_latest_active: ShardedLock::new(HashMap::new()),
                 hold_messages: Default::default(),
                 n2n_routing_table: ShardedLock::new(HashMap::new()),
                 connections: ShardedLock::new(HashMap::new()),
@@ -156,11 +165,12 @@ impl Node {
             hops: Vec::new(),
         }
     }
-    pub fn new_n2n_message(&self, to: NodeId, payload: Bytes) -> N2NMessageEvent {
-        N2NMessageEvent {
+    pub fn new_cast_message(&self, to: NodeId, message: CastMessage) -> N2nEvent {
+        N2nEvent {
             to,
             trace: self.new_trace(),
-            payload,
+            payload: message.encode_to_bytes(),
+            kind: N2nEventKind::CastMessage,
         }
     }
     pub async fn create_connection<C: N2NConnection>(
@@ -172,25 +182,112 @@ impl Node {
             auth: self.auth.clone(),
         };
         let conn_inst = N2NConnectionInstance::init(config, conn).await?;
-        self.connections
-            .write()
-            .unwrap()
-            .insert(conn_inst.peer_info.id, Arc::new(conn_inst));
+
+        let mut wg = self.connections.write().unwrap();
+        let peer_id = conn_inst.peer_info.id;
+        wg.insert(peer_id, Arc::new(conn_inst));
+        self.n2n_routing_table.write().unwrap().insert(
+            peer_id,
+            N2nRoutingInfo {
+                next_jump: peer_id,
+                hops: 0,
+            },
+        );
         Ok(())
     }
     pub fn id(&self) -> NodeId {
         self.info.id
     }
-    pub async fn handle_message(&self, message_evt: N2NMessageEvent) {
+    #[instrument(skip_all, fields(node = ?self.id()))]
+    pub async fn handle_message(&self, message_evt: N2nEvent) {
+        tracing::trace!(?message_evt, "node recv new message");
         self.record_routing_info(&message_evt.trace);
         if message_evt.to == self.id() {
-            self.handle_message_as_desitination(message_evt).await;
+            self.handle_message_as_destination(message_evt).await;
         } else {
             self.forward_message(message_evt);
         }
     }
-    pub async fn handle_message_as_desitination(&self, message_evt: N2NMessageEvent) {
-        tracing::trace!(message=?message_evt, "message received");
+    #[instrument(skip_all, fields(node = ?self.id()))]
+    pub async fn handle_message_as_destination(&self, message_evt: N2nEvent) {
+        match message_evt.kind {
+            event::N2nEventKind::HoldMessage => {
+                let Ok((evt, _)) = DelegateMessage::decode(message_evt.payload) else {
+                    return;
+                };
+                self.hold_new_message(evt.message).await;
+            }
+            event::N2nEventKind::CastMessage => {
+                let Ok((evt, _)) = CastMessage::decode(message_evt.payload).inspect_err(|e| {
+                    tracing::error!(error = ?e, "failed to decode cast message");
+                }) else {
+                    return;
+                };
+                tracing::debug!(
+                    "cast message {id:?} to {eps:?}",
+                    id = evt.message.id(),
+                    eps = evt.target_eps
+                );
+                for ep in &evt.target_eps {
+                    if let Some(local_ep) = self.get_local_ep(ep) {
+                        // maybe we can make it share instead of clone the header
+                        local_ep.push_message(evt.message.clone())
+                    } else {
+                        // handle unreachable targets
+                    }
+                }
+            }
+            event::N2nEventKind::Ack => todo!(),
+            event::N2nEventKind::AckReport => todo!(),
+            event::N2nEventKind::EpOnline => {
+                let Ok((evt, _)) = EndpointOnline::decode(message_evt.payload) else {
+                    return;
+                };
+                tracing::debug!("ep {ep:?} online", ep = evt.endpoint);
+                let ep = evt.endpoint;
+                if evt.host == message_evt.trace.source() {
+                    let mut routing_wg = self.ep_routing_table.write().unwrap();
+                    let mut interest_wg = self.ep_interest_map.write().unwrap();
+                    let mut active_wg = self.ep_latest_active.write().unwrap();
+                    active_wg.insert(ep, TimestampSec::now());
+                    routing_wg.insert(ep, message_evt.trace.source());
+                    for interest in &evt.interests {
+                        interest_wg.insert(interest.clone(), ep);
+                    }
+                }
+            }
+            event::N2nEventKind::EpOffline => {
+                let Ok((evt, _)) = EndpointOffline::decode(message_evt.payload) else {
+                    return;
+                };
+                let ep = evt.endpoint;
+                if evt.host == message_evt.trace.source() {
+                    let mut routing_wg = self.ep_routing_table.write().unwrap();
+                    let mut interest_wg = self.ep_interest_map.write().unwrap();
+                    let mut active_wg = self.ep_latest_active.write().unwrap();
+                    active_wg.remove(&ep);
+                    routing_wg.remove(&ep);
+                    interest_wg.delete(&ep);
+                }
+            }
+            event::N2nEventKind::EpSync => {
+                todo!("sync endpoint routing");
+            }
+        }
+    }
+    pub fn known_nodes(&self) -> Vec<NodeId> {
+        self.connections.read().unwrap().keys().cloned().collect()
+    }
+    pub fn known_peer_cluster(&self) -> Vec<NodeId> {
+        self.connections
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|(id, instance)| {
+                instance.peer_info.kind == NodeKind::Cluster && (**id != self.id())
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
     }
     pub fn get_connection(&self, to: NodeId) -> Option<N2NConnectionRef> {
         let connections = self.connections.read().unwrap();
@@ -205,17 +302,20 @@ impl Node {
     pub fn remove_connection(&self, to: NodeId) {
         self.connections.write().unwrap().remove(&to);
     }
-    pub fn send_packet(&self, packet: N2NEventPacket, to: NodeId) -> Result<(), N2NEventPacket> {
+    #[instrument(skip(self, packet), fields(node=?self.id(), ?to))]
+    pub fn send_packet(&self, packet: N2nPacket, to: NodeId) -> Result<(), N2nPacket> {
         let Some(conn) = self.get_connection(to) else {
+            tracing::error!("failed to send packet no connection to {to:?}");
             return Err(packet);
         };
         if let Err(e) = conn.outbound.send(packet) {
             tracing::error!(error=?e, "failed to send packet");
             return Err(e.0);
         }
+        tracing::trace!("send packet");
         Ok(())
     }
-    pub fn report_unreachable(&self, raw: N2NMessageEvent) {
+    pub fn report_unreachable(&self, raw: N2nEvent) {
         let source = raw.trace.source();
         let prev_node = raw.trace.prev_node();
         let unreachable_target = raw.to;
@@ -227,7 +327,7 @@ impl Node {
             },
             unreachable_target,
         };
-        let packet = N2NEventPacket::unreachable(unreachable_event);
+        let packet = N2nPacket::unreachable(unreachable_event);
         if let Err(packet) = self.send_packet(packet, prev_node) {
             tracing::warn!(
                 id = ?packet.id(),
@@ -269,14 +369,14 @@ impl Node {
         }
     }
 
-    pub fn forward_message(&self, mut message_evt: N2NMessageEvent) {
+    pub fn forward_message(&self, mut message_evt: N2nEvent) {
         let Some(next_jump) = self.get_next_jump(message_evt.to) else {
             self.report_unreachable(message_evt);
             return;
         };
         message_evt.trace.hops.push(self.id());
-        if let Err(packet) = self.send_packet(N2NEventPacket::message(message_evt), next_jump) {
-            let raw_event = N2NMessageEvent::decode(packet.payload)
+        if let Err(packet) = self.send_packet(N2nPacket::message(message_evt), next_jump) {
+            let raw_event = N2nEvent::decode(packet.payload)
                 .expect("should be valid")
                 .0;
             self.report_unreachable(raw_event);
@@ -318,7 +418,7 @@ pub struct Connection {
 #[tokio::test]
 async fn test_nodes() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
+        .with_max_level(tracing::Level::INFO)
         .init();
 
     let node_server = Node::default();
@@ -340,8 +440,9 @@ async fn test_nodes() {
                 }
             });
         }
-        let node_server_user =
-            node_server.create_endpoint(vec![Interest::new("events/**/user/user2")]);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let node_server_user = node_server.create_endpoint(vec![Interest::new("events/**")]);
+
         tokio::spawn(async move {
             loop {
                 let message = node_server_user.next_message().await;
@@ -363,19 +464,11 @@ async fn test_nodes() {
         .await
         .unwrap();
 
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     let server_conn = node_client.get_connection(server_id).unwrap();
-    server_conn
-        .outbound
-        .send(N2NEventPacket::message(N2NMessageEvent {
-            to: server_id,
-            trace: NodeTrace {
-                source: client_id,
-                hops: vec![],
-            },
-            payload: Bytes::from_static(b"hello"),
-        }))
-        .unwrap();
-    let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**/user/*")]);
+    let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**")]);
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
     tokio::spawn(async move {
         loop {
             let message = node_client_sender.next_message().await;
@@ -388,9 +481,10 @@ async fn test_nodes() {
             message_id: MessageId::random(),
             holder_node: node_client.id(),
             ack_kind: Some(MessageAckKind::Processed),
-            target: MessageTarget::push(Some(Subject::new("events/hello-world/user/user1"))),
+            target_kind: MessageTargetKind::Online,
+            subjects: vec![Subject::new("events/hello-world")].into(),
         },
-        payload: Bytes::new(),
+        payload: Bytes::from_static(b"Hello every one!"),
     })
     .await;
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;

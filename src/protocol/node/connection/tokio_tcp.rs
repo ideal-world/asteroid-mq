@@ -4,32 +4,38 @@ use bytes::{Bytes, BytesMut};
 use futures_util::{Sink, Stream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::protocol::node::{event::{N2NEventId, N2NEventKind, N2NEventPacketHeader}, N2NEventPacket};
+use crate::protocol::node::{
+    event::{N2nPacketId, N2NPayloadKind, N2nPacketHeader},
+    N2nPacket,
+};
 
 use super::{N2NConnection, N2NConnectionError, N2NConnectionErrorKind};
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ReadState {
     ExpectingHeader,
     ExpectingPayload,
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum WriteState {
+    Ready,
     WritingHeader,
     WritingPayload,
 }
 
-const HEADER_SIZE: usize = std::mem::size_of::<N2NEventPacketHeader>();
+const HEADER_SIZE: usize = std::mem::size_of::<N2nPacketHeader>();
 pin_project_lite::pin_project! {
     #[derive(Debug)]
     pub struct TokioTcp {
         #[pin]
         inner: tokio::net::TcpStream,
+        // read buffers
         read_state: ReadState,
         read_header_buf: [u8; HEADER_SIZE],
         read_payload_buf: BytesMut,
         read_index: usize,
-        read_header: Option<N2NEventPacketHeader>,
-        write_item: Option<N2NEventPacket>,
+        read_header: Option<N2nPacketHeader>,
+        // write buffers
+        write_item: Option<N2nPacket>,
         write_header_buf: [u8; HEADER_SIZE],
         write_payload_buf: Bytes,
         write_state: WriteState,
@@ -50,7 +56,7 @@ impl TokioTcp {
             read_index: 0,
             read_header: None,
             write_item: None,
-            write_state: WriteState::WritingHeader,
+            write_state: WriteState::Ready,
             write_index: 0,
             write_header_buf: Default::default(),
             write_payload_buf: Bytes::new(),
@@ -58,7 +64,7 @@ impl TokioTcp {
     }
 }
 
-impl Sink<N2NEventPacket> for TokioTcp {
+impl Sink<N2nPacket> for TokioTcp {
     type Error = N2NConnectionError;
 
     fn poll_ready(
@@ -67,12 +73,18 @@ impl Sink<N2NEventPacket> for TokioTcp {
     ) -> std::task::Poll<Result<(), Self::Error>> {
         let this = self.project();
         let inner = this.inner;
-        inner.poll_write_ready(cx).map_err(|e| {
+        ready!(inner.poll_write_ready(cx).map_err(|e| {
             N2NConnectionError::new(N2NConnectionErrorKind::Io(e), "failed to poll ready")
-        })
+        }))?;
+        if *this.write_state == WriteState::Ready {
+            std::task::Poll::Ready(Ok(()))
+        } else {
+            std::task::Poll::Pending
+        }
+
     }
 
-    fn start_send(self: std::pin::Pin<&mut Self>, item: N2NEventPacket) -> Result<(), Self::Error> {
+    fn start_send(self: std::pin::Pin<&mut Self>, item: N2nPacket) -> Result<(), Self::Error> {
         let this = self.project();
         let header = item.header;
         this.write_header_buf[0..16].copy_from_slice(&header.id.bytes);
@@ -90,6 +102,9 @@ impl Sink<N2NEventPacket> for TokioTcp {
         let mut inner = this.inner;
         loop {
             match this.write_state {
+                WriteState::Ready => {
+                    *this.write_state = WriteState::WritingHeader;
+                }
                 WriteState::WritingHeader => {
                     let written = ready!(inner
                         .as_mut()
@@ -118,7 +133,7 @@ impl Sink<N2NEventPacket> for TokioTcp {
                     })?;
                     *this.write_index += written;
                     if *this.write_index == this.write_payload_buf.len() {
-                        *this.write_state = WriteState::WritingHeader;
+                        *this.write_state = WriteState::Ready;
                         *this.write_index = 0;
                         return std::task::Poll::Ready(Ok(()));
                     }
@@ -140,7 +155,7 @@ impl Sink<N2NEventPacket> for TokioTcp {
 }
 
 impl Stream for TokioTcp {
-    type Item = Result<N2NEventPacket, N2NConnectionError>;
+    type Item = Result<N2nPacket, N2NConnectionError>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -149,8 +164,6 @@ impl Stream for TokioTcp {
         let this = self.project();
         let mut inner = this.inner;
         loop {
-
-
             match this.read_state {
                 ReadState::ExpectingHeader => {
                     let mut buffer = ReadBuf::new(&mut this.read_header_buf[(*this.read_index)..]);
@@ -164,18 +177,18 @@ impl Stream for TokioTcp {
                     if remaining == 0 {
                         *this.read_state = ReadState::ExpectingPayload;
                         *this.read_index = 0;
-                        let id = N2NEventId {
+                        let id = N2nPacketId {
                             bytes: (&this.read_header_buf[0..16])
                                 .try_into()
                                 .expect("have enough bytes"),
                         };
-                        let kind = N2NEventKind::from(this.read_header_buf[16]);
+                        let kind = N2NPayloadKind::from(this.read_header_buf[16]);
                         let payload_size = u32::from_be_bytes(
                             (&this.read_header_buf[17..21])
                                 .try_into()
                                 .expect("have enough bytes"),
                         );
-                        let header = N2NEventPacketHeader {
+                        let header = N2nPacketHeader {
                             id,
                             kind,
                             payload_size,
@@ -196,7 +209,7 @@ impl Stream for TokioTcp {
                     if payload_size == 0 {
                         let header = this.read_header.take().expect("header is set");
                         *this.read_state = ReadState::ExpectingHeader;
-                        return std::task::Poll::Ready(Some(Ok(N2NEventPacket {
+                        return std::task::Poll::Ready(Some(Ok(N2nPacket {
                             header,
                             payload: Bytes::new(),
                         })));
@@ -214,7 +227,7 @@ impl Stream for TokioTcp {
                         let payload = this.read_payload_buf.split().freeze();
                         *this.read_state = ReadState::ExpectingHeader;
                         *this.read_index = 0;
-                        return std::task::Poll::Ready(Some(Ok(N2NEventPacket {
+                        return std::task::Poll::Ready(Some(Ok(N2nPacket {
                             header,
                             payload,
                         })));

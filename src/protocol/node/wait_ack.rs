@@ -6,10 +6,7 @@ use std::{
 
 use crossbeam::sync::ShardedLock;
 
-use crate::{
-    endpoint::EndpointAddr,
-    protocol::endpoint::{MessageAckKind, MessageId},
-};
+use crate::protocol::endpoint::{EndpointAddr, MessageAckKind, MessageId};
 #[derive(Debug)]
 pub struct WaitAck {
     pub expect: MessageAckKind,

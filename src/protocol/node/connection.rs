@@ -1,11 +1,12 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use tokio::task::JoinHandle;
+use tracing::warn;
 
-use crate::protocol::node::event::{N2NAuthEvent, N2NEventKind};
+use crate::protocol::node::event::{N2nAuth, N2NPayloadKind};
 
 use super::{
-    codec::{NNCodecType, NNDecodeError}, N2NAuth, N2NEventPacket, N2NMessageEvent, NodeInfo, NodeInner, NodeRef
+    codec::{CodecType, DecodeError}, N2NAuth, N2nPacket, N2nEvent, NodeInfo, NodeInner, NodeRef
 };
 
 pub mod tokio_tcp;
@@ -26,7 +27,7 @@ impl N2NConnectionError {
 #[derive(Debug)]
 pub enum N2NConnectionErrorKind {
     Send(N2NSendError),
-    Decode(NNDecodeError),
+    Decode(DecodeError),
     Io(std::io::Error),
     Closed,
     Protocol,
@@ -34,15 +35,15 @@ pub enum N2NConnectionErrorKind {
 #[derive(Debug)]
 
 pub struct N2NSendError {
-    pub raw_event: N2NEventPacket,
+    pub raw_event: N2nPacket,
     pub error: Box<dyn std::error::Error + Send + Sync>,
 }
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 pub trait N2NConnection:
     Send
     + 'static
-    + Stream<Item = Result<N2NEventPacket, N2NConnectionError>>
-    + Sink<N2NEventPacket, Error = N2NConnectionError>
+    + Stream<Item = Result<N2nPacket, N2NConnectionError>>
+    + Sink<N2nPacket, Error = N2NConnectionError>
 {
 }
 #[derive(Clone, Debug)]
@@ -64,7 +65,7 @@ impl Deref for N2NConnectionRef {
 #[derive(Debug)]
 pub struct N2NConnectionInstance {
     pub config: ConnectionConfig,
-    pub outbound: flume::Sender<N2NEventPacket>,
+    pub outbound: flume::Sender<N2nPacket>,
     pub alive: Arc<std::sync::atomic::AtomicBool>,
     pub peer_info: NodeInfo,
     pub peer_auth: N2NAuth,
@@ -96,37 +97,40 @@ impl N2NConnectionInstance {
             kind: node.info.kind,
         };
         let auth = config.auth.clone();
-        let auth_event = N2NAuthEvent { info, auth };
-        let evt = N2NEventPacket::auth(auth_event);
+        let auth_event = N2nAuth { info, auth };
+        let evt = N2nPacket::auth(auth_event);
         sink.send(evt).await?;
         let auth = stream.next().await.unwrap_or(Err(N2NConnectionError::new(
             N2NConnectionErrorKind::Closed,
             "event stream reached unexpected end when send auth packet",
         )))?;
-        if auth.header.kind != N2NEventKind::Auth {
+        if auth.header.kind != N2NPayloadKind::Auth {
             return Err(N2NConnectionError::new(
                 N2NConnectionErrorKind::Protocol,
                 "unexpected event, expect auth",
             ));
         }
-        let auth_event = N2NAuthEvent::decode(auth.payload)
+        let auth_event = N2nAuth::decode(auth.payload)
             .map_err(|e| N2NConnectionError::new(N2NConnectionErrorKind::Decode(e), "decode auth"))?
             .0;
 
         tracing::debug!(auth=?auth_event, "received auth event");
-        let (outbound_tx, outbound_rx) = flume::bounded::<N2NEventPacket>(1024);
+        let (outbound_tx, outbound_rx) = flume::bounded::<N2nPacket>(1024);
         let ob_handle: JoinHandle<Result<_, N2NConnectionError>> = tokio::task::spawn(async move {
             while let Ok(packet) = outbound_rx.recv_async().await {
-                sink.send(packet).await?;
+                if let Err(e) = sink.send(packet).await {
+                    warn!(?e, "failed to send packet");
+                    return Err(e);
+                }
             }
             Ok(sink)
         });
         let ib_handle = tokio::task::spawn(async move {
             while let Some(Ok(next_event)) = stream.next().await {
                 match next_event.header.kind {
-                    N2NEventKind::Message => {
+                    N2NPayloadKind::Event => {
                         let payload = next_event.payload;
-                        let message = N2NMessageEvent::decode(payload)
+                        let message = N2nEvent::decode(payload)
                             .map_err(|e| {
                                 N2NConnectionError::new(
                                     N2NConnectionErrorKind::Decode(e),
@@ -137,7 +141,7 @@ impl N2NConnectionInstance {
                         node.handle_message(message).await;
                         // handle message
                     }
-                    N2NEventKind::Unreachable => {
+                    N2NPayloadKind::Unreachable => {
 
                         // handle unreachable
                     }
