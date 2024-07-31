@@ -467,14 +467,14 @@ async fn test_nodes() {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     let server_conn = node_client.get_connection(server_id).unwrap();
     let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**")]);
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
+    
     tokio::spawn(async move {
         loop {
             let message = node_client_sender.next_message().await;
             tracing::info!(?message, "recv message")
         }
     });
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     let ep = node_client.create_endpoint(None);
     ep.send_message(Message {
         header: MessageHeader {
@@ -487,5 +487,5 @@ async fn test_nodes() {
         payload: Bytes::from_static(b"Hello every one!"),
     })
     .await;
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 }

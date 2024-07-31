@@ -204,7 +204,7 @@ impl Node {
     #[instrument(skip(self, message), fields(node_id=?self.id()))]
     pub async fn hold_new_message(&self, message: Message) -> Result<(), ()> {
         let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
-        tracing::trace!(?ep_collect, "hold new message");
+        tracing::debug!(?ep_collect, "hold new message");
         match &message.header.target_kind {
             crate::protocol::endpoint::MessageTargetKind::Durable => todo!(),
             crate::protocol::endpoint::MessageTargetKind::Online => {
@@ -212,7 +212,7 @@ impl Node {
                     .ack_kind()
                     .map(|ack_kind| WaitAck::new(ack_kind, ep_collect.clone()));
                 let map = self.resolve_node_ep_map(ep_collect.into_iter());
-                tracing::info!(?map, "resolve node ep map");
+                tracing::debug!(?map, "resolve node ep map");
                 self.hold_message(message.clone(), wait_ack);
                 for (node, eps) in map {
                     if self.id() == node {
