@@ -3,12 +3,12 @@ use std::{borrow::Cow, ops::Deref, sync::Arc};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-use crate::protocol::node::event::{N2NPayloadKind, N2nAuth};
-
-use super::{
+use crate::protocol::{
     codec::{CodecType, DecodeError},
-    N2NAuth, N2nEvent, N2nPacket, NodeInfo, NodeInner, NodeRef,
+    node::event::{N2NPayloadKind, N2nAuth},
 };
+
+use super::{N2NAuth, N2nEvent, N2nPacket, NodeInfo, NodeRef};
 
 pub mod tokio_tcp;
 #[derive(Debug)]

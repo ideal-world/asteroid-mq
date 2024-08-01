@@ -1,36 +1,29 @@
-pub mod codec;
 pub mod connection;
 pub mod event;
 pub mod hold_message;
 pub mod wait_ack;
 use std::{
-    borrow::Cow,
     collections::HashMap,
-    mem::size_of,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Deref,
-    str::FromStr,
-    sync::{self, Arc, Weak},
-    time::Duration,
+    sync::{self, Arc},
 };
 
-use bytes::{Buf, Bytes, BytesMut};
-use codec::CodecType;
+use super::codec::CodecType;
 use connection::{
-    tokio_tcp::TokioTcp, ConnectionConfig, N2NConnection, N2NConnectionError,
-    N2NConnectionErrorKind, N2NConnectionInstance, N2NConnectionRef,
+    ConnectionConfig, N2NConnection, N2NConnectionError, N2NConnectionErrorKind,
+    N2NConnectionInstance, N2NConnectionRef,
 };
-use crossbeam::{epoch::Pointable, sync::ShardedLock};
+use crossbeam::sync::ShardedLock;
 use event::{N2NAuth, N2NUnreachableEvent, N2nEvent, N2nEventKind, N2nPacket, NodeKind, NodeTrace};
 use hold_message::HoldMessage;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    protocol::interest::{Interest, InterestMap, Subject},
-    protocol::endpoint::{
-        EndpointAddr, EndpointOnline, LocalEndpoint, Message, MessageAckExpectKind, MessageAckKind,
-        MessageHeader, MessageTargetKind,
+    impl_codec,
+    protocol::{
+        endpoint::{EndpointAddr, EndpointOnline},
+        interest::InterestMap,
     },
     TimestampSec,
 };
@@ -84,6 +77,12 @@ pub struct NodeInfo {
     pub kind: NodeKind,
 }
 
+impl_codec!(
+    struct NodeInfo {
+        id: NodeId,
+        kind: NodeKind,
+    }
+);
 impl Default for NodeInfo {
     fn default() -> Self {
         Self {
@@ -478,76 +477,92 @@ pub struct Connection {
     pub peer_info: NodeInfo,
 }
 
-#[tokio::test]
-async fn test_nodes() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .init();
+#[cfg(test)]
+mod test {
+    use std::{net::SocketAddr, str::FromStr, time::Duration};
 
-    let node_server = Node::default();
-    let server_id = node_server.id();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:10080")
-        .await
-        .unwrap();
-    tokio::spawn(async move {
-        let node_server_user = node_server.create_endpoint(vec![Interest::new("events/**")]);
-        {
-            let node_server = node_server.clone();
-            tokio::spawn(async move {
-                while let Ok((stream, peer)) = listener.accept().await {
-                    tracing::info!(peer=?peer, "new connection");
-                    let node = node_server.clone();
-                    tokio::spawn(async move {
-                        let conn = TokioTcp::new(stream);
-                        node.create_connection(conn).await.unwrap();
-                    });
-                }
-            });
-        }
+    use bytes::Bytes;
+    use tracing::info;
 
-        loop {
-            let message = node_server_user.next_message().await;
-            tracing::info!(?message, "recv message in server node");
-            node_server_user.ack_processed(&message);
-        }
-    });
+    use crate::protocol::{
+        endpoint::{Message, MessageAckExpectKind, MessageHeader, MessageId, MessageTargetKind},
+        interest::{Interest, Subject},
+        node::{connection::tokio_tcp::TokioTcp, Node},
+    };
 
-    let node_client = Node::default();
-    let client_id = node_client.id();
-    let stream_client = tokio::net::TcpSocket::new_v4()
-        .unwrap()
-        .connect(SocketAddr::from_str("127.0.0.1:10080").unwrap())
-        .await
-        .unwrap();
+    #[tokio::test]
+    async fn test_nodes() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .init();
 
-    let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**")]);
-    node_client
-        .create_connection(TokioTcp::new(stream_client))
-        .await
-        .unwrap();
+        let node_server = Node::default();
+        let server_id = node_server.id();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:10080")
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            let node_server_user = node_server.create_endpoint(vec![Interest::new("events/**")]);
+            {
+                let node_server = node_server.clone();
+                tokio::spawn(async move {
+                    while let Ok((stream, peer)) = listener.accept().await {
+                        tracing::info!(peer=?peer, "new connection");
+                        let node = node_server.clone();
+                        tokio::spawn(async move {
+                            let conn = TokioTcp::new(stream);
+                            node.create_connection(conn).await.unwrap();
+                        });
+                    }
+                });
+            }
 
-    let server_conn = node_client.get_connection(server_id).unwrap();
+            loop {
+                let message = node_server_user.next_message().await;
+                tracing::info!(?message, "recv message in server node");
+                node_server_user.ack_processed(&message);
+            }
+        });
 
-    tokio::spawn(async move {
-        loop {
-            let message = node_client_sender.next_message().await;
-            tracing::info!(?message, "recv message");
-            node_client_sender.ack_processed(&message);
-        }
-    });
-    let ep = node_client.create_endpoint(None);
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let ack_handle = ep.send_message(Message {
-        header: MessageHeader {
-            message_id: MessageId::random(),
-            holder_node: node_client.id(),
-            ack_kind: Some(MessageAckExpectKind::Processed),
-            target_kind: MessageTargetKind::Online,
-            subjects: vec![Subject::new("events/hello-world")].into(),
-        },
-        payload: Bytes::from_static(b"Hello every one!"),
-    })
-    .await.unwrap();
-    ack_handle.await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let node_client = Node::default();
+        let client_id = node_client.id();
+        let stream_client = tokio::net::TcpSocket::new_v4()
+            .unwrap()
+            .connect(SocketAddr::from_str("127.0.0.1:10080").unwrap())
+            .await
+            .unwrap();
+
+        let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**")]);
+        node_client
+            .create_connection(TokioTcp::new(stream_client))
+            .await
+            .unwrap();
+
+        let server_conn = node_client.get_connection(server_id).unwrap();
+
+        tokio::spawn(async move {
+            loop {
+                let message = node_client_sender.next_message().await;
+                tracing::info!(?message, "recv message");
+                node_client_sender.ack_processed(&message);
+            }
+        });
+        let ep = node_client.create_endpoint(None);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let ack_handle = ep
+            .send_message(Message {
+                header: MessageHeader {
+                    message_id: MessageId::new_snowflake(),
+                    holder_node: node_client.id(),
+                    ack_kind: Some(MessageAckExpectKind::Processed),
+                    target_kind: MessageTargetKind::Online,
+                    subjects: vec![Subject::new("events/hello-world")].into(),
+                },
+                payload: Bytes::from_static(b"Hello every one!"),
+            })
+            .await
+            .unwrap();
+        ack_handle.await.unwrap();
+        tracing::info!("recv ack")
+    }
 }

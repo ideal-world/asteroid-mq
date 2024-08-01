@@ -40,7 +40,7 @@ impl<'a> std::fmt::Debug for Hex<'a> {
     }
 }
 
-pub fn dashed<'a, I: std::fmt::Debug>(arr: &'a impl AsRef<[I]>) -> Dashed<'a, I> {
+pub fn dashed<I: std::fmt::Debug>(arr: &impl AsRef<[I]>) -> Dashed<'_, I> {
     Dashed(arr.as_ref())
 }
 

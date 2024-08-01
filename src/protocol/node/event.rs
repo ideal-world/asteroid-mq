@@ -1,4 +1,4 @@
-use crate::{impl_codec, protocol::node::codec::CodecType};
+use crate::{impl_codec, protocol::codec::CodecType};
 use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
@@ -12,6 +12,12 @@ pub struct NodeTrace {
     pub hops: Vec<NodeId>,
 }
 
+impl_codec!(
+    struct NodeTrace {
+        source: NodeId,
+        hops: Vec<NodeId>,
+    }
+);
 impl NodeTrace {
     pub fn source(&self) -> NodeId {
         self.source
@@ -30,6 +36,13 @@ pub enum NodeKind {
     Cluster = 0,
     Edge = 1,
 }
+
+impl_codec!(
+    enum NodeKind {
+        Cluster = 0,
+        Edge = 1,
+    }
+);
 
 impl From<u8> for NodeKind {
     fn from(value: u8) -> Self {
@@ -55,7 +68,7 @@ impl std::fmt::Debug for N2nPacketId {
 }
 
 impl N2nPacketId {
-    pub fn gen() -> Self {
+    pub fn new_snowflake() -> Self {
         thread_local! {
             static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         }
@@ -108,7 +121,7 @@ impl N2nPacket {
         evt.encode(&mut payload_buf);
         Self {
             header: N2nPacketHeader {
-                id: N2nPacketId::gen(),
+                id: N2nPacketId::new_snowflake(),
                 kind: N2NPayloadKind::Auth,
                 payload_size: payload_buf.len() as u32,
             },
@@ -119,7 +132,7 @@ impl N2nPacket {
         let payload = evt.encode_to_bytes();
         Self {
             header: N2nPacketHeader {
-                id: N2nPacketId::gen(),
+                id: N2nPacketId::new_snowflake(),
                 kind: N2NPayloadKind::Event,
                 payload_size: payload.len() as u32,
             },
@@ -132,7 +145,7 @@ impl N2nPacket {
         evt.encode(&mut payload_buf);
         Self {
             header: N2nPacketHeader {
-                id: N2nPacketId::gen(),
+                id: N2nPacketId::new_snowflake(),
                 kind: N2NPayloadKind::Unreachable,
                 payload_size: payload_buf.len() as u32,
             },
@@ -175,7 +188,12 @@ pub struct N2nAuth {
     pub info: NodeInfo,
     pub auth: N2NAuth,
 }
-
+impl_codec!(
+    struct N2nAuth {
+        info: NodeInfo,
+        auth: N2NAuth,
+    }
+);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum N2nEventKind {
@@ -229,6 +247,14 @@ pub struct N2NUnreachableEvent {
     pub trace: NodeTrace,
 }
 
+impl_codec!(
+    struct N2NUnreachableEvent {
+        to: NodeId,
+        unreachable_target: NodeId,
+        trace: NodeTrace,
+    }
+);
+
 pub enum N2NEvent {
     Auth(N2nAuth),
     Message(N2nEvent),
@@ -236,3 +262,7 @@ pub enum N2NEvent {
 }
 #[derive(Debug, Clone, Default)]
 pub struct N2NAuth {}
+
+impl_codec!(
+    struct N2NAuth {}
+);

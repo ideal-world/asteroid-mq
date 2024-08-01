@@ -1,19 +1,13 @@
-use std::{
-    task::{Poll, Waker},
-    time::Duration,
-};
+use std::task::Poll;
 
 use crate::protocol::{
-    endpoint::{
-        EndpointAddr, Message, MessageAck, MessageAckKind, MessageHeader, MessageId,
-        MessageTargetKind,
-    },
-    node::event::{N2nEvent, N2nPacket},
+    endpoint::{EndpointAddr, Message, MessageAck, MessageAckKind, MessageHeader},
+    node::event::N2nPacket,
 };
 
 use super::{
     wait_ack::{WaitAck, WaitAckError},
-    Node, NodeId,
+    Node,
 };
 #[derive(Debug)]
 pub struct HoldMessage {
@@ -92,9 +86,7 @@ impl Node {
                             }
                         }
                     }
-                    Poll::Pending => {
-
-                    },
+                    Poll::Pending => {}
                 }
             } else {
                 // don't expect ack

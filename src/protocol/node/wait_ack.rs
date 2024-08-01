@@ -1,19 +1,16 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    sync::{Arc, OnceLock},
-    task::{ready, Poll, Waker},
+    task::Poll,
     time::Instant,
 };
 
 use crossbeam::sync::ShardedLock;
-use futures_util::FutureExt;
 
 use crate::protocol::endpoint::{
-    EndpointAddr, LocalEndpointRef, Message, MessageAckExpectKind, MessageAckKind, MessageId,
+    EndpointAddr, Message, MessageAckExpectKind, MessageAckKind, MessageId,
 };
 
-use super::NodeRef;
 #[derive(Debug)]
 pub struct WaitAck {
     pub expect: MessageAckExpectKind,

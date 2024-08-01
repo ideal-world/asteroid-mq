@@ -1,19 +1,20 @@
-use bytes::{Bytes, BytesMut};
 use tracing::instrument;
 mod event;
 mod message;
 
-use super::node::{
+use super::{
     codec::CodecType,
-    event::{N2nEvent, N2nEventKind},
-    Node, NodeId, NodeRef,
+    node::{
+        event::{N2nEvent, N2nEventKind},
+        Node, NodeId, NodeRef,
+    },
 };
 pub use event::*;
 pub use message::*;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     ops::Deref,
-    sync::{self, Arc, Mutex, Weak},
+    sync::{Arc, Weak},
 };
 
 use crate::{
@@ -74,7 +75,7 @@ impl LocalEndpoint {
             inner: Arc::downgrade(&self.inner),
         }
     }
-    pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, ()>{
+    pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
         if let Some(node) = self.node() {
             if node.is_edge() {
                 todo!("send to edge")
@@ -155,7 +156,7 @@ impl std::fmt::Debug for EndpointAddr {
 }
 
 impl EndpointAddr {
-    pub fn random() -> Self {
+    pub fn new_snowflake() -> Self {
         thread_local! {
             static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         }
@@ -180,7 +181,7 @@ impl Node {
         let ep = LocalEndpoint {
             inner: Arc::new(LocalEndpointInner {
                 attached_node: self.node_ref(),
-                address: EndpointAddr::random(),
+                address: EndpointAddr::new_snowflake(),
                 mail_box: channel.1,
                 mail_addr: channel.0,
                 interest: interests.into_iter().collect(),
@@ -302,7 +303,7 @@ impl Node {
         resolve_map
     }
     #[instrument(skip(self, message), fields(node_id=?self.id()))]
-    pub async fn hold_new_message(&self, mut message: Message) -> Result<WaitAckHandle, ()> {
+    pub async fn hold_new_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
         let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
         let (result_report, result_recv) = flume::bounded(1);
         tracing::debug!(?ep_collect, "hold new message");
@@ -377,32 +378,5 @@ impl Node {
                 return Err(());
             }
         }
-    }
-}
-
-pub struct AckWaitList {
-    pub message_id: MessageId,
-    pub expect_stage: Option<MessageAckKind>,
-    pub eps: Vec<EndpointAddr>,
-    pub attached_node: NodeRef,
-    pub wait_map: HashMap<EndpointAddr, Option<MessageAckKind>>,
-}
-
-impl std::future::Future for AckWaitList {
-    type Output = Result<(), ()>;
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let Some(node) = self.attached_node.upgrade() else {
-            return std::task::Poll::Ready(Err(()));
-        };
-        let this = self.get_mut();
-        if this.expect_stage.is_none() {}
-        return std::task::Poll::Ready(Ok(()));
-        for (addr, state) in &this.wait_map {
-            todo!("check ack state");
-        }
-        std::task::Poll::Pending
     }
 }

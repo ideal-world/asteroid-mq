@@ -1,15 +1,11 @@
 use std::sync::Arc;
 
-use crate::{
-    impl_codec,
-    protocol::interest::{Interest, Subject},
-    protocol::node::codec::{self, CodecType},
-};
+use crate::{impl_codec, protocol::interest::Subject, protocol::codec::CodecType};
 use bytes::{BufMut, Bytes};
 
 use crate::protocol::node::NodeId;
 
-use super::{EndpointAddr, LocalEndpointRef};
+use super::EndpointAddr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageAckKind {
@@ -61,7 +57,7 @@ pub struct MessageId {
 }
 
 impl CodecType for MessageId {
-    fn decode(bytes: Bytes) -> Result<(Self, Bytes), crate::protocol::node::codec::DecodeError> {
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), crate::protocol::codec::DecodeError> {
         let mut buf = [0; 16];
         buf.copy_from_slice(&bytes[0..16]);
         Ok((Self { bytes: buf }, bytes.slice(16..)))
@@ -85,7 +81,7 @@ impl std::fmt::Debug for MessageId {
 }
 
 impl MessageId {
-    pub fn random() -> Self {
+    pub fn new_snowflake() -> Self {
         thread_local! {
             static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         }

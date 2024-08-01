@@ -1,3 +1,4 @@
-pub mod node;
 pub mod endpoint;
 pub mod interest;
+pub mod node;
+pub mod codec;

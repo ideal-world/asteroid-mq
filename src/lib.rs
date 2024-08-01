@@ -1,4 +1,3 @@
-
 pub mod error;
 pub mod protocol;
 pub(crate) mod util;

@@ -4,14 +4,13 @@ use bytes::{Buf as _, BufMut, Bytes, BytesMut};
 
 use crate::protocol::endpoint::EndpointAddr;
 
-use super::{
-    event::{N2nAuth, N2nPacketId}, N2NAuth, N2nEvent, N2NUnreachableEvent, NodeId, NodeInfo, NodeTrace,
-};
+use crate::protocol::node::{event::N2nPacketId, NodeId};
 #[macro_export]
 macro_rules! impl_codec {
-    (struct $ImplTy: ident { $($field:ident: $Type:ty),* $(,)? }) => {
-        impl $crate::protocol::node::codec::CodecType for $ImplTy {
-            fn decode(bytes: bytes::Bytes) -> Result<(Self, bytes::Bytes), $crate::protocol::node::codec::DecodeError> {
+    ( struct $ImplTy: ident { $($field:ident: $Type:ty),* $(,)? }) => {
+        #[allow(unused_variables)]
+        impl $crate::protocol::codec::CodecType for $ImplTy {
+            fn decode(bytes: bytes::Bytes) -> Result<(Self, bytes::Bytes), $crate::protocol::codec::DecodeError> {
                 $(
                     let ($field, bytes) = <$Type>::decode(bytes)?;
                 )*
@@ -27,12 +26,12 @@ macro_rules! impl_codec {
         }
     };
     (enum $ImplTy: ident { $($Variant:ident = $val: literal),* $(,)? }) => {
-        impl $crate::protocol::node::codec::CodecType for $ImplTy {
-            fn decode(bytes: bytes::Bytes) -> Result<(Self, bytes::Bytes), $crate::protocol::node::codec::DecodeError> {
+        impl $crate::protocol::codec::CodecType for $ImplTy {
+            fn decode(bytes: bytes::Bytes) -> Result<(Self, bytes::Bytes), $crate::protocol::codec::DecodeError> {
                 let (val, bytes) = u8::decode(bytes)?;
                 let val = match val {
                     $($val => <$ImplTy>::$Variant,)*
-                    _ => return Err($crate::protocol::node::codec::DecodeError::new::<Self>("invalid kind")),
+                    _ => return Err($crate::protocol::codec::DecodeError::new::<Self>("invalid kind")),
                 };
                 Ok((val, bytes))
             }
@@ -44,8 +43,8 @@ macro_rules! impl_codec {
         }
     };
     (struct $ImplTy: ident ($ProxyTy: ty)) => {
-        impl $crate::protocol::node::codec::CodecType for $ImplTy {
-            fn decode(bytes: bytes::Bytes) -> Result<(Self, bytes::Bytes), $crate::protocol::node::codec::DecodeError> {
+        impl $crate::protocol::codec::CodecType for $ImplTy {
+            fn decode(bytes: bytes::Bytes) -> Result<(Self, bytes::Bytes), $crate::protocol::codec::DecodeError> {
                 let (inner, bytes) = <$ProxyTy>::decode(bytes)?;
                 Ok(($ImplTy(inner), bytes))
             }
@@ -98,6 +97,7 @@ impl CodecType for () {
 
     fn encode(&self, _buf: &mut BytesMut) {}
 }
+
 impl CodecType for Bytes {
     fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
         let (size, bytes) = u32::decode(bytes)?;
@@ -113,6 +113,20 @@ impl CodecType for Bytes {
         buf.put_slice(self);
     }
 }
+
+impl CodecType for bool {
+    fn decode(mut bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        if bytes.len() < size_of::<bool>() {
+            return Err(DecodeError::new::<Self>("too short payload: expect u8"));
+        }
+        Ok((bytes.get_u8() != 0, bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        buf.put_u8(*self as u8);
+    }
+}
+
 impl CodecType for u8 {
     fn decode(mut bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
         if bytes.len() < size_of::<u8>() {
@@ -235,6 +249,40 @@ where
     }
 }
 
+impl<T, E> CodecType for Result<T, E>
+where
+    T: CodecType,
+    E: CodecType,
+{
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        let (ok, bytes) = u8::decode(bytes)?;
+        if ok == 0 {
+            let (t, bytes) = T::decode(bytes)?;
+            Ok((Ok(t), bytes))
+        } else {
+            let (e, bytes) = E::decode(bytes)?;
+            Ok((Err(e), bytes))
+        }
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        match self {
+            Ok(t) => {
+                0u8.encode(buf);
+                t.encode(buf);
+            }
+            Err(e) => {
+                1u8.encode(buf);
+                e.encode(buf)
+            }
+        }
+    }
+}
+
+/*******************************************************************************************
+                                    CODEC FOR 16 BYTE IDs
+*******************************************************************************************/
+
 impl CodecType for NodeId {
     fn decode(mut bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
         if bytes.len() < size_of::<NodeId>() {
@@ -282,7 +330,6 @@ impl CodecType for EndpointAddr {
     }
 }
 
-
 impl CodecType for N2nPacketId {
     fn decode(mut bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
         if bytes.len() < size_of::<N2nPacketId>() {
@@ -304,80 +351,5 @@ impl CodecType for N2nPacketId {
 
     fn encode(&self, buf: &mut BytesMut) {
         buf.put_slice(&self.bytes);
-    }
-}
-impl CodecType for NodeTrace {
-    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
-        let (source, bytes) = NodeId::decode(bytes)?;
-        let (hops, bytes) = Vec::<NodeId>::decode(bytes)?;
-        Ok((NodeTrace { source, hops }, bytes))
-    }
-
-    fn encode(&self, buf: &mut BytesMut) {
-        self.source.encode(buf);
-        self.hops.encode(buf);
-    }
-}
-
-impl CodecType for N2NAuth {
-    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
-        Ok((N2NAuth {}, bytes))
-    }
-
-    fn encode(&self, _buf: &mut BytesMut) {}
-}
-
-impl CodecType for NodeInfo {
-    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
-        let (id, bytes) = NodeId::decode(bytes)?;
-        let (kind, bytes) = u8::decode(bytes)?;
-
-        Ok((
-            NodeInfo {
-                id,
-                kind: kind.into(),
-            },
-            bytes,
-        ))
-    }
-
-    fn encode(&self, buf: &mut BytesMut) {
-        self.id.encode(buf);
-        (self.kind as u8).encode(buf);
-    }
-}
-
-impl CodecType for N2nAuth {
-    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
-        let (info, bytes) = NodeInfo::decode(bytes)?;
-        let (auth, bytes) = N2NAuth::decode(bytes)?;
-        Ok((N2nAuth { info, auth }, bytes))
-    }
-
-    fn encode(&self, buf: &mut BytesMut) {
-        self.info.encode(buf);
-        self.auth.encode(buf);
-    }
-}
-
-impl CodecType for N2NUnreachableEvent {
-    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
-        let (to, bytes) = NodeId::decode(bytes)?;
-        let (unreachable_target, bytes) = NodeId::decode(bytes)?;
-        let (trace, bytes) = NodeTrace::decode(bytes)?;
-        Ok((
-            N2NUnreachableEvent {
-                unreachable_target,
-                to,
-                trace,
-            },
-            bytes,
-        ))
-    }
-
-    fn encode(&self, buf: &mut BytesMut) {
-        self.to.encode(buf);
-        self.unreachable_target.encode(buf);
-        self.trace.encode(buf)
     }
 }
