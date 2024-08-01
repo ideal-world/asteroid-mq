@@ -16,7 +16,7 @@ pub struct HoldMessage {
 }
 
 impl Node {
-    pub fn hold_message(&self, message: Message, wait_ack: Option<WaitAck>) {
+    pub(crate) fn hold_message(&self, message: Message, wait_ack: Option<WaitAck>) {
         let hold_message = HoldMessage {
             header: message.header,
             wait_ack,

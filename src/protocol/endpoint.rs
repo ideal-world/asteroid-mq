@@ -256,7 +256,7 @@ impl Node {
             self.send_packet(packet, peer);
         }
     }
-    pub fn collect_addr_by_subjects<'i>(
+    pub(crate) fn collect_addr_by_subjects<'i>(
         &self,
         subjects: impl Iterator<Item = &'i Subject>,
     ) -> HashSet<EndpointAddr> {
@@ -267,10 +267,10 @@ impl Node {
         }
         ep_collect
     }
-    pub fn get_local_ep(&self, ep: &EndpointAddr) -> Option<LocalEndpointRef> {
+    pub(crate) fn get_local_ep(&self, ep: &EndpointAddr) -> Option<LocalEndpointRef> {
         self.local_endpoints.read().unwrap().get(ep).cloned()
     }
-    pub fn push_message_to_local_ep(
+    pub(crate) fn push_message_to_local_ep(
         &self,
         ep: &EndpointAddr,
         message: Message,
@@ -283,10 +283,10 @@ impl Node {
         }
         Err(message)
     }
-    pub fn get_remote_ep(&self, ep: &EndpointAddr) -> Option<NodeId> {
+    pub(crate) fn get_remote_ep(&self, ep: &EndpointAddr) -> Option<NodeId> {
         self.ep_routing_table.read().unwrap().get(ep).copied()
     }
-    pub fn resolve_node_ep_map(
+    pub(crate) fn resolve_node_ep_map(
         &self,
         ep_list: impl Iterator<Item = EndpointAddr>,
     ) -> HashMap<NodeId, Vec<EndpointAddr>> {
@@ -303,7 +303,7 @@ impl Node {
         resolve_map
     }
     #[instrument(skip(self, message), fields(node_id=?self.id()))]
-    pub async fn hold_new_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
+    pub(crate) async fn hold_new_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
         let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
         let (result_report, result_recv) = flume::bounded(1);
         tracing::debug!(?ep_collect, "hold new message");

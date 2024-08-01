@@ -51,7 +51,7 @@ impl std::fmt::Debug for NodeId {
     }
 }
 impl NodeId {
-    pub fn new() -> NodeId {
+    pub(crate) fn new() -> NodeId {
         static INSTANCE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let dg = crate::util::executor_digest();
         let mut bytes = [0; 16];
@@ -113,7 +113,7 @@ pub struct NodeRef {
 }
 
 impl NodeRef {
-    pub fn upgrade(&self) -> Option<Node> {
+    pub(crate) fn upgrade(&self) -> Option<Node> {
         self.inner.upgrade().map(|inner| Node { inner })
     }
 }
@@ -157,13 +157,13 @@ impl Node {
     pub fn is_edge(&self) -> bool {
         matches!(self.info.kind, NodeKind::Edge)
     }
-    pub fn new_trace(&self) -> NodeTrace {
+    pub(crate) fn new_trace(&self) -> NodeTrace {
         NodeTrace {
             source: self.id(),
             hops: Vec::new(),
         }
     }
-    pub fn new_cast_message(&self, to: NodeId, message: CastMessage) -> N2nEvent {
+    pub(crate) fn new_cast_message(&self, to: NodeId, message: CastMessage) -> N2nEvent {
         N2nEvent {
             to,
             trace: self.new_trace(),
@@ -171,7 +171,7 @@ impl Node {
             kind: N2nEventKind::CastMessage,
         }
     }
-    pub fn new_ack(&self, to: NodeId, message: MessageAck) -> N2nEvent {
+    pub(crate) fn new_ack(&self, to: NodeId, message: MessageAck) -> N2nEvent {
         N2nEvent {
             to,
             trace: self.new_trace(),
@@ -179,7 +179,7 @@ impl Node {
             kind: N2nEventKind::Ack,
         }
     }
-    pub fn get_ep_sync(&self) -> EndpointSync {
+    pub(crate) fn get_ep_sync(&self) -> EndpointSync {
         let ep_interest_map = self.ep_interest_map.read().unwrap();
         let ep_latest_active = self.ep_latest_active.read().unwrap();
         let mut eps = Vec::new();
@@ -242,7 +242,7 @@ impl Node {
         self.id() == id
     }
     #[instrument(skip_all, fields(node = ?self.id()))]
-    pub async fn handle_message(&self, message_evt: N2nEvent) {
+    pub(crate) async fn handle_message(&self, message_evt: N2nEvent) {
         tracing::trace!(?message_evt, "node recv new message");
         self.record_routing_info(&message_evt.trace);
         if message_evt.to == self.id() {
@@ -252,7 +252,7 @@ impl Node {
         }
     }
     #[instrument(skip_all, fields(node = ?self.id()))]
-    pub async fn handle_message_as_destination(&self, message_evt: N2nEvent) {
+    pub(crate) async fn handle_message_as_destination(&self, message_evt: N2nEvent) {
         match message_evt.kind {
             event::N2nEventKind::HoldMessage => {
                 let Ok((evt, _)) = DelegateMessage::decode(message_evt.payload) else {
@@ -321,10 +321,10 @@ impl Node {
             }
         }
     }
-    pub fn known_nodes(&self) -> Vec<NodeId> {
+    pub(crate) fn known_nodes(&self) -> Vec<NodeId> {
         self.connections.read().unwrap().keys().cloned().collect()
     }
-    pub fn known_peer_cluster(&self) -> Vec<NodeId> {
+    pub(crate) fn known_peer_cluster(&self) -> Vec<NodeId> {
         self.connections
             .read()
             .unwrap()
@@ -335,7 +335,7 @@ impl Node {
             .map(|(id, _)| *id)
             .collect()
     }
-    pub fn get_connection(&self, to: NodeId) -> Option<N2NConnectionRef> {
+    pub(crate) fn get_connection(&self, to: NodeId) -> Option<N2NConnectionRef> {
         let connections = self.connections.read().unwrap();
         let conn = connections.get(&to)?;
         if conn.is_alive() {
@@ -345,23 +345,23 @@ impl Node {
         }
     }
 
-    pub fn remove_connection(&self, to: NodeId) {
+    pub(crate) fn remove_connection(&self, to: NodeId) {
         self.connections.write().unwrap().remove(&to);
     }
     #[instrument(skip(self, packet), fields(node=?self.id(), ?to))]
-    pub fn send_packet(&self, packet: N2nPacket, to: NodeId) -> Result<(), N2nPacket> {
+    pub(crate) fn send_packet(&self, packet: N2nPacket, to: NodeId) -> Result<(), N2nPacket> {
         let Some(conn) = self.get_connection(to) else {
             tracing::error!("failed to send packet no connection to {to:?}");
             return Err(packet);
         };
         tracing::trace!(header = ?packet.header,"having connection, prepared to send packet");
         if let Err(e) = conn.outbound.send(packet) {
-            tracing::error!(error=?e, "failed to send packet");
+            tracing::error!("failed to send packet: connection closed");
             return Err(e.0);
         }
         Ok(())
     }
-    pub fn report_unreachable(&self, raw: N2nEvent) {
+    pub(crate) fn report_unreachable(&self, raw: N2nEvent) {
         let source = raw.trace.source();
         let prev_node = raw.trace.prev_node();
         let unreachable_target = raw.to;
@@ -382,7 +382,7 @@ impl Node {
         }
     }
 
-    pub fn record_routing_info(&self, trace: &NodeTrace) {
+    pub(crate) fn record_routing_info(&self, trace: &NodeTrace) {
         let prev_node = trace.prev_node();
         let rg = self.n2n_routing_table.read().unwrap();
         let mut update = Vec::new();
@@ -415,7 +415,7 @@ impl Node {
         }
     }
 
-    pub fn forward_message(&self, mut message_evt: N2nEvent) {
+    pub(crate) fn forward_message(&self, mut message_evt: N2nEvent) {
         let Some(next_jump) = self.get_next_jump(message_evt.to) else {
             self.report_unreachable(message_evt);
             return;
@@ -427,7 +427,7 @@ impl Node {
         }
     }
 
-    pub fn handle_unreachable(&self, unreachable_evt: N2NUnreachableEvent) {
+    pub(crate) fn handle_unreachable(&self, unreachable_evt: N2NUnreachableEvent) {
         let source = unreachable_evt.to;
         let prev_node = unreachable_evt.trace.prev_node();
         let unreachable_target = unreachable_evt.unreachable_target;
@@ -443,7 +443,7 @@ impl Node {
             }
         }
     }
-    pub fn handle_ep_sync(&self, sync_evt: EndpointSync) {
+    pub(crate) fn handle_ep_sync(&self, sync_evt: EndpointSync) {
         tracing::debug!(?sync_evt, "handle ep sync event");
         let mut active_wg = self.ep_latest_active.write().unwrap();
         let mut routing_wg = self.ep_routing_table.write().unwrap();
@@ -461,7 +461,7 @@ impl Node {
             }
         }
     }
-    pub fn get_next_jump(&self, to: NodeId) -> Option<NodeId> {
+    pub(crate) fn get_next_jump(&self, to: NodeId) -> Option<NodeId> {
         let routing_table = self.n2n_routing_table.read().unwrap();
         routing_table.get(&to).map(|info| info.next_jump)
     }
