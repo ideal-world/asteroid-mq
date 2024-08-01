@@ -12,21 +12,56 @@ pub use event::*;
 pub use message::*;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{self, Arc, Mutex},
+    ops::Deref,
+    sync::{self, Arc, Mutex, Weak},
 };
 
 use crate::{
-    interest::{Interest, Subject},
-    protocol::node::{event::N2nPacket, wait_ack::WaitAck},
+    protocol::interest::{Interest, Subject},
+    protocol::node::{
+        event::N2nPacket,
+        wait_ack::{WaitAck, WaitAckHandle},
+    },
     TimestampSec,
 };
 #[derive(Clone, Debug)]
 pub struct LocalEndpoint {
-    pub attached_node: NodeRef,
-    pub interest: Vec<Interest>,
-    pub address: EndpointAddr,
-    pub mail_box: flume::Receiver<Message>,
-    pub mail_addr: flume::Sender<Message>,
+    inner: Arc<LocalEndpointInner>,
+}
+
+impl Deref for LocalEndpoint {
+    type Target = LocalEndpointInner;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalEndpointInner {
+    pub(crate) attached_node: NodeRef,
+    pub(crate) interest: Vec<Interest>,
+    pub(crate) address: EndpointAddr,
+    pub(crate) mail_box: flume::Receiver<Message>,
+    pub(crate) mail_addr: flume::Sender<Message>,
+}
+
+impl Drop for LocalEndpointInner {
+    fn drop(&mut self) {
+        if let Some(node) = self.attached_node.upgrade() {
+            node.delete_endpoint(self.address);
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalEndpointRef {
+    pub inner: Weak<LocalEndpointInner>,
+}
+
+impl LocalEndpointRef {
+    pub fn upgrade(&self) -> Option<LocalEndpoint> {
+        self.inner.upgrade().map(|inner| LocalEndpoint { inner })
+    }
 }
 
 impl LocalEndpoint {
@@ -34,18 +69,35 @@ impl LocalEndpoint {
     pub fn node(&self) -> Option<Node> {
         self.attached_node.upgrade()
     }
-    pub async fn send_message(&self, message: Message) {
+    pub fn reference(&self) -> LocalEndpointRef {
+        LocalEndpointRef {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+    pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, ()>{
         if let Some(node) = self.node() {
             if node.is_edge() {
                 todo!("send to edge")
             } else {
-                node.hold_new_message(message).await;
+                node.hold_new_message(message).await
             }
+        } else {
+            Err(())
         }
     }
-    pub fn send_ack(&self, ack: MessageAck) {
+    pub fn ack_processed(&self, message: &Message) {
         if let Some(attached_node) = self.node() {
-            attached_node.ack_to_message(self.address, ack)
+            attached_node.ack_to_message(message.ack_processed(self.address))
+        }
+    }
+    pub fn ack_received(&self, message: &Message) {
+        if let Some(attached_node) = self.node() {
+            attached_node.ack_to_message(message.ack_received(self.address))
+        }
+    }
+    pub fn ack_failed(&self, message: &Message) {
+        if let Some(attached_node) = self.node() {
+            attached_node.ack_to_message(message.ack_failed(self.address))
         }
     }
     pub fn push_message(&self, message: Message) {
@@ -63,24 +115,25 @@ impl LocalEndpoint {
 
 impl Message {
     #[inline(always)]
-    pub fn ack(&self, kind: MessageAckKind) -> MessageAck {
+    pub fn ack(&self, from: EndpointAddr, kind: MessageAckKind) -> MessageAck {
         MessageAck {
             ack_to: self.id(),
             holder: self.header.holder_node,
             kind,
+            from,
         }
     }
     #[inline(always)]
-    pub fn ack_received(&self) -> MessageAck {
-        self.ack(MessageAckKind::Received)
+    pub fn ack_received(&self, from: EndpointAddr) -> MessageAck {
+        self.ack(from, MessageAckKind::Received)
     }
     #[inline(always)]
-    pub fn ack_processed(&self) -> MessageAck {
-        self.ack(MessageAckKind::Processed)
+    pub fn ack_processed(&self, from: EndpointAddr) -> MessageAck {
+        self.ack(from, MessageAckKind::Processed)
     }
     #[inline(always)]
-    pub fn ack_failed(&self) -> MessageAck {
-        self.ack(MessageAckKind::Failed)
+    pub fn ack_failed(&self, from: EndpointAddr) -> MessageAck {
+        self.ack(from, MessageAckKind::Failed)
     }
 }
 
@@ -122,22 +175,21 @@ impl EndpointAddr {
 }
 
 impl Node {
-    pub fn create_endpoint(
-        &self,
-        interests: impl IntoIterator<Item = Interest>,
-    ) -> Arc<LocalEndpoint> {
+    pub fn create_endpoint(&self, interests: impl IntoIterator<Item = Interest>) -> LocalEndpoint {
         let channel = flume::unbounded();
-        let ep = Arc::new(LocalEndpoint {
-            attached_node: self.node_ref(),
-            address: EndpointAddr::random(),
-            mail_box: channel.1,
-            mail_addr: channel.0,
-            interest: interests.into_iter().collect(),
-        });
+        let ep = LocalEndpoint {
+            inner: Arc::new(LocalEndpointInner {
+                attached_node: self.node_ref(),
+                address: EndpointAddr::random(),
+                mail_box: channel.1,
+                mail_addr: channel.0,
+                interest: interests.into_iter().collect(),
+            }),
+        };
         self.local_endpoints
             .write()
             .unwrap()
-            .insert(ep.address, ep.clone());
+            .insert(ep.address, ep.reference());
         {
             let mut wg = self.ep_interest_map.write().unwrap();
 
@@ -167,7 +219,7 @@ impl Node {
         let peers = self.known_peer_cluster();
         tracing::debug!("notify peers: {peers:?}");
         for node in peers {
-            let packet = N2nPacket::message(N2nEvent {
+            let packet = N2nPacket::event(N2nEvent {
                 to: node,
                 trace: self.new_trace(),
                 kind: N2nEventKind::EpOnline,
@@ -176,6 +228,32 @@ impl Node {
             self.send_packet(packet, node);
         }
         ep
+    }
+    pub fn delete_endpoint(&self, addr: EndpointAddr) {
+        {
+            let mut local_endpoints = self.local_endpoints.write().unwrap();
+            let mut ep_interest_map = self.ep_interest_map.write().unwrap();
+            let mut ep_routing_table = self.ep_routing_table.write().unwrap();
+            let mut ep_latest_active = self.ep_latest_active.write().unwrap();
+            ep_interest_map.delete(&addr);
+            ep_routing_table.remove(&addr);
+            ep_latest_active.remove(&addr);
+            local_endpoints.remove(&addr);
+        }
+        let ep_offline = EndpointOffline {
+            endpoint: addr,
+            host: self.id(),
+        };
+        let payload = ep_offline.encode_to_bytes();
+        for peer in self.known_peer_cluster() {
+            let packet = N2nPacket::event(N2nEvent {
+                to: peer,
+                trace: self.new_trace(),
+                kind: N2nEventKind::EpOffline,
+                payload: payload.clone(),
+            });
+            self.send_packet(packet, peer);
+        }
     }
     pub fn collect_addr_by_subjects<'i>(
         &self,
@@ -188,8 +266,21 @@ impl Node {
         }
         ep_collect
     }
-    pub fn get_local_ep(&self, ep: &EndpointAddr) -> Option<Arc<LocalEndpoint>> {
+    pub fn get_local_ep(&self, ep: &EndpointAddr) -> Option<LocalEndpointRef> {
         self.local_endpoints.read().unwrap().get(ep).cloned()
+    }
+    pub fn push_message_to_local_ep(
+        &self,
+        ep: &EndpointAddr,
+        message: Message,
+    ) -> Result<(), Message> {
+        if let Some(ep) = self.get_local_ep(ep) {
+            if let Some(sender) = ep.upgrade() {
+                sender.push_message(message);
+                return Ok(());
+            }
+        }
+        Err(message)
     }
     pub fn get_remote_ep(&self, ep: &EndpointAddr) -> Option<NodeId> {
         self.ep_routing_table.read().unwrap().get(ep).copied()
@@ -202,10 +293,8 @@ impl Node {
         let rg_routing = self.ep_routing_table.read().unwrap();
         let mut resolve_map = <HashMap<NodeId, Vec<EndpointAddr>>>::new();
         for ep in ep_list {
-            if let Some(local_ep) = rg_local.get(&ep) {
-                if let Some(node) = local_ep.node() {
-                    resolve_map.entry(node.id()).or_default().push(ep);
-                }
+            if rg_local.get(&ep).is_some() {
+                resolve_map.entry(self.id()).or_default().push(ep);
             } else if let Some(node) = rg_routing.get(&ep) {
                 resolve_map.entry(*node).or_default().push(ep);
             }
@@ -213,24 +302,23 @@ impl Node {
         resolve_map
     }
     #[instrument(skip(self, message), fields(node_id=?self.id()))]
-    pub async fn hold_new_message(&self, message: Message) -> Result<(), ()> {
+    pub async fn hold_new_message(&self, mut message: Message) -> Result<WaitAckHandle, ()> {
         let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
+        let (result_report, result_recv) = flume::bounded(1);
         tracing::debug!(?ep_collect, "hold new message");
         match &message.header.target_kind {
             crate::protocol::endpoint::MessageTargetKind::Durable => todo!(),
             crate::protocol::endpoint::MessageTargetKind::Online => {
-                let wait_ack = message
-                    .ack_kind()
-                    .map(|ack_kind| WaitAck::new(ack_kind, ep_collect.clone()));
+                if let Some(ack_kind) = message.ack_kind() {
+                    let wait_ack = WaitAck::new(ack_kind, ep_collect.clone(), result_report);
+                    self.hold_message(message.clone(), Some(wait_ack));
+                }
                 let map = self.resolve_node_ep_map(ep_collect.into_iter());
                 tracing::debug!(?map, "resolve node ep map");
-                self.hold_message(message.clone(), wait_ack);
                 for (node, eps) in map {
-                    if self.id() == node {
+                    if self.is(node) {
                         for ep in &eps {
-                            if let Some(ep) = self.get_local_ep(ep) {
-                                ep.push_message(message.clone());
-                            }
+                            self.push_message_to_local_ep(ep, message.clone());
                         }
                     } else if let Some(next_jump) = self.get_next_jump(node) {
                         tracing::trace!(node_id=?node, eps=?eps, "send to remote node");
@@ -241,7 +329,7 @@ impl Node {
                                 message: message.clone(),
                             },
                         );
-                        match self.send_packet(N2nPacket::message(message_event), next_jump) {
+                        match self.send_packet(N2nPacket::event(message_event), next_jump) {
                             Ok(_) => {}
                             Err(_) => todo!(),
                         }
@@ -249,18 +337,18 @@ impl Node {
                         todo!("unresolved remote node")
                     }
                 }
+                return Ok(message.create_wait_handle(result_recv));
             }
             crate::protocol::endpoint::MessageTargetKind::Available => todo!(),
             crate::protocol::endpoint::MessageTargetKind::Push => {
                 for ep in &ep_collect {
                     // prefer local endpoint
-                    if let Some(ep) = self.get_local_ep(ep) {
-                        ep.push_message(message.clone());
+                    if self.push_message_to_local_ep(ep, message.clone()).is_ok() {
                         let wait_ack = message
                             .ack_kind()
-                            .map(|ack_kind| WaitAck::new(ack_kind, ep_collect));
-                        self.hold_message(message, wait_ack);
-                        return Ok(());
+                            .map(|ack_kind| WaitAck::new(ack_kind, ep_collect, result_report));
+                        self.hold_message(message.clone(), wait_ack);
+                        return Ok(message.create_wait_handle(result_recv));
                     }
                 }
                 for ep in &ep_collect {
@@ -273,12 +361,14 @@ impl Node {
                                     message: message.clone(),
                                 },
                             );
-                            let wait_ack = message
-                                .ack_kind()
-                                .map(|ack_kind| WaitAck::new(ack_kind, ep_collect));
-                            self.hold_message(message, wait_ack);
-                            match self.send_packet(N2nPacket::message(message_event), next_jump) {
-                                Ok(_) => return Ok(()),
+                            match self.send_packet(N2nPacket::event(message_event), next_jump) {
+                                Ok(_) => {
+                                    let wait_ack = message.ack_kind().map(|ack_kind| {
+                                        WaitAck::new(ack_kind, ep_collect, result_report)
+                                    });
+                                    self.hold_message(message.clone(), wait_ack);
+                                    return Ok(message.create_wait_handle(result_recv));
+                                }
                                 Err(_) => todo!(),
                             }
                         }
@@ -287,7 +377,6 @@ impl Node {
                 return Err(());
             }
         }
-        Ok(())
     }
 }
 

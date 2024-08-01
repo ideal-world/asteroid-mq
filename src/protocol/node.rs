@@ -27,16 +27,17 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    interest::{Interest, InterestMap, Subject},
+    protocol::interest::{Interest, InterestMap, Subject},
     protocol::endpoint::{
-        EndpointAddr, EndpointOnline, LocalEndpoint, Message, MessageAckKind, MessageHeader,
-        MessageTargetKind,
+        EndpointAddr, EndpointOnline, LocalEndpoint, Message, MessageAckExpectKind, MessageAckKind,
+        MessageHeader, MessageTargetKind,
     },
     TimestampSec,
 };
 
 use super::endpoint::{
-    CastMessage, DelegateMessage, EndpointOffline, EndpointSync, EpInfo, MessageId,
+    CastMessage, DelegateMessage, EndpointOffline, EndpointSync, EpInfo, LocalEndpointRef,
+    MessageAck, MessageId,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -94,9 +95,8 @@ impl Default for NodeInfo {
 
 #[derive(Debug)]
 pub struct NodeInner {
-    this: Weak<Self>,
     info: NodeInfo,
-    pub(crate) local_endpoints: ShardedLock<HashMap<EndpointAddr, Arc<LocalEndpoint>>>,
+    pub(crate) local_endpoints: ShardedLock<HashMap<EndpointAddr, LocalEndpointRef>>,
     // ne layer
     pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
     pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
@@ -134,8 +134,7 @@ impl Deref for Node {
 impl Default for Node {
     fn default() -> Self {
         Self {
-            inner: Arc::new_cyclic(|this| NodeInner {
-                this: this.clone(),
+            inner: Arc::new(NodeInner {
                 info: NodeInfo::default(),
                 local_endpoints: ShardedLock::new(HashMap::new()),
                 ep_routing_table: ShardedLock::new(HashMap::new()),
@@ -171,6 +170,14 @@ impl Node {
             trace: self.new_trace(),
             payload: message.encode_to_bytes(),
             kind: N2nEventKind::CastMessage,
+        }
+    }
+    pub fn new_ack(&self, to: NodeId, message: MessageAck) -> N2nEvent {
+        N2nEvent {
+            to,
+            trace: self.new_trace(),
+            payload: message.encode_to_bytes(),
+            kind: N2nEventKind::Ack,
         }
     }
     pub fn get_ep_sync(&self) -> EndpointSync {
@@ -215,7 +222,7 @@ impl Node {
         }
         let sync_info = self.get_ep_sync();
         self.send_packet(
-            N2nPacket::message(N2nEvent {
+            N2nPacket::event(N2nEvent {
                 to: peer,
                 trace: self.new_trace(),
                 kind: N2nEventKind::EpSync,
@@ -230,6 +237,10 @@ impl Node {
     }
     pub fn id(&self) -> NodeId {
         self.info.id
+    }
+    #[inline(always)]
+    pub fn is(&self, id: NodeId) -> bool {
+        self.id() == id
     }
     #[instrument(skip_all, fields(node = ?self.id()))]
     pub async fn handle_message(&self, message_evt: N2nEvent) {
@@ -262,15 +273,15 @@ impl Node {
                     eps = evt.target_eps
                 );
                 for ep in &evt.target_eps {
-                    if let Some(local_ep) = self.get_local_ep(ep) {
-                        // maybe we can make it share instead of clone the header
-                        local_ep.push_message(evt.message.clone())
-                    } else {
-                        // handle unreachable targets
-                    }
+                    self.push_message_to_local_ep(ep, evt.message.clone());
                 }
             }
-            event::N2nEventKind::Ack => todo!(),
+            event::N2nEventKind::Ack => {
+                let Ok((evt, _)) = MessageAck::decode(message_evt.payload) else {
+                    return;
+                };
+                self.local_ack(evt)
+            }
             event::N2nEventKind::AckReport => todo!(),
             event::N2nEventKind::EpOnline => {
                 let Ok((evt, _)) = EndpointOnline::decode(message_evt.payload) else {
@@ -307,22 +318,7 @@ impl Node {
                 let Ok((evt, _)) = EndpointSync::decode(message_evt.payload) else {
                     return;
                 };
-                tracing::debug!(?evt, "ep sync");
-                let mut active_wg = self.ep_latest_active.write().unwrap();
-                let mut routing_wg = self.ep_routing_table.write().unwrap();
-                let mut interest_wg = self.ep_interest_map.write().unwrap();
-                for ep in evt.eps {
-                    if let Some(existed_record) = active_wg.get(&ep.addr) {
-                        if *existed_record > ep.latest_active {
-                            continue;
-                        }
-                    }
-                    active_wg.insert(ep.addr, ep.latest_active);
-                    routing_wg.insert(ep.addr, ep.host);
-                    for interest in ep.interests {
-                        interest_wg.insert(interest, ep.addr);
-                    }
-                }
+                self.handle_ep_sync(evt);
             }
         }
     }
@@ -337,7 +333,7 @@ impl Node {
             .filter(|(id, instance)| {
                 instance.peer_info.kind == NodeKind::Cluster && (**id != self.id())
             })
-            .map(|(id, _)| id.clone())
+            .map(|(id, _)| *id)
             .collect()
     }
     pub fn get_connection(&self, to: NodeId) -> Option<N2NConnectionRef> {
@@ -426,7 +422,7 @@ impl Node {
             return;
         };
         message_evt.trace.hops.push(self.id());
-        if let Err(packet) = self.send_packet(N2nPacket::message(message_evt), next_jump) {
+        if let Err(packet) = self.send_packet(N2nPacket::event(message_evt), next_jump) {
             let raw_event = N2nEvent::decode(packet.payload).expect("should be valid").0;
             self.report_unreachable(raw_event);
         }
@@ -445,6 +441,24 @@ impl Node {
         if let Some(routing) = routing_table.get(&source) {
             if routing.next_jump == prev_node {
                 routing_table.remove(&source);
+            }
+        }
+    }
+    pub fn handle_ep_sync(&self, sync_evt: EndpointSync) {
+        tracing::debug!(?sync_evt, "handle ep sync event");
+        let mut active_wg = self.ep_latest_active.write().unwrap();
+        let mut routing_wg = self.ep_routing_table.write().unwrap();
+        let mut interest_wg = self.ep_interest_map.write().unwrap();
+        for ep in sync_evt.eps {
+            if let Some(existed_record) = active_wg.get(&ep.addr) {
+                if *existed_record > ep.latest_active {
+                    continue;
+                }
+            }
+            active_wg.insert(ep.addr, ep.latest_active);
+            routing_wg.insert(ep.addr, ep.host);
+            for interest in ep.interests {
+                interest_wg.insert(interest, ep.addr);
             }
         }
     }
@@ -493,7 +507,8 @@ async fn test_nodes() {
 
         loop {
             let message = node_server_user.next_message().await;
-            tracing::info!(?message, "recv message in server node")
+            tracing::info!(?message, "recv message in server node");
+            node_server_user.ack_processed(&message);
         }
     });
 
@@ -516,21 +531,23 @@ async fn test_nodes() {
     tokio::spawn(async move {
         loop {
             let message = node_client_sender.next_message().await;
-            tracing::info!(?message, "recv message")
+            tracing::info!(?message, "recv message");
+            node_client_sender.ack_processed(&message);
         }
     });
     let ep = node_client.create_endpoint(None);
     tokio::time::sleep(Duration::from_secs(1)).await;
-    ep.send_message(Message {
+    let ack_handle = ep.send_message(Message {
         header: MessageHeader {
             message_id: MessageId::random(),
             holder_node: node_client.id(),
-            ack_kind: Some(MessageAckKind::Processed),
+            ack_kind: Some(MessageAckExpectKind::Processed),
             target_kind: MessageTargetKind::Online,
             subjects: vec![Subject::new("events/hello-world")].into(),
         },
         payload: Bytes::from_static(b"Hello every one!"),
     })
-    .await;
+    .await.unwrap();
+    ack_handle.await.unwrap();
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 }

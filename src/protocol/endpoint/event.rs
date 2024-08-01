@@ -1,4 +1,4 @@
-use crate::{impl_codec, interest::Interest, protocol::node::NodeId, TimestampSec};
+use crate::{impl_codec, protocol::interest::Interest, protocol::node::NodeId, TimestampSec};
 
 use super::{EndpointAddr, Message};
 

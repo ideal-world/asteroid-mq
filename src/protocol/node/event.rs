@@ -115,7 +115,7 @@ impl N2nPacket {
             payload: payload_buf.into(),
         }
     }
-    pub fn message(evt: N2nEvent) -> Self {
+    pub fn event(evt: N2nEvent) -> Self {
         let payload = evt.encode_to_bytes();
         Self {
             header: N2nPacketHeader {

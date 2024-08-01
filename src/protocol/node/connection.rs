@@ -3,10 +3,11 @@ use std::{borrow::Cow, ops::Deref, sync::Arc};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-use crate::protocol::node::event::{N2nAuth, N2NPayloadKind};
+use crate::protocol::node::event::{N2NPayloadKind, N2nAuth};
 
 use super::{
-    codec::{CodecType, DecodeError}, N2NAuth, N2nPacket, N2nEvent, NodeInfo, NodeInner, NodeRef
+    codec::{CodecType, DecodeError},
+    N2NAuth, N2nEvent, N2nPacket, NodeInfo, NodeInner, NodeRef,
 };
 
 pub mod tokio_tcp;
@@ -97,8 +98,7 @@ impl N2NConnectionInstance {
             kind: node.info.kind,
         };
         let auth = config.auth.clone();
-        let auth_event = N2nAuth { info, auth };
-        let evt = N2nPacket::auth(auth_event);
+        let evt = N2nPacket::auth(N2nAuth { info, auth });
         sink.send(evt).await?;
         let auth = stream.next().await.unwrap_or(Err(N2NConnectionError::new(
             N2NConnectionErrorKind::Closed,
@@ -164,10 +164,21 @@ impl N2NConnectionInstance {
             tokio::spawn(async move {
                 let selected = futures_util::future::select(ib_handle, ob_handle).await;
                 match selected {
-                    futures_util::future::Either::Left(ib) => {
+                    futures_util::future::Either::Left((ib, ob)) => {
+                        if let Err(e) = ib.unwrap() {
+                            warn!(?e, "inbound error");
+                        } else {
+                            let _result = ob.await;
+                        }
                         // do log stuff here
                     }
-                    futures_util::future::Either::Right(ob) => {}
+                    futures_util::future::Either::Right((ob, ib)) => {
+                        if let Err(e) = ob.unwrap() {
+                            warn!(?e, "inbound error");
+                        } else {
+                            let _result = ib.await;
+                        }
+                    }
                 }
                 alive_flag.store(false, std::sync::atomic::Ordering::Relaxed);
                 if let Some(node) = attached_node.upgrade() {

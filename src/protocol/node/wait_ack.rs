@@ -1,24 +1,51 @@
 use std::{
     collections::{HashMap, HashSet},
-    task::Poll,
+    future::Future,
+    sync::{Arc, OnceLock},
+    task::{ready, Poll, Waker},
     time::Instant,
 };
 
 use crossbeam::sync::ShardedLock;
+use futures_util::FutureExt;
 
-use crate::protocol::endpoint::{EndpointAddr, MessageAckKind, MessageId};
+use crate::protocol::endpoint::{
+    EndpointAddr, LocalEndpointRef, Message, MessageAckExpectKind, MessageAckKind, MessageId,
+};
+
+use super::NodeRef;
 #[derive(Debug)]
 pub struct WaitAck {
-    pub expect: MessageAckKind,
+    pub expect: MessageAckExpectKind,
     pub status: ShardedLock<HashMap<EndpointAddr, MessageAckKind>>,
     pub timeout: Option<Instant>,
     pub ep_list: HashSet<EndpointAddr>,
+    pub reporter: flume::Sender<Result<(), WaitAckError>>,
 }
 
+#[derive(Debug)]
 pub struct WaitAckError {
-    ep_list: Vec<EndpointAddr>,
-    current_status: HashMap<EndpointAddr, MessageAckKind>,
-    kind: AckWaitErrorKind,
+    pub ep_list: Vec<EndpointAddr>,
+    pub failed_list: Vec<EndpointAddr>,
+    pub unreachable_list: Vec<EndpointAddr>,
+    pub timeout_list: Vec<EndpointAddr>,
+    pub exception: Option<WaitAckErrorException>,
+}
+
+impl WaitAckError {
+    pub fn exception(exception: WaitAckErrorException) -> Self {
+        Self {
+            ep_list: Vec::new(),
+            failed_list: Vec::new(),
+            unreachable_list: Vec::new(),
+            timeout_list: Vec::new(),
+            exception: Some(exception),
+        }
+    }
+}
+#[derive(Debug)]
+pub enum WaitAckErrorException {
+    MessageDropped,
 }
 
 pub enum AckWaitErrorKind {
@@ -27,32 +54,55 @@ pub enum AckWaitErrorKind {
 }
 
 impl WaitAck {
-    pub fn new(expect: MessageAckKind, ep_list: HashSet<EndpointAddr>) -> Self {
+    pub fn new(
+        expect: MessageAckExpectKind,
+        ep_list: HashSet<EndpointAddr>,
+        reporter: flume::Sender<Result<(), WaitAckError>>,
+    ) -> Self {
         Self {
             status: Default::default(),
             timeout: None,
             ep_list,
             expect,
+            reporter,
         }
     }
-    pub fn poll_check(&self) -> Poll<Result<(), WaitAckError>> {
-        let rg = self.status.read().unwrap();
-        for ep in &self.ep_list {
-            match rg.get(ep) {
-                Some(ack) if ack.is_reached(self.expect) => {
-                    continue;
-                }
-                Some(ack) if ack.is_failed() => {
-                    return Poll::Ready(Err(WaitAckError {
-                        ep_list: self.ep_list.iter().cloned().collect(),
-                        current_status: rg.clone(),
-                        kind: AckWaitErrorKind::Fail,
-                    }))
-                }
-                Some(_) => return Poll::Pending,
-                None => return Poll::Pending,
-            }
+}
+
+pin_project_lite::pin_project! {
+    pub struct WaitAckHandle {
+        pub(crate) message_id: MessageId,
+        #[pin]
+        pub(crate) result: flume::r#async::RecvFut<'static, Result<(), WaitAckError>>,
+    }
+
+}
+
+impl WaitAckHandle {
+    pub fn message_id(&self) -> MessageId {
+        self.message_id
+    }
+}
+
+impl Message {
+    pub(crate) fn create_wait_handle(
+        &self,
+        recv: flume::Receiver<Result<(), WaitAckError>>,
+    ) -> WaitAckHandle {
+        WaitAckHandle {
+            message_id: self.id(),
+            result: recv.into_recv_async(),
         }
-        Poll::Ready(Ok(()))
+    }
+}
+
+impl Future for WaitAckHandle {
+    type Output = Result<(), WaitAckError>;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        this.result
+            .poll(cx)
+            .map_err(|_| WaitAckError::exception(WaitAckErrorException::MessageDropped))?
     }
 }
