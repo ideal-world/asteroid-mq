@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{impl_codec, protocol::interest::Subject, protocol::codec::CodecType};
+use crate::{
+    impl_codec,
+    protocol::{codec::CodecType, interest::Subject, topic::TopicCode},
+};
 use bytes::{BufMut, Bytes};
 
 use crate::protocol::node::NodeId;
@@ -117,6 +120,9 @@ impl Message {
     pub fn id(&self) -> MessageId {
         self.header.message_id
     }
+    pub fn topic(&self) -> &TopicCode {
+        &self.header.topic
+    }
     pub fn ack_kind(&self) -> Option<MessageAckExpectKind> {
         self.header.ack_kind
     }
@@ -128,6 +134,7 @@ pub struct MessageHeader {
     pub ack_kind: Option<MessageAckExpectKind>,
     pub target_kind: MessageTargetKind,
     pub subjects: Arc<[Subject]>,
+    pub topic: TopicCode,
 }
 
 impl_codec! {
@@ -137,25 +144,28 @@ impl_codec! {
         ack_kind: Option<MessageAckExpectKind>,
         target_kind: MessageTargetKind,
         subjects: Arc<[Subject]>,
+        topic: TopicCode,
     }
 }
 #[derive(Debug, Clone)]
 pub struct MessageAck {
     pub ack_to: MessageId,
+    pub topic_code: TopicCode,
     pub from: EndpointAddr,
     pub holder: NodeId,
     pub kind: MessageAckKind,
 }
 
 impl_codec! {
-
     struct MessageAck {
         ack_to: MessageId,
+        topic_code: TopicCode,
         from: EndpointAddr,
         holder: NodeId,
         kind: MessageAckKind,
     }
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum MessageTargetKind {

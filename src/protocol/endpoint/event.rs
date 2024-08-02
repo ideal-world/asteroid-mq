@@ -1,4 +1,6 @@
-use crate::{impl_codec, protocol::interest::Interest, protocol::node::NodeId, TimestampSec};
+use std::collections::HashMap;
+
+use crate::{impl_codec, protocol::{interest::Interest, node::NodeId, topic::TopicCode}, TimestampSec};
 
 use super::{EndpointAddr, Message};
 
@@ -26,6 +28,7 @@ impl_codec!(
 #[derive(Debug)]
 
 pub struct EndpointOnline {
+    pub topic_code: TopicCode,
     pub endpoint: EndpointAddr,
     pub interests: Vec<Interest>,
     pub host: NodeId,
@@ -34,30 +37,33 @@ pub struct EndpointOnline {
 impl_codec!(
     struct EndpointOnline {
         endpoint: EndpointAddr,
+        topic_code: TopicCode,
         host: NodeId,
         interests: Vec<Interest>,
     }
 );
 #[derive(Debug)]
 pub struct EndpointOffline {
+    pub topic_code: TopicCode,
     pub endpoint: EndpointAddr,
     pub host: NodeId,
 }
 
 impl_codec!(
     struct EndpointOffline {
+        topic_code: TopicCode,
         endpoint: EndpointAddr,
         host: NodeId,
     }
 );
 #[derive(Debug)]
 pub struct EndpointSync {
-    pub eps: Vec<EpInfo>,
+    pub entries: Vec<(TopicCode, Vec<EpInfo>)>,
 }
 
 impl_codec!(
     struct EndpointSync {
-        eps: Vec<EpInfo>,
+        entries: Vec<(TopicCode, Vec<EpInfo>)>,
     }
 );
 

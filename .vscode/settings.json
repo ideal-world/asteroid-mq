@@ -2,6 +2,7 @@
     "cSpell.words": [
         "Bincode",
         "kademlia",
-        "Protobuf"
+        "Protobuf",
+        "Sharded"
     ]
 }

@@ -279,6 +279,35 @@ where
     }
 }
 
+impl CodecType for String {
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        let (s, bytes) = Bytes::decode(bytes)?;
+        let s =
+            String::from_utf8(s.to_vec()).map_err(|e| DecodeError::new::<String>(e.to_string()))?;
+        Ok((s, bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        self.as_bytes().to_vec().encode(buf)
+    }
+}
+
+impl<A, B> CodecType for (A, B)
+where
+    A: CodecType,
+    B: CodecType,
+{
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        let (a, bytes) = A::decode(bytes)?;
+        let (b, bytes) = B::decode(bytes)?;
+        Ok(((a, b), bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        self.0.encode(buf);
+        self.1.encode(buf)
+    }
+}
 /*******************************************************************************************
                                     CODEC FOR 16 BYTE IDs
 *******************************************************************************************/

@@ -198,7 +198,7 @@ impl_codec!(
 #[repr(u8)]
 pub enum N2nEventKind {
     /// Hold Message: edge node ask cluster node to hold a message.
-    HoldMessage = 0x10,
+    DelegateMessage = 0x10,
     /// Cast Message: distribute message to clusters.
     CastMessage = 0x11,
     /// Ack: ack to the holder node.
@@ -215,7 +215,7 @@ pub enum N2nEventKind {
 
 impl_codec!(
     enum N2nEventKind {
-        HoldMessage = 0x10,
+        DelegateMessage = 0x10,
         CastMessage = 0x11,
         Ack = 0x12,
         AckReport = 0x13,

@@ -1,21 +1,23 @@
 pub mod connection;
 pub mod event;
-pub mod hold_message;
-pub mod wait_ack;
+// pub mod hold_message;
+// pub mod wait_ack;
 use std::{
     collections::HashMap,
     ops::Deref,
     sync::{self, Arc},
 };
 
-use super::codec::CodecType;
+use super::{
+    codec::CodecType,
+    topic::{Topic, TopicCode, TopicInner},
+};
 use connection::{
     ConnectionConfig, N2NConnection, N2NConnectionError, N2NConnectionErrorKind,
     N2NConnectionInstance, N2NConnectionRef,
 };
 use crossbeam::sync::ShardedLock;
 use event::{N2NAuth, N2NUnreachableEvent, N2nEvent, N2nEventKind, N2nPacket, NodeKind, NodeTrace};
-use hold_message::HoldMessage;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -51,7 +53,7 @@ impl std::fmt::Debug for NodeId {
     }
 }
 impl NodeId {
-    pub(crate) fn new() -> NodeId {
+    pub(crate) fn snowflake() -> NodeId {
         static INSTANCE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let dg = crate::util::executor_digest();
         let mut bytes = [0; 16];
@@ -68,7 +70,7 @@ impl NodeId {
 
 impl Default for NodeId {
     fn default() -> Self {
-        Self::new()
+        Self::snowflake()
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +88,7 @@ impl_codec!(
 impl Default for NodeInfo {
     fn default() -> Self {
         Self {
-            id: NodeId::new(),
+            id: NodeId::snowflake(),
             kind: NodeKind::Cluster,
         }
     }
@@ -95,12 +97,13 @@ impl Default for NodeInfo {
 #[derive(Debug)]
 pub struct NodeInner {
     info: NodeInfo,
-    pub(crate) local_endpoints: ShardedLock<HashMap<EndpointAddr, LocalEndpointRef>>,
+    // pub(crate) local_endpoints: ShardedLock<HashMap<EndpointAddr, LocalEndpointRef>>,
     // ne layer
-    pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
-    pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
-    pub(crate) ep_latest_active: ShardedLock<HashMap<EndpointAddr, TimestampSec>>,
-    pub(crate) hold_messages: ShardedLock<HashMap<MessageId, HoldMessage>>,
+    // pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
+    // pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
+    // pub(crate) ep_latest_active: ShardedLock<HashMap<EndpointAddr, TimestampSec>>,
+    // pub(crate) hold_messages: ShardedLock<HashMap<MessageId, HoldMessage>>,
+    pub(crate) topics: ShardedLock<HashMap<TopicCode, Topic>>,
     // nn layer
     n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
     connections: ShardedLock<HashMap<NodeId, Arc<N2NConnectionInstance>>>,
@@ -135,11 +138,7 @@ impl Default for Node {
         Self {
             inner: Arc::new(NodeInner {
                 info: NodeInfo::default(),
-                local_endpoints: ShardedLock::new(HashMap::new()),
-                ep_routing_table: ShardedLock::new(HashMap::new()),
-                ep_interest_map: ShardedLock::new(InterestMap::new()),
-                ep_latest_active: ShardedLock::new(HashMap::new()),
-                hold_messages: Default::default(),
+                topics: Default::default(),
                 n2n_routing_table: ShardedLock::new(HashMap::new()),
                 connections: ShardedLock::new(HashMap::new()),
                 auth: N2NAuth::default(),
@@ -180,23 +179,14 @@ impl Node {
         }
     }
     pub(crate) fn get_ep_sync(&self) -> EndpointSync {
-        let ep_interest_map = self.ep_interest_map.read().unwrap();
-        let ep_latest_active = self.ep_latest_active.read().unwrap();
-        let mut eps = Vec::new();
-        for (ep, host) in self.ep_routing_table.read().unwrap().iter() {
-            if let Some(latest_active) = ep_latest_active.get(ep) {
-                eps.push(EpInfo {
-                    addr: *ep,
-                    host: *host,
-                    interests: ep_interest_map
-                        .interest_of(ep)
-                        .map(|s| s.iter().cloned().collect())
-                        .unwrap_or_default(),
-                    latest_active: *latest_active,
-                });
-            }
-        }
-        EndpointSync { eps }
+        let entries = self
+            .topics
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(code, t)| (code.clone(), t.get_ep_sync()))
+            .collect::<Vec<_>>();
+        EndpointSync { entries }
     }
     pub async fn create_connection<C: N2NConnection>(
         &self,
@@ -254,11 +244,13 @@ impl Node {
     #[instrument(skip_all, fields(node = ?self.id()))]
     pub(crate) async fn handle_message_as_destination(&self, message_evt: N2nEvent) {
         match message_evt.kind {
-            event::N2nEventKind::HoldMessage => {
+            event::N2nEventKind::DelegateMessage => {
                 let Ok((evt, _)) = DelegateMessage::decode(message_evt.payload) else {
                     return;
                 };
-                self.hold_new_message(evt.message).await;
+                self.get_or_init_topic(evt.message.topic().clone())
+                    .hold_new_message(evt.message)
+                    .await;
             }
             event::N2nEventKind::CastMessage => {
                 let Ok((evt, _)) = CastMessage::decode(message_evt.payload).inspect_err(|e| {
@@ -272,14 +264,16 @@ impl Node {
                     eps = evt.target_eps
                 );
                 for ep in &evt.target_eps {
-                    self.push_message_to_local_ep(ep, evt.message.clone());
+                    self.get_or_init_topic(evt.message.topic().clone())
+                        .push_message_to_local_ep(ep, evt.message.clone());
                 }
             }
             event::N2nEventKind::Ack => {
                 let Ok((evt, _)) = MessageAck::decode(message_evt.payload) else {
                     return;
                 };
-                self.local_ack(evt)
+                self.get_or_init_topic(evt.topic_code.clone())
+                    .local_ack(evt)
             }
             event::N2nEventKind::AckReport => todo!(),
             event::N2nEventKind::EpOnline => {
@@ -287,16 +281,9 @@ impl Node {
                     return;
                 };
                 tracing::debug!("ep {ep:?} online", ep = evt.endpoint);
-                let ep = evt.endpoint;
                 if evt.host == message_evt.trace.source() {
-                    let mut routing_wg = self.ep_routing_table.write().unwrap();
-                    let mut interest_wg = self.ep_interest_map.write().unwrap();
-                    let mut active_wg = self.ep_latest_active.write().unwrap();
-                    active_wg.insert(ep, TimestampSec::now());
-                    routing_wg.insert(ep, message_evt.trace.source());
-                    for interest in &evt.interests {
-                        interest_wg.insert(interest.clone(), ep);
-                    }
+                    let topic = self.get_or_init_topic(evt.topic_code.clone());
+                    topic.ep_online(evt, message_evt.trace.source());
                 }
             }
             event::N2nEventKind::EpOffline => {
@@ -305,12 +292,8 @@ impl Node {
                 };
                 let ep = evt.endpoint;
                 if evt.host == message_evt.trace.source() {
-                    let mut routing_wg = self.ep_routing_table.write().unwrap();
-                    let mut interest_wg = self.ep_interest_map.write().unwrap();
-                    let mut active_wg = self.ep_latest_active.write().unwrap();
-                    active_wg.remove(&ep);
-                    routing_wg.remove(&ep);
-                    interest_wg.delete(&ep);
+                    let topic = self.get_or_init_topic(evt.topic_code.clone());
+                    topic.ep_offline(&ep);
                 }
             }
             event::N2nEventKind::EpSync => {
@@ -445,20 +428,9 @@ impl Node {
     }
     pub(crate) fn handle_ep_sync(&self, sync_evt: EndpointSync) {
         tracing::debug!(?sync_evt, "handle ep sync event");
-        let mut active_wg = self.ep_latest_active.write().unwrap();
-        let mut routing_wg = self.ep_routing_table.write().unwrap();
-        let mut interest_wg = self.ep_interest_map.write().unwrap();
-        for ep in sync_evt.eps {
-            if let Some(existed_record) = active_wg.get(&ep.addr) {
-                if *existed_record > ep.latest_active {
-                    continue;
-                }
-            }
-            active_wg.insert(ep.addr, ep.latest_active);
-            routing_wg.insert(ep.addr, ep.host);
-            for interest in ep.interests {
-                interest_wg.insert(interest, ep.addr);
-            }
+        for (code, infos) in sync_evt.entries {
+            let topic = self.get_or_init_topic(code);
+            topic.load_ep_sync(infos);
         }
     }
     pub(crate) fn get_next_jump(&self, to: NodeId) -> Option<NodeId> {
@@ -477,92 +449,3 @@ pub struct Connection {
     pub peer_info: NodeInfo,
 }
 
-#[cfg(test)]
-mod test {
-    use std::{net::SocketAddr, str::FromStr, time::Duration};
-
-    use bytes::Bytes;
-    use tracing::info;
-
-    use crate::protocol::{
-        endpoint::{Message, MessageAckExpectKind, MessageHeader, MessageId, MessageTargetKind},
-        interest::{Interest, Subject},
-        node::{connection::tokio_tcp::TokioTcp, Node},
-    };
-
-    #[tokio::test]
-    async fn test_nodes() {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .init();
-
-        let node_server = Node::default();
-        let server_id = node_server.id();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:10080")
-            .await
-            .unwrap();
-        tokio::spawn(async move {
-            let node_server_user = node_server.create_endpoint(vec![Interest::new("events/**")]);
-            {
-                let node_server = node_server.clone();
-                tokio::spawn(async move {
-                    while let Ok((stream, peer)) = listener.accept().await {
-                        tracing::info!(peer=?peer, "new connection");
-                        let node = node_server.clone();
-                        tokio::spawn(async move {
-                            let conn = TokioTcp::new(stream);
-                            node.create_connection(conn).await.unwrap();
-                        });
-                    }
-                });
-            }
-
-            loop {
-                let message = node_server_user.next_message().await;
-                tracing::info!(?message, "recv message in server node");
-                node_server_user.ack_processed(&message);
-            }
-        });
-
-        let node_client = Node::default();
-        let client_id = node_client.id();
-        let stream_client = tokio::net::TcpSocket::new_v4()
-            .unwrap()
-            .connect(SocketAddr::from_str("127.0.0.1:10080").unwrap())
-            .await
-            .unwrap();
-
-        let node_client_sender = node_client.create_endpoint(vec![Interest::new("events/**")]);
-        node_client
-            .create_connection(TokioTcp::new(stream_client))
-            .await
-            .unwrap();
-
-        let server_conn = node_client.get_connection(server_id).unwrap();
-
-        tokio::spawn(async move {
-            loop {
-                let message = node_client_sender.next_message().await;
-                tracing::info!(?message, "recv message");
-                node_client_sender.ack_processed(&message);
-            }
-        });
-        let ep = node_client.create_endpoint(None);
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let ack_handle = ep
-            .send_message(Message {
-                header: MessageHeader {
-                    message_id: MessageId::new_snowflake(),
-                    holder_node: node_client.id(),
-                    ack_kind: Some(MessageAckExpectKind::Processed),
-                    target_kind: MessageTargetKind::Online,
-                    subjects: vec![Subject::new("events/hello-world")].into(),
-                },
-                payload: Bytes::from_static(b"Hello every one!"),
-            })
-            .await
-            .unwrap();
-        ack_handle.await.unwrap();
-        tracing::info!("recv ack")
-    }
-}

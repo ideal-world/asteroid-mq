@@ -7,7 +7,7 @@ use crate::protocol::{
 
 use super::{
     wait_ack::{WaitAck, WaitAckError},
-    Node,
+    Node, Topic,
 };
 #[derive(Debug)]
 pub struct HoldMessage {
@@ -15,7 +15,7 @@ pub struct HoldMessage {
     pub wait_ack: Option<WaitAck>,
 }
 
-impl Node {
+impl Topic {
     pub(crate) fn hold_message(&self, message: Message, wait_ack: Option<WaitAck>) {
         let hold_message = HoldMessage {
             header: message.header,
@@ -96,13 +96,13 @@ impl Node {
         }
     }
     pub fn ack_to_message(&self, ack: MessageAck) {
-        if self.is(ack.holder) {
+        if self.node.is(ack.holder) {
             self.local_ack(ack);
-        } else if let Some(next_jump) = self.get_next_jump(ack.holder) {
-            if let Err(e) =
-                self.send_packet(N2nPacket::event(self.new_ack(ack.holder, ack)), next_jump)
-            {
-            }
+        } else if let Some(next_jump) = self.node.get_next_jump(ack.holder) {
+            if let Err(e) = self.node.send_packet(
+                N2nPacket::event(self.node.new_ack(ack.holder, ack)),
+                next_jump,
+            ) {}
         } else {
             // handle unreachable
         }
