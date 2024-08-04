@@ -95,6 +95,7 @@ async fn test_nodes() {
                 target_kind: MessageTargetKind::Online,
                 subjects: vec![Subject::new("cicd/log/task/asudhuiahsdu392")].into(),
                 topic: event_topic.code().clone(),
+                durability: None,
             },
             payload: Bytes::from_static(b"Hello every one!"),
         })

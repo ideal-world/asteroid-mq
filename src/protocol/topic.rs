@@ -18,6 +18,7 @@ use std::{
 
 use bytes::Bytes;
 use crossbeam::sync::ShardedLock;
+use durable_message::DurabilityService;
 use hold_message::HoldMessage;
 use tracing::instrument;
 use wait_ack::{WaitAck, WaitAckHandle};
@@ -394,6 +395,7 @@ pub struct TopicInner {
     pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
     pub(crate) ep_latest_active: ShardedLock<HashMap<EndpointAddr, TimestampSec>>,
     pub(crate) hold_messages: ShardedLock<HashMap<MessageId, HoldMessage>>,
+    pub(crate) durability_service: Option<DurabilityService>,
 }
 
 impl TopicInner {
@@ -405,6 +407,18 @@ impl TopicInner {
             ep_interest_map: Default::default(),
             ep_latest_active: Default::default(),
             hold_messages: Default::default(),
+            durability_service: None,
+        }
+    }
+    pub fn new_with_durability(topic_code: TopicCode, durability_service: DurabilityService) -> Self {
+        Self {
+            topic_code,
+            local_endpoints: Default::default(),
+            ep_routing_table: Default::default(),
+            ep_interest_map: Default::default(),
+            ep_latest_active: Default::default(),
+            hold_messages: Default::default(),
+            durability_service: Some(durability_service),
         }
     }
 }

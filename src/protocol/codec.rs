@@ -1,6 +1,8 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::{borrow::Cow, mem::size_of};
 
 use bytes::{Buf as _, BufMut, Bytes, BytesMut};
+use chrono::{TimeZone, Utc};
 
 use crate::protocol::endpoint::EndpointAddr;
 
@@ -163,6 +165,18 @@ impl CodecType for u64 {
         buf.put_u64(*self);
     }
 }
+impl CodecType for i64 {
+    fn decode(mut bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        if bytes.len() < size_of::<u64>() {
+            return Err(DecodeError::new::<Self>("too short payload: expect u32"));
+        }
+        Ok((bytes.get_i64(), bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        buf.put_i64(*self);
+    }
+}
 impl<T> CodecType for Option<T>
 where
     T: CodecType,
@@ -202,6 +216,70 @@ impl<T: CodecType> CodecType for Vec<T> {
         (self.len() as u32).encode(buf);
         for item in self {
             item.encode(buf);
+        }
+    }
+}
+
+impl<K: CodecType + std::hash::Hash + Eq, V: CodecType> CodecType for HashMap<K, V> {
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        let (size, mut bytes) = u32::decode(bytes)?;
+        let mut map = HashMap::new();
+        for _ in 0..size {
+            let (key, rest) = K::decode(bytes)?;
+            let (value, rest) = V::decode(rest)?;
+            map.insert(key, value);
+            bytes = rest;
+        }
+        Ok((map, bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        (self.len() as u32).encode(buf);
+        for (key, value) in self.iter() {
+            key.encode(buf);
+            value.encode(buf);
+        }
+    }
+}
+
+impl<K: CodecType + std::hash::Hash + Eq + Ord, V: CodecType> CodecType for BTreeMap<K, V> {
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        let (size, mut bytes) = u32::decode(bytes)?;
+        let mut map = BTreeMap::new();
+        for _ in 0..size {
+            let (key, rest) = K::decode(bytes)?;
+            let (value, rest) = V::decode(rest)?;
+            map.insert(key, value);
+            bytes = rest;
+        }
+        Ok((map, bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        (self.len() as u32).encode(buf);
+        for (key, value) in self.iter() {
+            key.encode(buf);
+            value.encode(buf);
+        }
+    }
+}
+
+impl<K: CodecType + std::hash::Hash + Eq + Ord> CodecType for HashSet<K> {
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        let (size, mut bytes) = u32::decode(bytes)?;
+        let mut set = HashSet::new();
+        for _ in 0..size {
+            let (key, rest) = K::decode(bytes)?;
+            set.insert(key);
+            bytes = rest;
+        }
+        Ok((set, bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        (self.len() as u32).encode(buf);
+        for key in self.iter() {
+            key.encode(buf);
         }
     }
 }
@@ -308,6 +386,27 @@ where
         self.1.encode(buf)
     }
 }
+
+/*******************************************************************************************
+                                    CODEC FOR CHRONO TYPES
+*******************************************************************************************/
+impl CodecType for chrono::DateTime<Utc> {
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        let (secs, bytes) = i64::decode(bytes)?;
+        let (nsecs, bytes) = u32::decode(bytes)?;
+        let dt = Utc
+            .timestamp_opt(secs, nsecs)
+            .earliest()
+            .unwrap_or_default();
+        Ok((dt, bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        self.timestamp().encode(buf);
+        self.timestamp_subsec_nanos().encode(buf);
+    }
+}
+
 /*******************************************************************************************
                                     CODEC FOR 16 BYTE IDs
 *******************************************************************************************/

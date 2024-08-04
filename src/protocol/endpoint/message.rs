@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use crate::{
     impl_codec,
-    protocol::{codec::CodecType, interest::Subject, topic::TopicCode},
+    protocol::{
+        codec::CodecType,
+        interest::Subject,
+        topic::{durable_message::MessageDurabilityConfig, TopicCode},
+    },
 };
 use bytes::{BufMut, Bytes};
 
@@ -133,6 +137,7 @@ pub struct MessageHeader {
     pub holder_node: NodeId,
     pub ack_kind: Option<MessageAckExpectKind>,
     pub target_kind: MessageTargetKind,
+    pub durability: Option<MessageDurabilityConfig>,
     pub subjects: Arc<[Subject]>,
     pub topic: TopicCode,
 }
@@ -143,6 +148,7 @@ impl_codec! {
         holder_node: NodeId,
         ack_kind: Option<MessageAckExpectKind>,
         target_kind: MessageTargetKind,
+        durability:  Option<MessageDurabilityConfig>,
         subjects: Arc<[Subject]>,
         topic: TopicCode,
     }
