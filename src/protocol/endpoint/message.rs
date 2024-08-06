@@ -5,7 +5,7 @@ use crate::{
     protocol::{
         codec::CodecType,
         interest::Subject,
-        topic::{durable_message::MessageDurabilityConfig, TopicCode},
+        topic::{durable_message::MessageDurabilityConfig, hold_message::HoldMessage, TopicCode},
     },
 };
 use bytes::{BufMut, Bytes};
@@ -57,7 +57,7 @@ impl MessageAckKind {
         self.is_failed() || self.is_reached(condition)
     }
 }
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 
 pub struct MessageId {
     pub bytes: [u8; 16],
@@ -129,6 +129,12 @@ impl Message {
     }
     pub fn ack_kind(&self) -> Option<MessageAckExpectKind> {
         self.header.ack_kind
+    }
+    pub fn as_hold(&self) -> HoldMessage {
+        HoldMessage {
+            header: self.header.clone(),
+            wait_ack: None,
+        }
     }
 }
 #[derive(Debug, Clone)]

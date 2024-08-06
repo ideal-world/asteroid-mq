@@ -43,6 +43,7 @@ impl WaitAckError {
 #[derive(Debug)]
 pub enum WaitAckErrorException {
     MessageDropped,
+    Overflow,
 }
 
 pub enum AckWaitErrorKind {

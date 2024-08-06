@@ -95,17 +95,17 @@ impl LocalEndpoint {
     }
     pub fn ack_processed(&self, message: &Message) {
         if let Some(topic) = self.topic() {
-            topic.ack_to_message(message.ack_processed(self.topic_code.clone(), self.address))
+            topic.handle_ack(message.ack_processed(self.topic_code.clone(), self.address))
         }
     }
     pub fn ack_received(&self, message: &Message) {
         if let Some(topic) = self.topic() {
-            topic.ack_to_message(message.ack_received(self.topic_code.clone(), self.address))
+            topic.handle_ack(message.ack_received(self.topic_code.clone(), self.address))
         }
     }
     pub fn ack_failed(&self, message: &Message) {
         if let Some(topic) = self.topic() {
-            topic.ack_to_message(message.ack_failed(self.topic_code.clone(), self.address))
+            topic.handle_ack(message.ack_failed(self.topic_code.clone(), self.address))
         }
     }
     pub fn push_message(&self, message: Message) {

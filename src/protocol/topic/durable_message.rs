@@ -31,23 +31,21 @@ impl_codec!(
         max_receiver: Option<u32>,
     }
 );
-#[derive(Debug, Clone)]
-pub struct TopicDurabilityConfig {}
+
 pub struct DurabilityError {
     pub context: Cow<'static, str>,
     pub source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
-
+#[derive(Clone)]
 pub struct DurabilityService {
     provider: Cow<'static, str>,
-    inner: Box<dyn sealed::DurabilityObjectTrait>,
+    inner: Arc<dyn sealed::DurabilityObjectTrait>,
 }
 
 impl std::fmt::Debug for DurabilityService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DurabilityObject")
             .field("provider", &self.provider)
-            .field("config", self.inner.get_config())
             .finish()
     }
 }
@@ -58,7 +56,7 @@ impl DurabilityService {
     {
         Self {
             provider: std::any::type_name::<T>().into(),
-            inner: Box::new(inner),
+            inner: Arc::new(inner),
         }
     }
     #[inline(always)]
@@ -96,7 +94,6 @@ impl DurabilityService {
 }
 
 pub trait Durability: Send + Sync + 'static {
-    fn get_config(&self) -> &TopicDurabilityConfig;
     fn save(
         &self,
         message: DurableMessage,
@@ -132,10 +129,9 @@ mod sealed {
 
     use crate::protocol::endpoint::{EndpointAddr, MessageAckKind, MessageId};
 
-    use super::{Durability, DurabilityError, DurableMessage, TopicDurabilityConfig};
+    use super::{Durability, DurabilityError, DurableMessage};
 
     pub(super) trait DurabilityObjectTrait: Send + Sync + 'static {
-        fn get_config(&self) -> &TopicDurabilityConfig;
         fn save(
             &self,
             message: DurableMessage,
@@ -166,12 +162,8 @@ mod sealed {
 
     impl<T> DurabilityObjectTrait for T
     where
-        T: Durability ,
+        T: Durability,
     {
-        #[inline(always)]
-        fn get_config(&self) -> &TopicDurabilityConfig {
-            self.get_config()
-        }
         #[inline(always)]
 
         fn save(

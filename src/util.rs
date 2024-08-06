@@ -1,5 +1,7 @@
 use std::fmt::Write;
 
+use chrono::{DateTime, Utc};
+
 pub fn timestamp_sec() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -59,5 +61,45 @@ where
             }
         }
         Ok(())
+    }
+}
+#[derive(Debug)]
+pub struct Timed<T> {
+    pub time: DateTime<Utc>,
+    pub data: T,
+}
+
+impl<T> Timed<T> {
+    pub fn new(time: DateTime<Utc>, data: T) -> Self {
+        Self { time, data }
+    }
+    pub fn new_by_now(data: T) -> Self {
+        Self {
+            time: Utc::now(),
+            data,
+        }
+    }
+}
+
+impl<T: PartialEq> PartialEq for Timed<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.time == other.time && self.data == other.data
+    }
+}
+
+impl<T: Eq> Eq for Timed<T> {}
+
+impl<T: PartialEq> PartialOrd for Timed<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        if self.data != other.data {
+            return None;
+        } else {
+            self.time.partial_cmp(&other.time)
+        }
+    }
+}
+impl<T: Eq> Ord for Timed<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.time.cmp(&other.time)
     }
 }

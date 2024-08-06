@@ -3,28 +3,28 @@
 //!
 //!
 
-pub mod hold_message;
-pub mod wait_ack;
 pub mod config;
 pub mod durable_message;
+pub mod hold_message;
+pub mod wait_ack;
 
 use std::{
     borrow::Borrow,
-    collections::{HashMap, HashSet},
+    collections::{BinaryHeap, HashMap, HashSet, VecDeque},
     hash::Hash,
     ops::Deref,
-    sync::{Arc, Weak},
+    sync::{Arc, RwLock, Weak},
 };
 
 use bytes::Bytes;
+use config::TopicConfig;
 use crossbeam::sync::ShardedLock;
 use durable_message::DurabilityService;
-use hold_message::HoldMessage;
+use hold_message::{HoldMessage, MemoryMessageQueue};
 use tracing::instrument;
-use wait_ack::{WaitAck, WaitAckHandle};
+use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException, WaitAckHandle};
 
 use crate::{
-    impl_codec,
     protocol::endpoint::{CastMessage, LocalEndpointInner},
     TimestampSec,
 };
@@ -38,7 +38,7 @@ use super::{
     interest::{Interest, InterestMap, Subject},
     node::{
         event::{N2nEvent, N2nEventKind, N2nPacket},
-        Node, NodeId, NodeRef,
+        Node, NodeId,
     },
 };
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -101,7 +101,7 @@ impl Topic {
         }
     }
     pub fn code(&self) -> &TopicCode {
-        &self.inner.topic_code
+        &self.inner.config.code
     }
     pub(crate) fn get_ep_sync(&self) -> Vec<EpInfo> {
         let ep_interest_map = self.ep_interest_map.read().unwrap();
@@ -203,7 +203,7 @@ impl Topic {
     }
     pub fn create_endpoint(&self, interests: impl IntoIterator<Item = Interest>) -> LocalEndpoint {
         let channel = flume::unbounded();
-        let topic_code = self.topic_code.clone();
+        let topic_code = self.code().clone();
         let ep = LocalEndpoint {
             inner: Arc::new(LocalEndpointInner {
                 attached_node: self.node.node_ref(),
@@ -273,7 +273,7 @@ impl Topic {
         let ep_offline = EndpointOffline {
             endpoint: addr,
             host: self.node.id(),
-            topic_code: self.topic_code.clone(),
+            topic_code: self.code().clone(),
         };
         let payload = ep_offline.encode_to_bytes();
         for peer in self.node.known_peer_cluster() {
@@ -287,18 +287,62 @@ impl Topic {
         }
     }
 
-    #[instrument(skip(self, message), fields(node_id=?self.node.id(), topic_code=?self.topic_code))]
+    #[instrument(skip(self, message), fields(node_id=?self.node.id(), topic_code=?self.config))]
     pub(crate) async fn hold_new_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
         let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
         let (result_report, result_recv) = flume::bounded(1);
-        tracing::debug!(?ep_collect, "hold new message");
-        match &message.header.target_kind {
-            crate::protocol::endpoint::MessageTargetKind::Durable => todo!(),
-            crate::protocol::endpoint::MessageTargetKind::Online => {
-                if let Some(ack_kind) = message.ack_kind() {
-                    let wait_ack = WaitAck::new(ack_kind, ep_collect.clone(), result_report);
-                    self.hold_message(message.clone(), Some(wait_ack));
+        let mut hold_message = message.as_hold();
+
+        if let Some(ack_kind) = message.ack_kind() {
+            hold_message.wait_ack.replace(WaitAck::new(
+                ack_kind,
+                ep_collect.clone(),
+                result_report.clone(),
+            ));
+        };
+
+        // put in queue
+        if let Some(overflow_config) = &self.config.overflow {
+            let size = u32::from(overflow_config.size) as usize;
+            let waiting_size = self.queue.read().unwrap().len();
+            if waiting_size >= size {
+                match overflow_config.policy {
+                    config::OverflowPolicy::RejectNew => {
+                        result_report
+                            .send(Err(WaitAckError::exception(
+                                WaitAckErrorException::Overflow,
+                            )))
+                            .expect("channel just created");
+                        return Ok(message.create_wait_handle(result_recv));
+                    }
+                    config::OverflowPolicy::DropOld => {
+                        let old = {
+                            let mut wg = self.queue.write().unwrap();
+                            let old = wg.pop().expect("queue at least one element");
+                            wg.push(hold_message);
+                            old
+                        };
+                        if let Some(wait) = old.wait_ack {
+                            let _ = wait.reporter.send(Err(WaitAckError::exception(
+                                WaitAckErrorException::Overflow,
+                            )));
+                        }
+                    }
                 }
+            } else {
+                self.queue.write().unwrap().push(hold_message)
+            }
+        } else {
+            self.queue.write().unwrap().push(hold_message)
+        }
+        tracing::debug!(?ep_collect, "hold new message");
+
+        // save message
+        match &message.header.target_kind {
+            crate::protocol::endpoint::MessageTargetKind::Durable => {
+                todo!()
+            }
+            crate::protocol::endpoint::MessageTargetKind::Online => {
                 let map = self.resolve_node_ep_map(ep_collect.into_iter());
                 tracing::debug!(?map, "resolve node ep map");
                 for (node, eps) in map {
@@ -333,10 +377,6 @@ impl Topic {
                 for ep in &ep_collect {
                     // prefer local endpoint
                     if self.push_message_to_local_ep(ep, message.clone()).is_ok() {
-                        let wait_ack = message
-                            .ack_kind()
-                            .map(|ack_kind| WaitAck::new(ack_kind, ep_collect, result_report));
-                        self.hold_message(message.clone(), wait_ack);
                         return Ok(message.create_wait_handle(result_recv));
                     }
                 }
@@ -355,10 +395,6 @@ impl Topic {
                                 .send_packet(N2nPacket::event(message_event), next_jump)
                             {
                                 Ok(_) => {
-                                    let wait_ack = message.ack_kind().map(|ack_kind| {
-                                        WaitAck::new(ack_kind, ep_collect, result_report)
-                                    });
-                                    self.hold_message(message.clone(), wait_ack);
                                     return Ok(message.create_wait_handle(result_recv));
                                 }
                                 Err(_) => todo!(),
@@ -389,36 +425,33 @@ impl TopicRef {
 
 #[derive(Debug)]
 pub struct TopicInner {
-    pub(crate) topic_code: TopicCode,
+    pub(crate) config: TopicConfig,
     pub(crate) local_endpoints: ShardedLock<HashMap<EndpointAddr, LocalEndpointRef>>,
     pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
     pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
     pub(crate) ep_latest_active: ShardedLock<HashMap<EndpointAddr, TimestampSec>>,
-    pub(crate) hold_messages: ShardedLock<HashMap<MessageId, HoldMessage>>,
+    pub(crate) queue: RwLock<MemoryMessageQueue>,
     pub(crate) durability_service: Option<DurabilityService>,
 }
 
 impl TopicInner {
-    pub fn new(topic_code: TopicCode) -> Self {
+    pub fn new<C: Into<TopicConfig>>(config: C) -> Self {
+        const DEFAULT_CAPACITY: usize = 128;
+        let config: TopicConfig = config.into();
+        let capacity = if let Some(ref overflow_config) = config.overflow {
+            overflow_config.size()
+        } else {
+            DEFAULT_CAPACITY
+        };
+        let messages = MemoryMessageQueue::new(config.blocking, capacity);
         Self {
-            topic_code,
+            config,
             local_endpoints: Default::default(),
             ep_routing_table: Default::default(),
             ep_interest_map: Default::default(),
             ep_latest_active: Default::default(),
-            hold_messages: Default::default(),
+            queue: RwLock::new(messages),
             durability_service: None,
-        }
-    }
-    pub fn new_with_durability(topic_code: TopicCode, durability_service: DurabilityService) -> Self {
-        Self {
-            topic_code,
-            local_endpoints: Default::default(),
-            ep_routing_table: Default::default(),
-            ep_interest_map: Default::default(),
-            ep_latest_active: Default::default(),
-            hold_messages: Default::default(),
-            durability_service: Some(durability_service),
         }
     }
 }
