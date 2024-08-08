@@ -82,7 +82,7 @@ impl Borrow<str> for TopicCode {
 #[derive(Debug, Clone)]
 pub struct Topic {
     pub node: Node,
-    inner: Arc<TopicInner>,
+    pub(crate) inner: Arc<TopicInner>,
 }
 
 impl Deref for Topic {
@@ -93,15 +93,9 @@ impl Deref for Topic {
     }
 }
 
-impl Topic {
-    pub fn reference(&self) -> TopicRef {
-        TopicRef {
-            node: self.node.clone(),
-            inner: Arc::downgrade(&self.inner),
-        }
-    }
+impl TopicInner {
     pub fn code(&self) -> &TopicCode {
-        &self.inner.config.code
+        &self.config.code
     }
     pub(crate) fn get_ep_sync(&self) -> Vec<EpInfo> {
         let ep_interest_map = self.ep_interest_map.read().unwrap();
@@ -201,6 +195,15 @@ impl Topic {
         }
         resolve_map
     }
+}
+impl Topic {
+    pub fn reference(&self) -> TopicRef {
+        TopicRef {
+            node: self.node.clone(),
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
     pub fn create_endpoint(&self, interests: impl IntoIterator<Item = Interest>) -> LocalEndpoint {
         let channel = flume::unbounded();
         let topic_code = self.code().clone();
@@ -457,8 +460,13 @@ impl TopicInner {
 }
 
 impl Node {
-    pub fn add_topic(&self, topic_code: TopicCode, topic: Topic) {
-        self.topics.write().unwrap().insert(topic_code, topic);
+    pub fn initialize_topic<C: Into<TopicConfig>>(&self, config: C) -> Topic {
+        let topic = Arc::new(TopicInner::new(config));
+        self.topics
+            .write()
+            .unwrap()
+            .insert(topic.config.code.clone(), topic.clone());
+        self.wrap_topic(topic)
     }
     pub fn remove_topic<Q>(&self, code: &Q)
     where
@@ -467,23 +475,34 @@ impl Node {
     {
         self.topics.write().unwrap().remove(code);
     }
+    pub(crate) fn wrap_topic(&self, topic_inner: Arc<TopicInner>) -> Topic {
+        Topic {
+            node: self.clone(),
+            inner: topic_inner.clone(),
+        }
+    }
     pub fn get_topic<Q>(&self, code: &Q) -> Option<Topic>
     where
         TopicCode: Borrow<Q>,
         Q: Hash + Eq,
     {
-        self.topics.read().unwrap().get(code).cloned()
+        self.topics
+            .read()
+            .unwrap()
+            .get(code)
+            .map(|t| self.wrap_topic(t.clone()))
     }
     pub fn get_or_init_topic(&self, code: TopicCode) -> Topic {
         let topic = self.topics.read().unwrap().get(&code).cloned();
         match topic {
-            Some(topic) => topic,
+            Some(topic) => self.wrap_topic(topic),
             None => {
+                let inner = Arc::new(TopicInner::new(code.clone()));
                 let topic = Topic {
                     node: self.clone(),
-                    inner: Arc::new(TopicInner::new(code.clone())),
+                    inner: inner.clone(),
                 };
-                self.topics.write().unwrap().insert(code, topic.clone());
+                self.topics.write().unwrap().insert(code, inner);
                 topic
             }
         }

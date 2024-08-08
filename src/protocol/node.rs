@@ -103,7 +103,7 @@ pub struct NodeInner {
     // pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
     // pub(crate) ep_latest_active: ShardedLock<HashMap<EndpointAddr, TimestampSec>>,
     // pub(crate) hold_messages: ShardedLock<HashMap<MessageId, HoldMessage>>,
-    pub(crate) topics: ShardedLock<HashMap<TopicCode, Topic>>,
+    pub(crate) topics: ShardedLock<HashMap<TopicCode, Arc<TopicInner>>>,
     // nn layer
     n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
     connections: ShardedLock<HashMap<NodeId, Arc<N2NConnectionInstance>>>,
@@ -448,4 +448,3 @@ pub struct Connection {
     pub attached_node: sync::Weak<NodeInner>,
     pub peer_info: NodeInfo,
 }
-

@@ -30,6 +30,10 @@ pub struct TopicConfig {
     pub durability: Option<DurabilityService>,
 }
 
+
+
+
+
 impl From<TopicCode> for TopicConfig {
     fn from(code: TopicCode) -> Self {
         Self {

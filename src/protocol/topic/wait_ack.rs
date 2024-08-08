@@ -17,7 +17,7 @@ pub struct WaitAck {
     pub status: ShardedLock<HashMap<EndpointAddr, MessageAckKind>>,
     pub timeout: Option<Instant>,
     pub ep_list: HashSet<EndpointAddr>,
-    pub reporter: flume::Sender<Result<(), WaitAckError>>,
+    pub reporter: flume::Sender<Result<WaitAckSuccess, WaitAckError>>,
 }
 
 #[derive(Debug)]
@@ -28,7 +28,10 @@ pub struct WaitAckError {
     pub timeout_list: Vec<EndpointAddr>,
     pub exception: Option<WaitAckErrorException>,
 }
-
+#[derive(Debug)]
+pub struct WaitAckSuccess {
+    pub ep_list: Vec<EndpointAddr>,
+}
 impl WaitAckError {
     pub fn exception(exception: WaitAckErrorException) -> Self {
         Self {
@@ -55,7 +58,7 @@ impl WaitAck {
     pub fn new(
         expect: MessageAckExpectKind,
         ep_list: HashSet<EndpointAddr>,
-        reporter: flume::Sender<Result<(), WaitAckError>>,
+        reporter: flume::Sender<Result<WaitAckSuccess, WaitAckError>>,
     ) -> Self {
         Self {
             status: Default::default(),
@@ -71,7 +74,7 @@ pin_project_lite::pin_project! {
     pub struct WaitAckHandle {
         pub(crate) message_id: MessageId,
         #[pin]
-        pub(crate) result: flume::r#async::RecvFut<'static, Result<(), WaitAckError>>,
+        pub(crate) result: flume::r#async::RecvFut<'static, Result<WaitAckSuccess, WaitAckError>>,
     }
 
 }
@@ -85,7 +88,7 @@ impl WaitAckHandle {
 impl Message {
     pub(crate) fn create_wait_handle(
         &self,
-        recv: flume::Receiver<Result<(), WaitAckError>>,
+        recv: flume::Receiver<Result<WaitAckSuccess, WaitAckError>>,
     ) -> WaitAckHandle {
         WaitAckHandle {
             message_id: self.id(),
@@ -95,7 +98,7 @@ impl Message {
 }
 
 impl Future for WaitAckHandle {
-    type Output = Result<(), WaitAckError>;
+    type Output = Result<WaitAckSuccess, WaitAckError>;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         let this = self.project();

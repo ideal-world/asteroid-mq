@@ -16,7 +16,12 @@
 //!	消息6阻塞,等待消息5消费
 //!
 
-use std::{net::SocketAddr, str::FromStr, time::Duration};
+use std::{
+    net::SocketAddr,
+    num::{NonZeroU32, NonZeroUsize},
+    str::FromStr,
+    time::Duration,
+};
 
 use bytes::Bytes;
 
@@ -24,7 +29,10 @@ use asteroid_mq::protocol::{
     endpoint::{Message, MessageAckExpectKind, MessageHeader, MessageId, MessageTargetKind},
     interest::{Interest, Subject},
     node::{connection::tokio_tcp::TokioTcp, Node},
-    topic::TopicCode,
+    topic::{
+        config::{OverflowPolicy, TopicConfig, TopicOverflowConfig},
+        TopicCode,
+    },
 };
 
 #[tokio::test]
@@ -37,8 +45,20 @@ async fn test_nodes() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:10080")
         .await
         .unwrap();
+    fn topic_config() -> TopicConfig {
+        TopicConfig {
+            code: TopicCode::const_new("events"),
+            blocking: true,
+            overflow: Some(TopicOverflowConfig {
+                policy: OverflowPolicy::RejectNew,
+                size: NonZeroU32::new(500).unwrap(),
+            }),
+            durability: None,
+        }
+    }
+
     tokio::spawn(async move {
-        let event_topic = node_server.get_or_init_topic(TopicCode::const_new("events"));
+        let event_topic = node_server.initialize_topic(topic_config());
         let node_server_user = event_topic.create_endpoint(vec![Interest::new("events/**")]);
 
         {
@@ -68,10 +88,9 @@ async fn test_nodes() {
         .connect(SocketAddr::from_str("127.0.0.1:10080").unwrap())
         .await
         .unwrap();
-    let event_topic = node_client.get_or_init_topic(TopicCode::const_new("events"));
+    let event_topic = node_client.initialize_topic(topic_config());
 
-    let node_client_sender =
-        event_topic.create_endpoint(vec![Interest::new("cicd/log/task/asudhuiahsdu392")]);
+    let node_client_sender = event_topic.create_endpoint(vec![Interest::new("events/hello-world")]);
     node_client
         .create_connection(TokioTcp::new(stream_client))
         .await
@@ -86,21 +105,28 @@ async fn test_nodes() {
     });
     let ep = event_topic.create_endpoint(None);
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let ack_handle = ep
-        .send_message(Message {
-            header: MessageHeader {
-                message_id: MessageId::new_snowflake(),
-                holder_node: node_client.id(),
-                ack_kind: Some(MessageAckExpectKind::Processed),
-                target_kind: MessageTargetKind::Online,
-                subjects: vec![Subject::new("cicd/log/task/asudhuiahsdu392")].into(),
-                topic: event_topic.code().clone(),
-                durability: None,
-            },
-            payload: Bytes::from_static(b"Hello every one!"),
-        })
-        .await
-        .unwrap();
-    ack_handle.await.unwrap();
-    tracing::info!("recv all ack")
+    let mut handles = vec![];
+    for no in 0..100 {
+        let message = format!("Message No.{no}");
+        let ack_handle = ep
+            .send_message(Message {
+                header: MessageHeader {
+                    message_id: MessageId::new_snowflake(),
+                    holder_node: node_client.id(),
+                    ack_kind: Some(MessageAckExpectKind::Processed),
+                    target_kind: MessageTargetKind::Online,
+                    subjects: vec![Subject::new("events/hello-world")].into(),
+                    topic: event_topic.code().clone(),
+                    durability: None,
+                },
+                payload: message.into(),
+            })
+            .await
+            .unwrap();
+        handles.push(ack_handle);
+    }
+    for ack_handle in handles {
+        let success = ack_handle.await.unwrap();
+        tracing::info!("recv all ack: {success:?}")
+    }
 }

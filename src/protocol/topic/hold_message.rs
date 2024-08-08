@@ -10,7 +10,7 @@ use crate::{
     protocol::{
         endpoint::{EndpointAddr, Message, MessageAck, MessageAckKind, MessageHeader, MessageId},
         node::event::N2nPacket,
-        topic::wait_ack,
+        topic::wait_ack::{self, WaitAckSuccess},
     },
     util::Timed,
 };
@@ -25,8 +25,10 @@ pub struct HoldMessage {
     pub wait_ack: Option<WaitAck>,
 }
 
+
 impl HoldMessage {
     pub fn resolve(mut self) {
+        tracing::trace!("resolved: {self:?}");
         if let Some(ref mut wait_ack) = self.wait_ack {
             let status: Vec<(EndpointAddr, MessageAckKind)> = wait_ack
                 .status
@@ -49,7 +51,9 @@ impl HoldMessage {
                 }
             }
             if fail_list.is_empty() && unreachable_list.is_empty() {
-                let _ = wait_ack.reporter.send(Ok(()));
+                let _ = wait_ack.reporter.send(Ok(WaitAckSuccess {
+                    ep_list: wait_ack.ep_list.iter().cloned().collect(),
+                }));
             } else {
                 let _ = wait_ack.reporter.send(Err(WaitAckError {
                     ep_list: wait_ack.ep_list.iter().cloned().collect(),
@@ -64,7 +68,6 @@ impl HoldMessage {
         }
     }
 }
-
 
 #[derive(Debug)]
 pub struct MemoryMessageQueue {
@@ -103,6 +106,7 @@ impl MemoryMessageQueue {
     pub fn pop(&mut self) -> Option<HoldMessage> {
         if let Some(timed) = self.time_id.pop_first() {
             self.id_time.remove(&timed.data);
+            self.resolved.write().unwrap().remove(&timed.data);
             self.size -= 1;
             self.hold_messages.remove(&timed.data)
         } else {
@@ -126,6 +130,7 @@ impl MemoryMessageQueue {
         }
     }
     pub fn set_ack(&self, ack: &MessageAck) {
+        tracing::trace!("set ack: {ack:?}");
         if let Some(hm) = self.hold_messages.get(&ack.ack_to) {
             if let Some(wait_ack) = &hm.wait_ack {
                 let mut wg = wait_ack.status.write().unwrap();
@@ -148,11 +153,13 @@ impl MemoryMessageQueue {
         let message = self.hold_messages.get(&id)?;
         if let Some(wait_ack) = &message.wait_ack {
             let rg = wait_ack.status.read().unwrap();
-            if rg.values().all(|ack| ack.is_resolved(wait_ack.expect)) {
+            if wait_ack.ep_list.len() == rg.len()
+                && rg.values().all(|ack| ack.is_resolved(wait_ack.expect))
+            {
                 if self.blocking
                     && self
                         .time_id
-                        .last()
+                        .first()
                         .map(|timed| timed.data != id)
                         .unwrap_or(false)
                 {
@@ -164,7 +171,7 @@ impl MemoryMessageQueue {
                 Some(Poll::Pending)
             }
         } else {
-            Some(Poll::Ready(()))
+            None
         }
     }
     pub fn is_empty(&self) -> bool {
@@ -180,14 +187,16 @@ impl MemoryMessageQueue {
         swap_out
     }
     pub fn blocking_pop(&mut self) -> Option<HoldMessage> {
-        while let Some(next) = self.get_front() {
-            if let Some(Poll::Ready(_)) = self.poll_message(next.header.message_id) {
-                return self.pop();
-            }
+        let next = self.get_front()?;
+        let poll = self.poll_message(next.header.message_id)?;
+        if poll.is_ready() {
+            self.pop()
+        } else {
+            None
         }
-        None
     }
     pub fn flush(&mut self) {
+        tracing::trace!(blocking = self.blocking, "flushing");
         if self.blocking {
             while let Some(m) = self.blocking_pop() {
                 m.resolve();
@@ -204,8 +213,14 @@ impl MemoryMessageQueue {
 
 impl Topic {
     pub(crate) fn local_ack(&self, ack: MessageAck) {
-        self.queue.read().unwrap().set_ack(&ack);
-        self.queue.write().unwrap().flush();
+        let poll_result = {
+            let rg = self.queue.read().unwrap();
+            rg.set_ack(&ack);
+            rg.poll_message(ack.ack_to)
+        };
+        if let Some(Poll::Ready(())) = poll_result {
+            self.queue.write().unwrap().flush();
+        }
     }
     pub(crate) fn handle_ack(&self, ack: MessageAck) {
         if self.node.is(ack.holder) {
