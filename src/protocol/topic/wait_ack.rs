@@ -6,8 +6,6 @@ use std::{
     time::Instant,
 };
 
-use crossbeam::sync::ShardedLock;
-
 use crate::protocol::endpoint::{
     EndpointAddr, Message, MessageAckExpectKind, MessageId, MessageStatusKind,
 };
@@ -17,29 +15,22 @@ pub struct WaitAck {
     pub expect: MessageAckExpectKind,
     pub status: RwLock<HashMap<EndpointAddr, MessageStatusKind>>,
     pub timeout: Option<Instant>,
-    pub ep_list: HashSet<EndpointAddr>,
     pub reporter: flume::Sender<Result<WaitAckSuccess, WaitAckError>>,
 }
 
 #[derive(Debug)]
 pub struct WaitAckError {
-    pub ep_list: Vec<EndpointAddr>,
-    pub failed_list: Vec<EndpointAddr>,
-    pub unreachable_list: Vec<EndpointAddr>,
-    pub timeout_list: Vec<EndpointAddr>,
+    pub status: HashMap<EndpointAddr, MessageStatusKind>,
     pub exception: Option<WaitAckErrorException>,
 }
 #[derive(Debug)]
 pub struct WaitAckSuccess {
-    pub ep_list: Vec<EndpointAddr>,
+    pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
 impl WaitAckError {
     pub fn exception(exception: WaitAckErrorException) -> Self {
         Self {
-            ep_list: Vec::new(),
-            failed_list: Vec::new(),
-            unreachable_list: Vec::new(),
-            timeout_list: Vec::new(),
+            status: HashMap::new(),
             exception: Some(exception),
         }
     }
@@ -62,12 +53,11 @@ impl WaitAck {
         reporter: flume::Sender<Result<WaitAckSuccess, WaitAckError>>,
     ) -> Self {
         let status = HashMap::<EndpointAddr, MessageStatusKind>::from_iter(
-            ep_list.iter().map(|ep| (*ep, MessageStatusKind::Unsent)),
+            ep_list.into_iter().map(|ep| (ep, MessageStatusKind::Unsent)),
         );
         Self {
             status: status.into(),
             timeout: None,
-            ep_list,
             expect,
             reporter,
         }

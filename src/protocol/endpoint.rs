@@ -82,12 +82,12 @@ impl LocalEndpoint {
             inner: Arc::downgrade(&self.inner),
         }
     }
-    pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
+    pub fn send_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
         if let Some(topic) = self.topic() {
             if topic.node.is_edge() {
                 todo!("send to edge")
             } else {
-                topic.hold_new_message(message).await
+                Ok(topic.hold_new_message(message))
             }
         } else {
             Err(())

@@ -157,27 +157,37 @@ impl N2nPacket {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum N2NPayloadKind {
-    Auth = 0,
-    Event = 1,
-    Unreachable = 2,
-    Unknown = 255,
+    Auth = 0x00,
+    Event = 0x01,
+    Heartbeat = 0x02,
+    RequestVote = 0x10,
+    Vote = 0x11,
+    Unreachable = 0x80,
+    Unknown = 0xf0,
 }
 
 impl_codec!(
     enum N2NPayloadKind {
-        Auth = 0,
-        Event = 1,
-        Unreachable = 2,
-        Unknown = 255,
+        Auth = 0x00,
+        Event = 0x01,
+        Heartbeat = 0x02,
+        RequestVote = 0x10,
+        Vote = 0x11,
+        Unreachable = 0x80,
+        Unknown = 0xf0,
     }
 );
 
 impl From<u8> for N2NPayloadKind {
     fn from(value: u8) -> Self {
         match value {
-            0 => N2NPayloadKind::Auth,
-            1 => N2NPayloadKind::Event,
-            2 => N2NPayloadKind::Unreachable,
+            0x00 => N2NPayloadKind::Auth,
+            0x01 => N2NPayloadKind::Event,
+            0x02 => N2NPayloadKind::Heartbeat,
+            0x10 => N2NPayloadKind::RequestVote,
+            0x11 => N2NPayloadKind::Vote,
+            0x80 => N2NPayloadKind::Unreachable,
+            
             _ => N2NPayloadKind::Unknown,
         }
     }

@@ -1,11 +1,13 @@
 pub mod connection;
 pub mod event;
+pub mod raft;
+
 // pub mod hold_message;
 // pub mod wait_ack;
 use std::{
     collections::HashMap,
     ops::Deref,
-    sync::{self, Arc},
+    sync::{self, Arc, RwLock},
 };
 
 use super::{
@@ -16,8 +18,9 @@ use connection::{
     ConnectionConfig, N2NConnection, N2NConnectionError, N2NConnectionErrorKind,
     N2NConnectionInstance, N2NConnectionRef,
 };
-use crossbeam::sync::ShardedLock;
+use crossbeam::{epoch::Atomic, sync::ShardedLock};
 use event::{N2NAuth, N2NUnreachableEvent, N2nEvent, N2nEventKind, N2nPacket, NodeKind, NodeTrace};
+use raft::{RaftRole, RaftState, RaftTerm};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -73,7 +76,7 @@ impl Default for NodeId {
         Self::snowflake()
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone,)]
 pub struct NodeInfo {
     pub id: NodeId,
     pub kind: NodeKind,
@@ -97,14 +100,8 @@ impl Default for NodeInfo {
 #[derive(Debug)]
 pub struct NodeInner {
     info: NodeInfo,
-    // pub(crate) local_endpoints: ShardedLock<HashMap<EndpointAddr, LocalEndpointRef>>,
-    // ne layer
-    // pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
-    // pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
-    // pub(crate) ep_latest_active: ShardedLock<HashMap<EndpointAddr, TimestampSec>>,
-    // pub(crate) hold_messages: ShardedLock<HashMap<MessageId, HoldMessage>>,
+    raft_state: RwLock<RaftState>,
     pub(crate) topics: ShardedLock<HashMap<TopicCode, Arc<TopicInner>>>,
-    // nn layer
     n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
     connections: ShardedLock<HashMap<NodeId, Arc<N2NConnectionInstance>>>,
     auth: N2NAuth,
@@ -142,6 +139,11 @@ impl Default for Node {
                 n2n_routing_table: ShardedLock::new(HashMap::new()),
                 connections: ShardedLock::new(HashMap::new()),
                 auth: N2NAuth::default(),
+                raft_state: RwLock::new(RaftState {
+                    term: Default::default(),
+                    role: RaftRole::Follower,
+                    leader: None,
+                }),
             }),
         }
     }
@@ -248,9 +250,10 @@ impl Node {
                 let Ok((evt, _)) = DelegateMessage::decode(message_evt.payload) else {
                     return;
                 };
-                self.get_or_init_topic(evt.message.topic().clone())
-                    .hold_new_message(evt.message)
-                    .await;
+                let handle = self
+                    .get_or_init_topic(evt.message.topic().clone())
+                    .hold_new_message(evt.message);
+                // TODO: handle delegate message
             }
             event::N2nEventKind::CastMessage => {
                 let Ok((evt, _)) = CastMessage::decode(message_evt.payload).inspect_err(|e| {
@@ -264,8 +267,13 @@ impl Node {
                     eps = evt.target_eps
                 );
                 for ep in &evt.target_eps {
-                    self.get_or_init_topic(evt.message.topic().clone())
+                    let result = self
+                        .get_or_init_topic(evt.message.topic().clone())
                         .push_message_to_local_ep(ep, evt.message.clone());
+                    if result.is_err() {
+                        // TODO: handle error
+
+                    }
                 }
             }
             event::N2nEventKind::Ack => {

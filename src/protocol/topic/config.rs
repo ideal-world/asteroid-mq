@@ -26,8 +26,8 @@ impl TopicOverflowConfig {
 pub struct TopicConfig {
     pub code: TopicCode,
     pub blocking: bool,
-    pub overflow: Option<TopicOverflowConfig>,
-    pub durability: Option<DurabilityService>,
+    pub overflow_config: Option<TopicOverflowConfig>,
+    pub durability_service: Option<DurabilityService>,
 }
 
 
@@ -39,8 +39,8 @@ impl From<TopicCode> for TopicConfig {
         Self {
             code,
             blocking: false,
-            overflow: None,
-            durability: None,
+            overflow_config: None,
+            durability_service: None,
         }
     }
 }

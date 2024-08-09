@@ -2,8 +2,8 @@
 //!   - 1.1. 事件中心接口
 //!   - 1.2. bios实现
 //! 2. 主题系统 4
-//!   - 2.1. 主题的数据流是否阻塞
-//! 3. 主题，消息持久化 3
+//!   - 2.1. 主题的数据流是否阻塞 DONE
+//! 3. 主题，消息持久化 3 DONE
 //! 4. AVATAR功能 2
 //! 5. 集群化 1
 //! 6. RUST SDK 1
@@ -49,16 +49,16 @@ async fn test_nodes() {
         TopicConfig {
             code: TopicCode::const_new("events"),
             blocking: false,
-            overflow: Some(TopicOverflowConfig {
+            overflow_config: Some(TopicOverflowConfig {
                 policy: OverflowPolicy::RejectNew,
                 size: NonZeroU32::new(500).unwrap(),
             }),
-            durability: None,
+            durability_service: None,
         }
     }
 
     tokio::spawn(async move {
-        let event_topic = node_server.initialize_topic(topic_config());
+        let event_topic = node_server.initialize_topic(topic_config()).await.unwrap();
         let node_server_user = event_topic.create_endpoint(vec![Interest::new("events/**")]);
 
         {
@@ -88,7 +88,7 @@ async fn test_nodes() {
         .connect(SocketAddr::from_str("127.0.0.1:10080").unwrap())
         .await
         .unwrap();
-    let event_topic = node_client.initialize_topic(topic_config());
+    let event_topic = node_client.initialize_topic(topic_config()).await.unwrap();
 
     let node_client_sender = event_topic.create_endpoint(vec![Interest::new("events/hello-world")]);
     node_client
@@ -121,7 +121,6 @@ async fn test_nodes() {
                 },
                 payload: message.into(),
             })
-            .await
             .unwrap();
         handles.push(ack_handle);
     }

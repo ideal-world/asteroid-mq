@@ -4,17 +4,31 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     impl_codec,
-    protocol::endpoint::{EndpointAddr, Message, MessageStatusKind, MessageId},
+    protocol::endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind},
 };
 
 pub struct DurableMessage {
     pub message: Message,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
+    pub time: DateTime<Utc>,
 }
 
-pub struct ArchiveMessage {
-    pub message: Message,
-    pub status: HashMap<EndpointAddr, MessageStatusKind>,
+#[derive(Debug, Clone)]
+pub struct DurableMessageQuery {
+    limit: u32,
+    offset: u32,
+}
+
+impl DurableMessageQuery {
+    pub fn new(limit: u32, offset: u32) -> Self {
+        Self { limit, offset }
+    }
+    pub fn next_page(&self) -> Self {
+        Self {
+            limit: self.limit,
+            offset: self.offset + self.limit,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -31,11 +45,12 @@ impl_codec!(
         max_receiver: Option<u32>,
     }
 );
-
+#[derive(Debug)]
 pub struct DurabilityError {
     pub context: Cow<'static, str>,
     pub source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
+
 #[derive(Clone)]
 pub struct DurabilityService {
     provider: Cow<'static, str>,
@@ -63,19 +78,7 @@ impl DurabilityService {
     pub async fn save(&self, message: DurableMessage) -> Result<(), DurabilityError> {
         self.inner.save(message).await
     }
-    #[inline(always)]
-    pub async fn update_status(
-        &self,
-        message_id: MessageId,
-        endpoint: EndpointAddr,
-        status: MessageStatusKind,
-    ) -> Result<(), DurabilityError> {
-        self.inner.update_status(message_id, endpoint, status).await
-    }
-    #[inline(always)]
-    pub async fn remove(&self, message_id: MessageId) -> Result<(), DurabilityError> {
-        self.inner.remove(message_id).await
-    }
+
     #[inline(always)]
     pub async fn retrieve(&self, message_id: MessageId) -> Result<DurableMessage, DurabilityError> {
         self.inner.retrieve(message_id).await
@@ -83,9 +86,9 @@ impl DurabilityService {
     #[inline(always)]
     pub async fn batch_retrieve(
         &self,
-        time_range: RangeToInclusive<DateTime<Utc>>,
+        query: DurableMessageQuery ,
     ) -> Result<Vec<DurableMessage>, DurabilityError> {
-        self.inner.batch_retrieve(time_range).await
+        self.inner.batch_retrieve(query).await
     }
     #[inline(always)]
     pub async fn archive(&self, message: DurableMessage) -> Result<(), DurabilityError> {
@@ -104,17 +107,14 @@ pub trait Durability: Send + Sync + 'static {
         endpoint: EndpointAddr,
         status: MessageStatusKind,
     ) -> impl Future<Output = Result<(), DurabilityError>> + Send;
-    fn remove(
-        &self,
-        message_id: MessageId,
-    ) -> impl Future<Output = Result<(), DurabilityError>> + Send;
+
     fn retrieve(
         &self,
         message_id: MessageId,
     ) -> impl Future<Output = Result<DurableMessage, DurabilityError>> + Send;
     fn batch_retrieve(
         &self,
-        time_range: RangeToInclusive<DateTime<Utc>>,
+        query: DurableMessageQuery,
     ) -> impl Future<Output = Result<Vec<DurableMessage>, DurabilityError>> + Send;
     fn archive(
         &self,
@@ -127,24 +127,14 @@ mod sealed {
 
     use chrono::{DateTime, Utc};
 
-    use crate::protocol::endpoint::{EndpointAddr, MessageStatusKind, MessageId};
+    use crate::protocol::endpoint::MessageId;
 
-    use super::{Durability, DurabilityError, DurableMessage};
+    use super::{Durability, DurabilityError, DurableMessage, DurableMessageQuery};
 
     pub(super) trait DurabilityObjectTrait: Send + Sync + 'static {
         fn save(
             &self,
             message: DurableMessage,
-        ) -> Pin<Box<dyn Future<Output = Result<(), DurabilityError>> + Send + '_>>;
-        fn update_status(
-            &self,
-            message_id: MessageId,
-            endpoint: EndpointAddr,
-            status: MessageStatusKind,
-        ) -> Pin<Box<dyn Future<Output = Result<(), DurabilityError>> + Send + '_>>;
-        fn remove(
-            &self,
-            message_id: MessageId,
         ) -> Pin<Box<dyn Future<Output = Result<(), DurabilityError>> + Send + '_>>;
         fn retrieve(
             &self,
@@ -152,7 +142,7 @@ mod sealed {
         ) -> Pin<Box<dyn Future<Output = Result<DurableMessage, DurabilityError>> + Send + '_>>;
         fn batch_retrieve(
             &self,
-            time_range: RangeToInclusive<DateTime<Utc>>,
+            query: DurableMessageQuery,
         ) -> Pin<Box<dyn Future<Output = Result<Vec<DurableMessage>, DurabilityError>> + Send + '_>>;
         fn archive(
             &self,
@@ -172,24 +162,7 @@ mod sealed {
         ) -> Pin<Box<dyn Future<Output = Result<(), DurabilityError>> + Send + '_>> {
             Box::pin(self.save(message))
         }
-        #[inline(always)]
 
-        fn update_status(
-            &self,
-            message_id: MessageId,
-            endpoint: EndpointAddr,
-            status: MessageStatusKind,
-        ) -> Pin<Box<dyn Future<Output = Result<(), DurabilityError>> + Send + '_>> {
-            Box::pin(self.update_status(message_id, endpoint, status))
-        }
-        #[inline(always)]
-
-        fn remove(
-            &self,
-            message_id: MessageId,
-        ) -> Pin<Box<dyn Future<Output = Result<(), DurabilityError>> + Send + '_>> {
-            Box::pin(self.remove(message_id))
-        }
         #[inline(always)]
 
         fn retrieve(
@@ -203,10 +176,10 @@ mod sealed {
 
         fn batch_retrieve(
             &self,
-            time_range: RangeToInclusive<DateTime<Utc>>,
+            query: DurableMessageQuery,
         ) -> Pin<Box<dyn Future<Output = Result<Vec<DurableMessage>, DurabilityError>> + Send + '_>>
         {
-            Box::pin(self.batch_retrieve(time_range))
+            Box::pin(self.batch_retrieve(query))
         }
         #[inline(always)]
 

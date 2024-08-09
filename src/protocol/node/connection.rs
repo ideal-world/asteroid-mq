@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ops::Deref, sync::Arc};
+use std::{borrow::Cow, ops::Deref, sync::{Arc, Mutex}, time::Instant};
 
 use tokio::task::JoinHandle;
 use tracing::warn;
@@ -31,6 +31,7 @@ pub enum N2NConnectionErrorKind {
     Decode(DecodeError),
     Io(std::io::Error),
     Closed,
+    Timeout,
     Protocol,
 }
 #[derive(Debug)]
@@ -126,7 +127,23 @@ impl N2NConnectionInstance {
             Ok(sink)
         });
         let ib_handle = tokio::task::spawn(async move {
-            while let Some(Ok(next_event)) = stream.next().await {
+            const HB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+            let hb_channel = Arc::new(Mutex::new(Instant::now()));
+            loop {
+                let next = stream.next().await;
+                
+                let Some(next_event) = next else {
+                    break;
+                };
+                let Ok(next_event) = next_event else {
+                    return Err(N2NConnectionError::new(
+                        N2NConnectionErrorKind::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "failed to read next event",
+                        )),
+                        "read next event",
+                    ));
+                };
                 match next_event.header.kind {
                     N2NPayloadKind::Event => {
                         let payload = next_event.payload;
@@ -141,6 +158,7 @@ impl N2NConnectionInstance {
                         node.handle_message(message).await;
                         // handle message
                     }
+                    N2NPayloadKind::Heartbeat => {}
                     N2NPayloadKind::Unreachable => {
 
                         // handle unreachable

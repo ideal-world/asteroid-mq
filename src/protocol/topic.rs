@@ -17,15 +17,16 @@ use std::{
 };
 
 use bytes::Bytes;
+use chrono::Utc;
 use config::TopicConfig;
 use crossbeam::sync::ShardedLock;
-use durable_message::DurabilityService;
-use hold_message::{HoldMessage, MemoryMessageQueue, MessagePollContext};
+use durable_message::{DurabilityService, DurableMessageQuery};
+use hold_message::{HoldMessage, MessagePollContext, MessageQueue};
 use tracing::instrument;
 use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException, WaitAckHandle};
 
 use crate::{
-    protocol::endpoint::{CastMessage, LocalEndpointInner, MessageStatusKind},
+    protocol::endpoint::{CastMessage, LocalEndpointInner},
     TimestampSec,
 };
 
@@ -33,7 +34,7 @@ use super::{
     codec::CodecType,
     endpoint::{
         EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint, LocalEndpointRef,
-        Message, MessageId,
+        Message,
     },
     interest::{Interest, InterestMap, Subject},
     node::{
@@ -343,7 +344,7 @@ impl Topic {
     }
 
     #[instrument(skip(self, message), fields(node_id=?self.node.id(), topic_code=?self.config))]
-    pub(crate) async fn hold_new_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
+    pub(crate) fn hold_new_message(&self, message: Message) -> WaitAckHandle {
         let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
         let (result_report, result_recv) = flume::bounded(1);
         let hold_message = HoldMessage {
@@ -357,7 +358,7 @@ impl Topic {
         {
             let mut queue = self.queue.write().unwrap();
             // put in queue
-            if let Some(overflow_config) = &self.config.overflow {
+            if let Some(overflow_config) = &self.config.overflow_config {
                 let size = u32::from(overflow_config.size) as usize;
                 let waiting_size = queue.len();
                 if waiting_size >= size {
@@ -368,7 +369,7 @@ impl Topic {
                                     WaitAckErrorException::Overflow,
                                 )))
                                 .expect("channel just created");
-                            return Ok(message.create_wait_handle(result_recv));
+                            return message.create_wait_handle(result_recv);
                         }
                         config::OverflowPolicy::DropOld => {
                             let old = queue.pop().expect("queue at least one element");
@@ -383,13 +384,10 @@ impl Topic {
         }
         {
             let queue = self.queue.read().unwrap();
-            queue.poll_message(&MessagePollContext {
-                message_id: message.id(),
-                topic: self,
-            });
+            queue.poll_message(message.id(), &MessagePollContext { topic: self });
         }
         tracing::debug!(?ep_collect, "hold new message");
-        return Ok(message.create_wait_handle(result_recv));
+        return message.create_wait_handle(result_recv);
     }
 }
 
@@ -415,7 +413,7 @@ pub struct TopicInner {
     pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
     pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
     pub(crate) ep_latest_active: ShardedLock<HashMap<EndpointAddr, TimestampSec>>,
-    pub(crate) queue: RwLock<MemoryMessageQueue>,
+    pub(crate) queue: RwLock<MessageQueue>,
     pub(crate) durability_service: Option<DurabilityService>,
 }
 
@@ -423,12 +421,12 @@ impl TopicInner {
     pub fn new<C: Into<TopicConfig>>(config: C) -> Self {
         const DEFAULT_CAPACITY: usize = 128;
         let config: TopicConfig = config.into();
-        let capacity = if let Some(ref overflow_config) = config.overflow {
+        let capacity = if let Some(ref overflow_config) = config.overflow_config {
             overflow_config.size()
         } else {
             DEFAULT_CAPACITY
         };
-        let messages = MemoryMessageQueue::new(config.blocking, capacity);
+        let messages = MessageQueue::new(config.blocking, capacity);
         Self {
             config,
             local_endpoints: Default::default(),
@@ -442,13 +440,26 @@ impl TopicInner {
 }
 
 impl Node {
-    pub fn initialize_topic<C: Into<TopicConfig>>(&self, config: C) -> Topic {
+    pub async fn initialize_topic<C: Into<TopicConfig>>(&self, config: C) -> Result<Topic, crate::Error> {
         let topic = Arc::new(TopicInner::new(config));
+        if let Some(ds) = topic.durability_service.clone() {
+            const PAGE_SIZE: u32 = 128;
+            let mut query = DurableMessageQuery::new(0, PAGE_SIZE);
+            loop {
+                let messages = ds.batch_retrieve(query.clone()).await.map_err(crate::Error::contextual("retrieve durable message"))?;
+                if messages.is_empty() {
+                    break;
+                } else {
+                    query = query.next_page();
+                }
+            }
+        };
         self.topics
             .write()
             .unwrap()
             .insert(topic.config.code.clone(), topic.clone());
-        self.wrap_topic(topic)
+
+        Ok(self.wrap_topic(topic))
     }
     pub fn remove_topic<Q>(&self, code: &Q)
     where

@@ -1,7 +1,7 @@
 pub mod error;
 pub mod protocol;
 pub(crate) mod util;
-
+pub use error::Error;
 pub use bytes;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TimestampSec(u64);
