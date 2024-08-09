@@ -4,11 +4,14 @@ use std::{
     task::Poll,
 };
 
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 
 use crate::{
     protocol::{
-        endpoint::{EndpointAddr, Message, MessageAck, MessageAckKind, MessageHeader, MessageId},
+        endpoint::{
+            EndpointAddr, Message, MessageAck, MessageHeader, MessageId, MessageStatusKind,
+        },
         node::event::N2nPacket,
         topic::wait_ack::{self, WaitAckSuccess},
     },
@@ -21,52 +24,81 @@ use super::{
 };
 #[derive(Debug)]
 pub struct HoldMessage {
-    pub header: MessageHeader,
-    pub wait_ack: Option<WaitAck>,
+    pub message: Message,
+    pub wait_ack: WaitAck,
 }
 
-
 impl HoldMessage {
-    pub fn resolve(mut self) {
-        tracing::trace!("resolved: {self:?}");
-        if let Some(ref mut wait_ack) = self.wait_ack {
-            let status: Vec<(EndpointAddr, MessageAckKind)> = wait_ack
-                .status
-                .get_mut()
-                .unwrap()
-                .iter()
-                .map(|(ep, ack)| (*ep, *ack))
-                .collect();
-            let mut fail_list: Vec<EndpointAddr> = Vec::new();
-            let mut unreachable_list: Vec<EndpointAddr> = Vec::new();
-            for (ep, ack) in status {
-                match ack {
-                    MessageAckKind::Failed => {
-                        fail_list.push(ep);
-                    }
-                    MessageAckKind::Unreachable => {
-                        unreachable_list.push(ep);
-                    }
-                    _ => {}
-                }
-            }
-            if fail_list.is_empty() && unreachable_list.is_empty() {
-                let _ = wait_ack.reporter.send(Ok(WaitAckSuccess {
-                    ep_list: wait_ack.ep_list.iter().cloned().collect(),
-                }));
+    pub fn send_unsent(&self, context: &MessagePollContext) {
+        let mut status = self.wait_ack.status.write().unwrap();
+        let eps = status
+            .iter()
+            .filter_map(|(ep, status)| status.is_unsent().then_some(*ep));
+        // if the message is the first one, call send
+        for (ep, result) in context.topic.send_out_message(&self.message, eps) {
+            if result.is_ok() {
+                status.insert(ep, MessageStatusKind::Sent);
             } else {
-                let _ = wait_ack.reporter.send(Err(WaitAckError {
-                    ep_list: wait_ack.ep_list.iter().cloned().collect(),
-                    failed_list: fail_list,
-                    unreachable_list,
-                    timeout_list: Vec::new(),
-                    exception: None,
-                }));
+                status.insert(ep, MessageStatusKind::Failed);
             }
-        } else {
-            // don't expect ack
         }
     }
+    pub fn is_resolved(&self) -> bool {
+        match self.message.header.target_kind {
+            crate::protocol::endpoint::MessageTargetKind::Durable => todo!(),
+            crate::protocol::endpoint::MessageTargetKind::Online
+            | crate::protocol::endpoint::MessageTargetKind::Available
+            | crate::protocol::endpoint::MessageTargetKind::Push => self
+                .wait_ack
+                .status
+                .read()
+                .unwrap()
+                .values()
+                .all(|status| status.is_resolved(self.wait_ack.expect)),
+        }
+    }
+    pub fn resolve(mut self) {
+        tracing::trace!("resolved: {self:?}");
+        let mut wait_ack = self.wait_ack;
+        let status: Vec<(EndpointAddr, MessageStatusKind)> = wait_ack
+            .status
+            .get_mut()
+            .unwrap()
+            .iter()
+            .map(|(ep, ack)| (*ep, *ack))
+            .collect();
+        let mut fail_list: Vec<EndpointAddr> = Vec::new();
+        let mut unreachable_list: Vec<EndpointAddr> = Vec::new();
+        for (ep, ack) in status {
+            match ack {
+                MessageStatusKind::Failed => {
+                    fail_list.push(ep);
+                }
+                MessageStatusKind::Unreachable => {
+                    unreachable_list.push(ep);
+                }
+                _ => {}
+            }
+        }
+        if fail_list.is_empty() && unreachable_list.is_empty() {
+            let _ = wait_ack.reporter.send(Ok(WaitAckSuccess {
+                ep_list: wait_ack.ep_list.iter().cloned().collect(),
+            }));
+        } else {
+            let _ = wait_ack.reporter.send(Err(WaitAckError {
+                ep_list: wait_ack.ep_list.iter().cloned().collect(),
+                failed_list: fail_list,
+                unreachable_list,
+                timeout_list: Vec::new(),
+                exception: None,
+            }));
+        }
+    }
+}
+
+pub struct MessagePollContext<'t> {
+    pub(crate) message_id: MessageId,
+    pub(crate) topic: &'t Topic,
 }
 
 #[derive(Debug)]
@@ -91,7 +123,7 @@ impl MemoryMessageQueue {
         }
     }
     pub fn push(&mut self, message: HoldMessage) {
-        let message_id = message.header.message_id;
+        let message_id = message.message.header.message_id;
         let time = Utc::now();
         self.hold_messages.insert(message_id, message);
         self.time_id.insert(Timed::new(time, message_id));
@@ -132,46 +164,36 @@ impl MemoryMessageQueue {
     pub fn set_ack(&self, ack: &MessageAck) {
         tracing::trace!("set ack: {ack:?}");
         if let Some(hm) = self.hold_messages.get(&ack.ack_to) {
-            if let Some(wait_ack) = &hm.wait_ack {
-                let mut wg = wait_ack.status.write().unwrap();
-                wg.insert(ack.from, ack.kind);
-            }
+            let mut wg = hm.wait_ack.status.write().unwrap();
+            wg.insert(ack.from, ack.kind);
         }
     }
-    pub fn poll_message(&self, id: MessageId) -> Option<Poll<()>> {
-        if self.resolved.read().unwrap().contains(&id) {
+
+    pub fn poll_message(&self, context: &MessagePollContext<'_>) -> Option<Poll<()>> {
+        if self.resolved.read().unwrap().contains(&context.message_id) {
             Some(Poll::Ready(()))
         } else {
-            let resolved = self.poll_message_inner(id)?;
+            let resolved = self.poll_message_inner(context)?;
             if resolved.is_ready() {
-                self.resolved.write().unwrap().insert(id);
+                self.resolved.write().unwrap().insert(context.message_id);
             }
             Some(resolved)
         }
     }
-    pub fn poll_message_inner(&self, id: MessageId) -> Option<Poll<()>> {
-        let message = self.hold_messages.get(&id)?;
-        if let Some(wait_ack) = &message.wait_ack {
-            let rg = wait_ack.status.read().unwrap();
-            if wait_ack.ep_list.len() == rg.len()
-                && rg.values().all(|ack| ack.is_resolved(wait_ack.expect))
-            {
-                if self.blocking
-                    && self
-                        .time_id
-                        .first()
-                        .map(|timed| timed.data != id)
-                        .unwrap_or(false)
-                {
-                    Some(Poll::Pending)
-                } else {
-                    Some(Poll::Ready(()))
-                }
-            } else {
-                Some(Poll::Pending)
+    pub fn poll_message_inner(&self, context: &MessagePollContext<'_>) -> Option<Poll<()>> {
+        let message = self.hold_messages.get(&context.message_id)?;
+        if self.blocking {
+            let front = self.get_front()?;
+            // if blocking, check if the message is the first one
+            if front.message.id() != context.message_id {
+                return Some(Poll::Pending);
             }
+        }
+        message.send_unsent(context);
+        if message.is_resolved() {
+            Some(Poll::Ready(()))
         } else {
-            None
+            Some(Poll::Pending)
         }
     }
     pub fn is_empty(&self) -> bool {
@@ -186,19 +208,22 @@ impl MemoryMessageQueue {
         std::mem::swap(&mut swap_out, &mut resolved);
         swap_out
     }
-    pub fn blocking_pop(&mut self) -> Option<HoldMessage> {
+    pub fn blocking_pop(&mut self, topic: &Topic) -> Option<HoldMessage> {
         let next = self.get_front()?;
-        let poll = self.poll_message(next.header.message_id)?;
+        let poll = self.poll_message(&MessagePollContext {
+            message_id: next.message.id(),
+            topic,
+        })?;
         if poll.is_ready() {
             self.pop()
         } else {
             None
         }
     }
-    pub fn flush(&mut self) {
+    pub fn flush(&mut self, topic: &Topic) {
         tracing::trace!(blocking = self.blocking, "flushing");
         if self.blocking {
-            while let Some(m) = self.blocking_pop() {
+            while let Some(m) = self.blocking_pop(topic) {
                 m.resolve();
             }
         } else {
@@ -216,10 +241,13 @@ impl Topic {
         let poll_result = {
             let rg = self.queue.read().unwrap();
             rg.set_ack(&ack);
-            rg.poll_message(ack.ack_to)
+            rg.poll_message(&MessagePollContext {
+                message_id: ack.ack_to,
+                topic: self,
+            })
         };
         if let Some(Poll::Ready(())) = poll_result {
-            self.queue.write().unwrap().flush();
+            self.queue.write().unwrap().flush(self);
         }
     }
     pub(crate) fn handle_ack(&self, ack: MessageAck) {

@@ -15,43 +15,58 @@ use crate::protocol::node::NodeId;
 use super::EndpointAddr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MessageAckKind {
-    Received = 0,
-    Processed = 1,
-    Failed = 2,
-    Unreachable = 3,
+pub enum MessageStatusKind {
+    Unsent = 0xff,
+    Sent = 0x00,
+    Received = 0x01,
+    Processed = 0x02,
+    Failed = 0x80,
+    Unreachable = 0x81,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageAckExpectKind {
-    Received = 0,
-    Processed = 1,
+    Sent = 0x00,
+    Received = 0x01,
+    Processed = 0x02,
 }
 impl_codec! {
     enum MessageAckExpectKind {
-        Received = 0,
-        Processed = 1,
+        Sent = 0x00,
+        Received = 0x01,
+        Processed = 0x02,
     }
 }
 impl_codec! {
-    enum MessageAckKind {
-        Received = 0,
-        Processed = 1,
-        Failed = 2,
-        Unreachable = 3,
+    enum MessageStatusKind {
+        Unsent = 0xff,
+        Sent = 0x00,
+        Received = 0x01,
+        Processed = 0x02,
+        Failed = 0x80,
+        Unreachable = 0x81,
     }
 }
 
-impl MessageAckKind {
+impl MessageStatusKind {
+    #[inline(always)]
+    pub fn is_unsent(&self) -> bool {
+        *self == MessageStatusKind::Unsent
+    }
     pub fn is_reached(&self, condition: MessageAckExpectKind) -> bool {
         match condition {
-            MessageAckExpectKind::Received => {
-                *self == MessageAckKind::Received || *self == MessageAckKind::Processed
+            MessageAckExpectKind::Sent => {
+                *self == MessageStatusKind::Sent
+                    || *self == MessageStatusKind::Received
+                    || *self == MessageStatusKind::Processed
             }
-            MessageAckExpectKind::Processed => *self == MessageAckKind::Processed,
+            MessageAckExpectKind::Received => {
+                *self == MessageStatusKind::Received || *self == MessageStatusKind::Processed
+            }
+            MessageAckExpectKind::Processed => *self == MessageStatusKind::Processed,
         }
     }
     pub fn is_failed(&self) -> bool {
-        *self == MessageAckKind::Failed || *self == MessageAckKind::Unreachable
+        *self == MessageStatusKind::Failed || *self == MessageStatusKind::Unreachable
     }
     pub fn is_resolved(&self, condition: MessageAckExpectKind) -> bool {
         self.is_failed() || self.is_reached(condition)
@@ -127,21 +142,15 @@ impl Message {
     pub fn topic(&self) -> &TopicCode {
         &self.header.topic
     }
-    pub fn ack_kind(&self) -> Option<MessageAckExpectKind> {
+    pub fn ack_kind(&self) -> MessageAckExpectKind {
         self.header.ack_kind
-    }
-    pub fn as_hold(&self) -> HoldMessage {
-        HoldMessage {
-            header: self.header.clone(),
-            wait_ack: None,
-        }
     }
 }
 #[derive(Debug, Clone)]
 pub struct MessageHeader {
     pub message_id: MessageId,
     pub holder_node: NodeId,
-    pub ack_kind: Option<MessageAckExpectKind>,
+    pub ack_kind: MessageAckExpectKind,
     pub target_kind: MessageTargetKind,
     pub durability: Option<MessageDurabilityConfig>,
     pub subjects: Arc<[Subject]>,
@@ -152,7 +161,7 @@ impl_codec! {
     struct MessageHeader {
         message_id: MessageId,
         holder_node: NodeId,
-        ack_kind: Option<MessageAckExpectKind>,
+        ack_kind: MessageAckExpectKind,
         target_kind: MessageTargetKind,
         durability:  Option<MessageDurabilityConfig>,
         subjects: Arc<[Subject]>,
@@ -165,7 +174,7 @@ pub struct MessageAck {
     pub topic_code: TopicCode,
     pub from: EndpointAddr,
     pub holder: NodeId,
-    pub kind: MessageAckKind,
+    pub kind: MessageStatusKind,
 }
 
 impl_codec! {
@@ -174,7 +183,7 @@ impl_codec! {
         topic_code: TopicCode,
         from: EndpointAddr,
         holder: NodeId,
-        kind: MessageAckKind,
+        kind: MessageStatusKind,
     }
 }
 

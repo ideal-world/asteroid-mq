@@ -20,12 +20,12 @@ use bytes::Bytes;
 use config::TopicConfig;
 use crossbeam::sync::ShardedLock;
 use durable_message::DurabilityService;
-use hold_message::{HoldMessage, MemoryMessageQueue};
+use hold_message::{HoldMessage, MemoryMessageQueue, MessagePollContext};
 use tracing::instrument;
 use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException, WaitAckHandle};
 
 use crate::{
-    protocol::endpoint::{CastMessage, LocalEndpointInner},
+    protocol::endpoint::{CastMessage, LocalEndpointInner, MessageStatusKind},
     TimestampSec,
 };
 
@@ -290,124 +290,106 @@ impl Topic {
         }
     }
 
+    pub(crate) fn send_out_message(
+        &self,
+        message: &Message,
+        ep_list: impl Iterator<Item = EndpointAddr>,
+    ) -> Vec<(EndpointAddr, Result<(), ()>)> {
+        let map = self.resolve_node_ep_map(ep_list);
+        let mut results = vec![];
+        for (node, eps) in map {
+            if self.node.is(node) {
+                for ep in &eps {
+                    match self.push_message_to_local_ep(ep, message.clone()) {
+                        Ok(_) => {
+                            results.push((*ep, Ok(())));
+                        }
+                        Err(message) => {
+                            results.push((*ep, Err(())));
+                        }
+                    }
+                }
+            } else if let Some(next_jump) = self.node.get_next_jump(node) {
+                tracing::trace!(node_id=?node, eps=?eps, "send to remote node");
+                let message_event = self.node.new_cast_message(
+                    node,
+                    CastMessage {
+                        target_eps: eps.clone(),
+                        message: message.clone(),
+                    },
+                );
+                match self
+                    .node
+                    .send_packet(N2nPacket::event(message_event), next_jump)
+                {
+                    Ok(_) => {
+                        for ep in eps {
+                            results.push((ep, Ok(())));
+                        }
+                    }
+                    Err(_) => {
+                        for ep in eps {
+                            results.push((ep, Err(())));
+                        }
+                    }
+                }
+            } else {
+                for ep in eps {
+                    results.push((ep, Err(())));
+                }
+            }
+        }
+        results
+    }
+
     #[instrument(skip(self, message), fields(node_id=?self.node.id(), topic_code=?self.config))]
     pub(crate) async fn hold_new_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
         let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
         let (result_report, result_recv) = flume::bounded(1);
-        let mut hold_message = message.as_hold();
-
-        if let Some(ack_kind) = message.ack_kind() {
-            hold_message.wait_ack.replace(WaitAck::new(
-                ack_kind,
+        let hold_message = HoldMessage {
+            message: message.clone(),
+            wait_ack: WaitAck::new(
+                message.ack_kind(),
                 ep_collect.clone(),
                 result_report.clone(),
-            ));
+            ),
         };
-
-        // put in queue
-        if let Some(overflow_config) = &self.config.overflow {
-            let size = u32::from(overflow_config.size) as usize;
-            let waiting_size = self.queue.read().unwrap().len();
-            if waiting_size >= size {
-                match overflow_config.policy {
-                    config::OverflowPolicy::RejectNew => {
-                        result_report
-                            .send(Err(WaitAckError::exception(
-                                WaitAckErrorException::Overflow,
-                            )))
-                            .expect("channel just created");
-                        return Ok(message.create_wait_handle(result_recv));
-                    }
-                    config::OverflowPolicy::DropOld => {
-                        let old = {
-                            let mut wg = self.queue.write().unwrap();
-                            let old = wg.pop().expect("queue at least one element");
-                            wg.push(hold_message);
-                            old
-                        };
-                        if let Some(wait) = old.wait_ack {
-                            let _ = wait.reporter.send(Err(WaitAckError::exception(
+        {
+            let mut queue = self.queue.write().unwrap();
+            // put in queue
+            if let Some(overflow_config) = &self.config.overflow {
+                let size = u32::from(overflow_config.size) as usize;
+                let waiting_size = queue.len();
+                if waiting_size >= size {
+                    match overflow_config.policy {
+                        config::OverflowPolicy::RejectNew => {
+                            result_report
+                                .send(Err(WaitAckError::exception(
+                                    WaitAckErrorException::Overflow,
+                                )))
+                                .expect("channel just created");
+                            return Ok(message.create_wait_handle(result_recv));
+                        }
+                        config::OverflowPolicy::DropOld => {
+                            let old = queue.pop().expect("queue at least one element");
+                            let _ = old.wait_ack.reporter.send(Err(WaitAckError::exception(
                                 WaitAckErrorException::Overflow,
                             )));
                         }
                     }
                 }
-            } else {
-                self.queue.write().unwrap().push(hold_message)
             }
-        } else {
-            self.queue.write().unwrap().push(hold_message)
+            queue.push(hold_message);
+        }
+        {
+            let queue = self.queue.read().unwrap();
+            queue.poll_message(&MessagePollContext {
+                message_id: message.id(),
+                topic: self,
+            });
         }
         tracing::debug!(?ep_collect, "hold new message");
-
-        // save message
-        match &message.header.target_kind {
-            crate::protocol::endpoint::MessageTargetKind::Durable => {
-                todo!()
-            }
-            crate::protocol::endpoint::MessageTargetKind::Online => {
-                let map = self.resolve_node_ep_map(ep_collect.into_iter());
-                tracing::debug!(?map, "resolve node ep map");
-                for (node, eps) in map {
-                    if self.node.is(node) {
-                        for ep in &eps {
-                            self.push_message_to_local_ep(ep, message.clone());
-                        }
-                    } else if let Some(next_jump) = self.node.get_next_jump(node) {
-                        tracing::trace!(node_id=?node, eps=?eps, "send to remote node");
-                        let message_event = self.node.new_cast_message(
-                            node,
-                            CastMessage {
-                                target_eps: eps,
-                                message: message.clone(),
-                            },
-                        );
-                        match self
-                            .node
-                            .send_packet(N2nPacket::event(message_event), next_jump)
-                        {
-                            Ok(_) => {}
-                            Err(_) => todo!(),
-                        }
-                    } else {
-                        todo!("unresolved remote node")
-                    }
-                }
-                return Ok(message.create_wait_handle(result_recv));
-            }
-            crate::protocol::endpoint::MessageTargetKind::Available => todo!(),
-            crate::protocol::endpoint::MessageTargetKind::Push => {
-                for ep in &ep_collect {
-                    // prefer local endpoint
-                    if self.push_message_to_local_ep(ep, message.clone()).is_ok() {
-                        return Ok(message.create_wait_handle(result_recv));
-                    }
-                }
-                for ep in &ep_collect {
-                    if let Some(remote_node) = self.get_remote_ep(ep) {
-                        if let Some(next_jump) = self.node.get_next_jump(remote_node) {
-                            let message_event = self.node.new_cast_message(
-                                remote_node,
-                                CastMessage {
-                                    target_eps: vec![*ep],
-                                    message: message.clone(),
-                                },
-                            );
-                            match self
-                                .node
-                                .send_packet(N2nPacket::event(message_event), next_jump)
-                            {
-                                Ok(_) => {
-                                    return Ok(message.create_wait_handle(result_recv));
-                                }
-                                Err(_) => todo!(),
-                            }
-                        }
-                    }
-                }
-                return Err(());
-            }
-        }
+        return Ok(message.create_wait_handle(result_recv));
     }
 }
 

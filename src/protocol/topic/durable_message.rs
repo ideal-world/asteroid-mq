@@ -4,17 +4,17 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     impl_codec,
-    protocol::endpoint::{EndpointAddr, Message, MessageAckKind, MessageId},
+    protocol::endpoint::{EndpointAddr, Message, MessageStatusKind, MessageId},
 };
 
 pub struct DurableMessage {
     pub message: Message,
-    pub status: HashMap<EndpointAddr, MessageAckKind>,
+    pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
 
 pub struct ArchiveMessage {
     pub message: Message,
-    pub status: HashMap<EndpointAddr, MessageAckKind>,
+    pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +68,7 @@ impl DurabilityService {
         &self,
         message_id: MessageId,
         endpoint: EndpointAddr,
-        status: MessageAckKind,
+        status: MessageStatusKind,
     ) -> Result<(), DurabilityError> {
         self.inner.update_status(message_id, endpoint, status).await
     }
@@ -102,7 +102,7 @@ pub trait Durability: Send + Sync + 'static {
         &self,
         message_id: MessageId,
         endpoint: EndpointAddr,
-        status: MessageAckKind,
+        status: MessageStatusKind,
     ) -> impl Future<Output = Result<(), DurabilityError>> + Send;
     fn remove(
         &self,
@@ -127,7 +127,7 @@ mod sealed {
 
     use chrono::{DateTime, Utc};
 
-    use crate::protocol::endpoint::{EndpointAddr, MessageAckKind, MessageId};
+    use crate::protocol::endpoint::{EndpointAddr, MessageStatusKind, MessageId};
 
     use super::{Durability, DurabilityError, DurableMessage};
 
@@ -140,7 +140,7 @@ mod sealed {
             &self,
             message_id: MessageId,
             endpoint: EndpointAddr,
-            status: MessageAckKind,
+            status: MessageStatusKind,
         ) -> Pin<Box<dyn Future<Output = Result<(), DurabilityError>> + Send + '_>>;
         fn remove(
             &self,
@@ -178,7 +178,7 @@ mod sealed {
             &self,
             message_id: MessageId,
             endpoint: EndpointAddr,
-            status: MessageAckKind,
+            status: MessageStatusKind,
         ) -> Pin<Box<dyn Future<Output = Result<(), DurabilityError>> + Send + '_>> {
             Box::pin(self.update_status(message_id, endpoint, status))
         }

@@ -48,7 +48,7 @@ async fn test_nodes() {
     fn topic_config() -> TopicConfig {
         TopicConfig {
             code: TopicCode::const_new("events"),
-            blocking: true,
+            blocking: false,
             overflow: Some(TopicOverflowConfig {
                 policy: OverflowPolicy::RejectNew,
                 size: NonZeroU32::new(500).unwrap(),
@@ -113,7 +113,7 @@ async fn test_nodes() {
                 header: MessageHeader {
                     message_id: MessageId::new_snowflake(),
                     holder_node: node_client.id(),
-                    ack_kind: Some(MessageAckExpectKind::Processed),
+                    ack_kind: MessageAckExpectKind::Processed,
                     target_kind: MessageTargetKind::Online,
                     subjects: vec![Subject::new("events/hello-world")].into(),
                     topic: event_topic.code().clone(),

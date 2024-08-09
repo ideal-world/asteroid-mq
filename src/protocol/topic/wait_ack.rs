@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
+    sync::RwLock,
     task::Poll,
     time::Instant,
 };
@@ -8,13 +9,13 @@ use std::{
 use crossbeam::sync::ShardedLock;
 
 use crate::protocol::endpoint::{
-    EndpointAddr, Message, MessageAckExpectKind, MessageAckKind, MessageId,
+    EndpointAddr, Message, MessageAckExpectKind, MessageId, MessageStatusKind,
 };
 
 #[derive(Debug)]
 pub struct WaitAck {
     pub expect: MessageAckExpectKind,
-    pub status: ShardedLock<HashMap<EndpointAddr, MessageAckKind>>,
+    pub status: RwLock<HashMap<EndpointAddr, MessageStatusKind>>,
     pub timeout: Option<Instant>,
     pub ep_list: HashSet<EndpointAddr>,
     pub reporter: flume::Sender<Result<WaitAckSuccess, WaitAckError>>,
@@ -60,8 +61,11 @@ impl WaitAck {
         ep_list: HashSet<EndpointAddr>,
         reporter: flume::Sender<Result<WaitAckSuccess, WaitAckError>>,
     ) -> Self {
+        let status = HashMap::<EndpointAddr, MessageStatusKind>::from_iter(
+            ep_list.iter().map(|ep| (*ep, MessageStatusKind::Unsent)),
+        );
         Self {
-            status: Default::default(),
+            status: status.into(),
             timeout: None,
             ep_list,
             expect,

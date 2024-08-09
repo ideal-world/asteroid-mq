@@ -127,7 +127,7 @@ impl Message {
         &self,
         topic_code: TopicCode,
         from: EndpointAddr,
-        kind: MessageAckKind,
+        kind: MessageStatusKind,
     ) -> MessageAck {
         MessageAck {
             ack_to: self.id(),
@@ -139,15 +139,15 @@ impl Message {
     }
     #[inline(always)]
     pub fn ack_received(&self, topic_code: TopicCode, from: EndpointAddr) -> MessageAck {
-        self.ack(topic_code, from, MessageAckKind::Received)
+        self.ack(topic_code, from, MessageStatusKind::Received)
     }
     #[inline(always)]
     pub fn ack_processed(&self, topic_code: TopicCode, from: EndpointAddr) -> MessageAck {
-        self.ack(topic_code, from, MessageAckKind::Processed)
+        self.ack(topic_code, from, MessageStatusKind::Processed)
     }
     #[inline(always)]
     pub fn ack_failed(&self, topic_code: TopicCode, from: EndpointAddr) -> MessageAck {
-        self.ack(topic_code, from, MessageAckKind::Failed)
+        self.ack(topic_code, from, MessageStatusKind::Failed)
     }
 }
 
