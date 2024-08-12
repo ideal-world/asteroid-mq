@@ -3,10 +3,10 @@
 //!   - 1.2. bios实现
 //! 2. 主题系统 4
 //!   - 2.1. 主题的数据流是否阻塞 DONE
-//! 3. 主题，消息持久化 3 DONE
-//! 4. AVATAR功能 2
-//! 5. 集群化 1
-//! 6. RUST SDK 1
+//! 3. 主题，消息持久化 3 TO BE CONTINUE
+//! 4. AVATAR功能 2 ALTERNATIVE
+//! 5. 集群化 1 MAYBE RAFT
+//! 6. RUST SDK 1 
 //! 7. RUST 接入 2
 //!
 //! spi-log:需要按照顺序单个接收日志

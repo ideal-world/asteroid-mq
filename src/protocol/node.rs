@@ -8,6 +8,7 @@ use std::{
     collections::HashMap,
     ops::Deref,
     sync::{self, Arc, RwLock},
+    time::{Duration, Instant},
 };
 
 use super::{
@@ -20,7 +21,7 @@ use connection::{
 };
 use crossbeam::{epoch::Atomic, sync::ShardedLock};
 use event::{N2NAuth, N2NUnreachableEvent, N2nEvent, N2nEventKind, N2nPacket, NodeKind, NodeTrace};
-use raft::{RaftRole, RaftState, RaftTerm};
+use raft::{CandidateState, FollowerState, RaftInfo, RaftRole, RaftRoleKind, RaftState, RaftTerm};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -76,7 +77,7 @@ impl Default for NodeId {
         Self::snowflake()
     }
 }
-#[derive(Debug, Clone,)]
+#[derive(Debug, Clone)]
 pub struct NodeInfo {
     pub id: NodeId,
     pub kind: NodeKind,
@@ -100,7 +101,7 @@ impl Default for NodeInfo {
 #[derive(Debug)]
 pub struct NodeInner {
     info: NodeInfo,
-    raft_state: RwLock<RaftState>,
+    raft_state: Option<RwLock<RaftState>>,
     pub(crate) topics: ShardedLock<HashMap<TopicCode, Arc<TopicInner>>>,
     n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
     connections: ShardedLock<HashMap<NodeId, Arc<N2NConnectionInstance>>>,
@@ -139,17 +140,29 @@ impl Default for Node {
                 n2n_routing_table: ShardedLock::new(HashMap::new()),
                 connections: ShardedLock::new(HashMap::new()),
                 auth: N2NAuth::default(),
-                raft_state: RwLock::new(RaftState {
+                raft_state: Some(RwLock::new(RaftState {
                     term: Default::default(),
-                    role: RaftRole::Follower,
-                    leader: None,
-                }),
+                    role: RaftRole::Follower(FollowerState::new(timeout, timeout_reporter)),
+                    index: Default::default(),
+                    voted_for: None,
+                })),
             }),
         }
     }
 }
 
 impl Node {
+    pub fn raft_state_unwrap(&self) -> &RwLock<RaftState> {
+        self.raft_state.as_ref().unwrap()
+    }
+    pub fn cluster_size(&self) -> u64 {
+        self.connections
+            .read()
+            .unwrap()
+            .values()
+            .filter(|conn| conn.peer_info.kind == NodeKind::Cluster)
+            .count() as u64
+    }
     pub fn node_ref(&self) -> NodeRef {
         NodeRef {
             inner: Arc::downgrade(&self.inner),
@@ -157,6 +170,9 @@ impl Node {
     }
     pub fn is_edge(&self) -> bool {
         matches!(self.info.kind, NodeKind::Edge)
+    }
+    pub fn is_cluster(&self) -> bool {
+        matches!(self.info.kind, NodeKind::Cluster)
     }
     pub(crate) fn new_trace(&self) -> NodeTrace {
         NodeTrace {
@@ -272,7 +288,6 @@ impl Node {
                         .push_message_to_local_ep(ep, evt.message.clone());
                     if result.is_err() {
                         // TODO: handle error
-
                     }
                 }
             }

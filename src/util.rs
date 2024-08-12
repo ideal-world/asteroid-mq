@@ -103,3 +103,10 @@ impl<T: Eq> Ord for Timed<T> {
         self.time.cmp(&other.time)
     }
 }
+
+pub fn random_duration_ms(range: std::ops::Range<u64>) -> std::time::Duration {
+    let mut rng = rand::thread_rng();
+    let ms = rand::Rng::gen_range(&mut rng, range.start..range.end);
+
+    std::time::Duration::from_millis(ms)
+}

@@ -3,7 +3,7 @@ use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 
-use super::{NodeId, NodeInfo};
+use super::{raft::{Heartbeat, LogCommit, LogReplicate, RaftInfo, Vote}, NodeId, NodeInfo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 
@@ -35,6 +35,15 @@ impl NodeTrace {
 pub enum NodeKind {
     Cluster = 0,
     Edge = 1,
+}
+
+impl NodeKind {
+    pub fn is_cluster(self) -> bool {
+        matches!(self, Self::Cluster)
+    }
+    pub fn is_edge(self) -> bool {
+        matches!(self, Self::Edge)
+    }
 }
 
 impl_codec!(
@@ -115,7 +124,7 @@ impl N2nPacket {
     pub fn id(&self) -> N2nPacketId {
         self.header.id
     }
-
+    
     pub fn auth(evt: N2nAuth) -> Self {
         let mut payload_buf = BytesMut::with_capacity(size_of::<N2nAuth>());
         evt.encode(&mut payload_buf);
@@ -126,6 +135,52 @@ impl N2nPacket {
                 payload_size: payload_buf.len() as u32,
             },
             payload: payload_buf.into(),
+        }
+    }
+
+    pub fn raft_vote(vote: Vote) -> Self {
+        let payload = vote.encode_to_bytes();
+        Self {
+            header: N2nPacketHeader {
+                id: N2nPacketId::new_snowflake(),
+                kind: N2NPayloadKind::Vote,
+                payload_size: payload.len() as u32,
+            },
+            payload,
+        }
+    }
+    pub fn raft_heartbeat(hb:Heartbeat) -> Self {
+        Self {
+            header: N2nPacketHeader {
+                id: N2nPacketId::new_snowflake(),
+                kind: N2NPayloadKind::Heartbeat,
+                payload_size: 0,
+            },
+            payload: hb.encode_to_bytes(),
+        }
+    }
+
+    pub fn log_replicate(log: LogReplicate) -> Self {
+        let payload = log.encode_to_bytes();
+        Self {
+            header: N2nPacketHeader {
+                id: N2nPacketId::new_snowflake(),
+                kind: N2NPayloadKind::LogReplicate,
+                payload_size: payload.len() as u32,
+            },
+            payload,
+        }
+    }
+
+    pub fn log_commit(commit: LogCommit) -> Self {
+        let payload = commit.encode_to_bytes();
+        Self {
+            header: N2nPacketHeader {
+                id: N2nPacketId::new_snowflake(),
+                kind: N2NPayloadKind::LogCommit,
+                payload_size: payload.len() as u32,
+            },
+            payload,
         }
     }
     pub fn event(evt: N2nEvent) -> Self {
@@ -162,6 +217,10 @@ pub enum N2NPayloadKind {
     Heartbeat = 0x02,
     RequestVote = 0x10,
     Vote = 0x11,
+    LogAppend = 0x20,
+    LogReplicate = 0x21,
+    LogAck = 0x22,
+    LogCommit = 0x23,
     Unreachable = 0x80,
     Unknown = 0xf0,
 }
@@ -173,6 +232,10 @@ impl_codec!(
         Heartbeat = 0x02,
         RequestVote = 0x10,
         Vote = 0x11,
+        LogAppend = 0x20,
+        LogReplicate = 0x21,
+        LogAck = 0x22,
+        LogCommit = 0x23,
         Unreachable = 0x80,
         Unknown = 0xf0,
     }
@@ -187,7 +250,7 @@ impl From<u8> for N2NPayloadKind {
             0x10 => N2NPayloadKind::RequestVote,
             0x11 => N2NPayloadKind::Vote,
             0x80 => N2NPayloadKind::Unreachable,
-            
+
             _ => N2NPayloadKind::Unknown,
         }
     }
@@ -271,8 +334,12 @@ pub enum N2NEvent {
     Unreachable(N2NUnreachableEvent),
 }
 #[derive(Debug, Clone, Default)]
-pub struct N2NAuth {}
+pub struct N2NAuth {
+    pub cluster_id: Bytes,
+}
 
 impl_codec!(
-    struct N2NAuth {}
+    struct N2NAuth {
+        cluster_id: Bytes,
+    }
 );

@@ -1,6 +1,7 @@
 {
     "cSpell.words": [
         "Bincode",
+        "Deque",
         "kademlia",
         "Protobuf",
         "Sharded"

@@ -440,26 +440,44 @@ impl TopicInner {
 }
 
 impl Node {
-    pub async fn initialize_topic<C: Into<TopicConfig>>(&self, config: C) -> Result<Topic, crate::Error> {
+    pub async fn initialize_topic<C: Into<TopicConfig>>(
+        &self,
+        config: C,
+    ) -> Result<Topic, crate::Error> {
         let topic = Arc::new(TopicInner::new(config));
-        if let Some(ds) = topic.durability_service.clone() {
-            const PAGE_SIZE: u32 = 128;
-            let mut query = DurableMessageQuery::new(0, PAGE_SIZE);
-            loop {
-                let messages = ds.batch_retrieve(query.clone()).await.map_err(crate::Error::contextual("retrieve durable message"))?;
-                if messages.is_empty() {
-                    break;
-                } else {
-                    query = query.next_page();
-                }
-            }
-        };
         self.topics
             .write()
             .unwrap()
             .insert(topic.config.code.clone(), topic.clone());
+        let topic = self.wrap_topic(topic);
 
-        Ok(self.wrap_topic(topic))
+        if let Some(ds) = topic.durability_service.clone() {
+            const PAGE_SIZE: u32 = 128;
+            let mut query = DurableMessageQuery::new(0, PAGE_SIZE);
+            loop {
+                let messages = ds
+                    .batch_retrieve(query.clone())
+                    .await
+                    .map_err(crate::Error::contextual("retrieve durable message"))?;
+                if messages.is_empty() {
+                    break;
+                } else {
+                    for message in messages {
+                        let message = message.message;
+                        if matches!(
+                            message.header.target_kind,
+                            crate::protocol::endpoint::MessageTargetKind::Durable
+                        ) && message.header.durability.is_some()
+                        {
+                            topic.hold_new_message(message);
+                        }
+                    }
+                    query = query.next_page();
+                }
+            }
+        };
+
+        Ok(topic)
     }
     pub fn remove_topic<Q>(&self, code: &Q)
     where
