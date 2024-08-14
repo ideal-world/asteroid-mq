@@ -1,16 +1,17 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-
+const ELECTION_TIMEOUT: Duration = Duration::from_secs(1);
 use bytes::Bytes;
 
-use crate::impl_codec;
+use crate::{impl_codec, protocol::{codec::CodecType, endpoint::Message}};
 
 use super::{
     event::{N2nEventKind, N2nPacket},
-    Node, NodeId,
+    Node, NodeId, NodeRef, NodeSnapshot,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,27 +58,25 @@ impl_codec!(
 pub struct LeaderState {
     hb_task: tokio::task::JoinHandle<()>,
     pub term: RaftTerm,
-    pub logs: HashMap<u64, UncommittedLog>,
+    pub ack_map: HashMap<RaftLogIndex, u64>,
 }
 
 impl LeaderState {
-    pub fn new(tx: flume::Sender<N2nPacket>, interval: Duration, term: RaftTerm) -> Self {
+    pub fn new(node_ref: NodeRef, interval: Duration, term: RaftTerm) -> Self {
         let hb_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(interval);
             loop {
-                let result = tx
-                    .send_async(N2nPacket::raft_heartbeat(Heartbeat { term }))
-                    .await;
-                if result.is_err() {
+                let Some(node) = node_ref.upgrade() else {
                     break;
-                }
+                };
+                node.cluster_wise_broadcast_packet(N2nPacket::raft_heartbeat(Heartbeat { term }));
                 interval.tick().await;
             }
         });
         Self {
             hb_task,
             term,
-            logs: Default::default(),
+            ack_map: Default::default(),
         }
     }
 }
@@ -94,7 +93,6 @@ pub struct FollowerState {
     pub leader: Option<NodeId>,
     pub hb_timeout_task: tokio::task::JoinHandle<()>,
     pub timeout_reporter: flume::Sender<()>,
-    pub logs: HashMap<u64, LogReplicate>,
 }
 
 impl Drop for FollowerState {
@@ -116,19 +114,18 @@ impl FollowerState {
             leader: None,
             hb_timeout_task: task,
             timeout_reporter,
-            logs: Default::default(),
         }
     }
     pub fn record_hb(&mut self, instant: Instant, timeout: Duration) {
         self.latest_heartbeat = Some(instant);
         let reporter = self.timeout_reporter.clone();
         self.hb_timeout_task.abort();
-        tokio::spawn(async move {
+        self.hb_timeout_task = tokio::spawn(async move {
             tokio::time::sleep(timeout).await;
-            reporter.send(());
+            let _ = reporter.send_async(()).await;
         });
     }
-    pub fn from_leader(
+    pub fn from_new_leader(
         leader: NodeId,
         timeout: Duration,
         timeout_reporter: flume::Sender<()>,
@@ -138,24 +135,28 @@ impl FollowerState {
         this
     }
 }
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CandidateState {
     pub votes: u64,
-    pub launch_vote_delay: Option<Duration>,
+    pub vote_timeout_task: tokio::task::JoinHandle<()>,
 }
 
 impl CandidateState {
-    pub fn new() -> Self {
+    pub fn new(timeout: Duration, timeout_reporter: flume::Sender<()>) -> Self {
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(timeout).await;
+            let _ = timeout_reporter.send(());
+        });
         Self {
             votes: 0,
-            launch_vote_delay: None,
+            vote_timeout_task: task,
         }
     }
-    pub fn from_delay(delay: Duration) -> Self {
-        Self {
-            votes: 0,
-            launch_vote_delay: Some(delay),
-        }
+}
+
+impl Drop for CandidateState {
+    fn drop(&mut self) {
+        self.vote_timeout_task.abort();
     }
 }
 #[derive(Debug)]
@@ -170,7 +171,67 @@ impl RaftRole {
         matches!(self, RaftRole::Leader(_))
     }
     pub fn is_follower(&self) -> bool {
-        matches!(self, RaftRole::Leader(_))
+        matches!(self, RaftRole::Follower(_))
+    }
+    pub fn is_candidate(&self) -> bool {
+        matches!(self, RaftRole::Candidate(_))
+    }
+    pub fn is_ready(&self) -> bool {
+        match self {
+            RaftRole::Leader(_) => true,
+            RaftRole::Follower(state) => state.leader.is_some(),
+            RaftRole::Candidate(_) => false,
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct IndexedLog {
+    pub index: RaftLogIndex,
+    pub entry: LogEntry,
+}
+impl PartialEq for IndexedLog {
+    fn eq(&self, other: &Self) -> bool {
+        self.index.0 == other.index.0
+    }
+}
+impl Eq for IndexedLog {}
+impl Ord for IndexedLog {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.index.0.cmp(&other.index.0)
+    }
+}
+impl PartialOrd for IndexedLog {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+#[derive(Debug, Default, Clone)]
+pub struct PendingLogQueue {
+    heap: BinaryHeap<Reverse<IndexedLog>>,
+    resolved: HashSet<RaftLogIndex>,
+}
+
+impl PendingLogQueue {
+    pub fn resolve(&mut self, index: RaftLogIndex) {
+        self.resolved.insert(index);
+    }
+
+    pub fn blocking_pop_log(&mut self) -> Option<IndexedLog> {
+        let front = self.front_index()?;
+        if self.resolved.contains(&front) {
+            self.pop_log()
+        } else {
+            None
+        }
+    }
+    pub fn pop_log(&mut self) -> Option<IndexedLog> {
+        self.heap.pop().map(|i| i.0)
+    }
+    pub fn push_log(&mut self, log: IndexedLog) {
+        self.heap.push(Reverse(log));
+    }
+    pub fn front_index(&self) -> Option<RaftLogIndex> {
+        self.heap.peek().map(|i| i.0.index)
     }
 }
 
@@ -178,10 +239,14 @@ impl RaftRole {
 pub struct RaftState {
     pub term: RaftTerm,
     pub index: RaftLogIndex,
+    pub timeout_reporter: flume::Sender<()>,
+    pub node_ref: NodeRef,
     pub role: RaftRole,
+    pub pending_logs: PendingLogQueue,
     pub voted_for: Option<(NodeId, RaftTerm)>,
 }
 impl RaftState {
+    
     pub fn get_info(&self) -> RaftInfo {
         RaftInfo {
             term: self.term,
@@ -192,6 +257,32 @@ impl RaftState {
                 RaftRole::Candidate(_) => RaftRoleKind::Candidate,
             },
         }
+    }
+    pub fn term_timeout(&mut self) -> Option<Vote> {
+        match &mut self.role {
+            RaftRole::Leader(_) => None,
+            RaftRole::Follower(_) | RaftRole::Candidate(_) => {
+                let node = self.node_ref.upgrade()?;
+                self.term = self.term.next();
+                if node.cluster_size() == 1 {
+                    self.set_role(RaftRole::Leader(LeaderState::new(
+                        self.node_ref.clone(),
+                        ELECTION_TIMEOUT,
+                        self.term,
+                    )));
+                    return None;
+                }
+                self.set_role(RaftRole::Candidate(CandidateState::new(
+                    ELECTION_TIMEOUT,
+                    self.timeout_reporter.clone(),
+                )));
+                Some(Vote { term: self.term })
+            }
+        }
+    }
+    pub fn set_role(&mut self, role: RaftRole) {
+        tracing::debug!("set role: {:?}", role);
+        self.role = role;
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
@@ -211,7 +302,7 @@ pub struct RaftLogIndex(u64);
 impl RaftLogIndex {
     pub fn inc(&mut self) -> Self {
         self.0 = self.0.wrapping_add(1);
-        self.clone()
+        *self
     }
 }
 
@@ -224,6 +315,15 @@ pub struct LogEntry {
     pub payload: Bytes,
 }
 
+
+impl LogEntry {
+    pub fn delegate_message(message: Message) -> Self {
+        Self {
+            kind: N2nEventKind::DelegateMessage,
+            payload: message.encode_to_bytes(),
+        }
+    }
+}
 impl_codec!(
     struct LogEntry {
         kind: N2nEventKind,
@@ -267,70 +367,61 @@ impl_codec!(
 
 #[derive(Debug, Clone)]
 pub struct LogAppend {
-    pub id: u64,
     pub term: RaftTerm,
     pub entry: LogEntry,
 }
 
 impl LogAppend {
-    pub fn replicate(&self) -> LogReplicate {
+    pub fn replicate(&self, index: RaftLogIndex) -> LogReplicate {
         LogReplicate {
-            id: self.id,
+            index,
             term: self.term,
             entry: self.entry.clone(),
-        }
-    }
-    pub fn uncommitted(&self, cluster_size: u64) -> UncommittedLog {
-        UncommittedLog {
-            term: self.term,
-            id: self.id,
-            entry: self.entry.clone(),
-            ack_expect: cluster_size,
-            ack_count: 0,
         }
     }
 }
 
 impl_codec!(
     struct LogAppend {
-        id: u64,
         term: RaftTerm,
         entry: LogEntry,
     }
 );
 #[derive(Debug)]
 pub struct LogReplicate {
-    pub id: u64,
+    pub index: RaftLogIndex,
     pub term: RaftTerm,
     pub entry: LogEntry,
 }
 
 impl_codec!(
     struct LogReplicate {
-        id: u64,
+        index: RaftLogIndex,
         term: RaftTerm,
         entry: LogEntry,
     }
 );
 
 pub struct LogAck {
-    pub id: u64,
+    pub term: RaftTerm,
+    pub index: RaftLogIndex,
 }
 
 impl_codec!(
     struct LogAck {
-        id: u64,
+        term: RaftTerm,
+        index: RaftLogIndex,
     }
 );
 
 pub struct LogCommit {
-    pub id: u64,
+    pub term: RaftTerm,
     pub index: RaftLogIndex,
 }
 
 impl_codec!(
     struct LogCommit {
-        id: u64,
+        term: RaftTerm,
         index: RaftLogIndex,
     }
 );
@@ -343,3 +434,17 @@ pub struct UncommittedLog {
     pub ack_count: u64,
     pub ack_expect: u64,
 }
+
+pub struct RaftSnapshot {
+    pub term: RaftTerm,
+    pub index: RaftLogIndex,
+    pub data: NodeSnapshot,
+}
+
+impl_codec!(
+    struct RaftSnapshot {
+        term: RaftTerm,
+        index: RaftLogIndex,
+        data: NodeSnapshot,
+    }
+);

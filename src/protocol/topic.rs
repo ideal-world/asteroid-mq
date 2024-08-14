@@ -20,12 +20,13 @@ use bytes::Bytes;
 use chrono::Utc;
 use config::TopicConfig;
 use crossbeam::sync::ShardedLock;
-use durable_message::{DurabilityService, DurableMessageQuery};
+use durable_message::{DurabilityService, DurableMessage, DurableMessageQuery};
 use hold_message::{HoldMessage, MessagePollContext, MessageQueue};
 use tracing::instrument;
 use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException, WaitAckHandle};
 
 use crate::{
+    impl_codec,
     protocol::endpoint::{CastMessage, LocalEndpointInner},
     TimestampSec,
 };
@@ -34,7 +35,7 @@ use super::{
     codec::CodecType,
     endpoint::{
         EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint, LocalEndpointRef,
-        Message,
+        Message, MessageId,
     },
     interest::{Interest, InterestMap, Subject},
     node::{
@@ -134,12 +135,12 @@ impl TopicInner {
             }
         }
     }
-    pub(crate) fn ep_online(&self, ep_online: EndpointOnline, source: NodeId) {
+    pub(crate) fn ep_online(&self, ep_online: EndpointOnline) {
         let mut routing_wg = self.ep_routing_table.write().unwrap();
         let mut interest_wg = self.ep_interest_map.write().unwrap();
         let mut active_wg = self.ep_latest_active.write().unwrap();
         active_wg.insert(ep_online.endpoint, TimestampSec::now());
-        routing_wg.insert(ep_online.endpoint, source);
+        routing_wg.insert(ep_online.endpoint, ep_online.host);
         for interest in &ep_online.interests {
             interest_wg.insert(interest.clone(), ep_online.endpoint);
         }
@@ -198,6 +199,10 @@ impl TopicInner {
     }
 }
 impl Topic {
+    pub fn wait_ack(&self, message_id: MessageId) -> WaitAckHandle {
+        let queue = self.queue.read().unwrap();
+        queue.wait_ack(message_id)
+    }
     pub fn reference(&self) -> TopicRef {
         TopicRef {
             node: self.node.clone(),
@@ -344,16 +349,11 @@ impl Topic {
     }
 
     #[instrument(skip(self, message), fields(node_id=?self.node.id(), topic_code=?self.config))]
-    pub(crate) fn hold_new_message(&self, message: Message) -> WaitAckHandle {
+    pub(crate) fn hold_new_message(&self, message: Message) {
         let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
-        let (result_report, result_recv) = flume::bounded(1);
         let hold_message = HoldMessage {
             message: message.clone(),
-            wait_ack: WaitAck::new(
-                message.ack_kind(),
-                ep_collect.clone(),
-                result_report.clone(),
-            ),
+            wait_ack: WaitAck::new(message.ack_kind(), ep_collect.clone()),
         };
         {
             let mut queue = self.queue.write().unwrap();
@@ -364,18 +364,18 @@ impl Topic {
                 if waiting_size >= size {
                     match overflow_config.policy {
                         config::OverflowPolicy::RejectNew => {
-                            result_report
-                                .send(Err(WaitAckError::exception(
-                                    WaitAckErrorException::Overflow,
-                                )))
-                                .expect("channel just created");
-                            return message.create_wait_handle(result_recv);
+                            // result_report
+                            //     .send(Err(WaitAckError::exception(
+                            //         WaitAckErrorException::Overflow,
+                            //     )))
+                            //     .expect("channel just created");
+                            // return message.create_wait_handle(result_recv);
                         }
                         config::OverflowPolicy::DropOld => {
                             let old = queue.pop().expect("queue at least one element");
-                            let _ = old.wait_ack.reporter.send(Err(WaitAckError::exception(
-                                WaitAckErrorException::Overflow,
-                            )));
+                            // let _ = old.wait_ack.reporter.send(Err(WaitAckError::exception(
+                            //     WaitAckErrorException::Overflow,
+                            // )));
                         }
                     }
                 }
@@ -387,7 +387,6 @@ impl Topic {
             queue.poll_message(message.id(), &MessagePollContext { topic: self });
         }
         tracing::debug!(?ep_collect, "hold new message");
-        return message.create_wait_handle(result_recv);
     }
 }
 
@@ -417,7 +416,65 @@ pub struct TopicInner {
     pub(crate) durability_service: Option<DurabilityService>,
 }
 
+pub struct TopicSnapshot {
+    pub ep_routing_table: HashMap<EndpointAddr, NodeId>,
+    pub ep_interest_map: HashMap<EndpointAddr, HashSet<Interest>>,
+    pub ep_latest_active: HashMap<EndpointAddr, TimestampSec>,
+    pub queue: Vec<DurableMessage>,
+}
+
+impl_codec!(
+    struct TopicSnapshot {
+        ep_routing_table: HashMap<EndpointAddr, NodeId>,
+        ep_interest_map: HashMap<EndpointAddr, HashSet<Interest>>,
+        ep_latest_active: HashMap<EndpointAddr, TimestampSec>,
+        queue: Vec<DurableMessage>,
+    }
+);
+impl Topic {
+    pub fn apply_snapshot(&self, snapshot: TopicSnapshot) {
+        let mut ep_routing_table = self.ep_routing_table.write().unwrap();
+        let mut ep_interest_map = self.ep_interest_map.write().unwrap();
+        let mut ep_latest_active = self.ep_latest_active.write().unwrap();
+        let mut queue = self.queue.write().unwrap();
+        *ep_routing_table = snapshot.ep_routing_table;
+        *ep_interest_map = InterestMap::from_raw(snapshot.ep_interest_map);
+        *ep_latest_active = snapshot.ep_latest_active;
+        let poll_context = MessagePollContext { topic: self };
+        for message in snapshot.queue {
+            let id = message.message.id();
+            if queue.hold_messages.contains_key(&id) {
+                for (from, ack) in message.status {
+                    queue.set_ack(&id, from, ack)
+                }
+                queue.poll_message(id, &poll_context);
+            } else {
+                queue.push(HoldMessage::from_durable(message));
+            }
+        }
+    }
+}
 impl TopicInner {
+    pub fn snapshot(&self) -> TopicSnapshot {
+        let ep_routing_table = self.ep_routing_table.read().unwrap().clone();
+        let ep_interest_map = self.ep_interest_map.read().unwrap().raw.clone();
+        let ep_latest_active = self.ep_latest_active.read().unwrap().clone();
+        let queue = self
+            .queue
+            .read()
+            .unwrap()
+            .hold_messages
+            .values()
+            .map(|m| m.as_durable())
+            .collect();
+        TopicSnapshot {
+            ep_routing_table,
+            ep_interest_map,
+            ep_latest_active,
+            queue,
+        }
+    }
+
     pub fn new<C: Into<TopicConfig>>(config: C) -> Self {
         const DEFAULT_CAPACITY: usize = 128;
         let config: TopicConfig = config.into();

@@ -15,7 +15,6 @@ pub struct WaitAck {
     pub expect: MessageAckExpectKind,
     pub status: RwLock<HashMap<EndpointAddr, MessageStatusKind>>,
     pub timeout: Option<Instant>,
-    pub reporter: flume::Sender<Result<WaitAckSuccess, WaitAckError>>,
 }
 
 #[derive(Debug)]
@@ -50,7 +49,6 @@ impl WaitAck {
     pub fn new(
         expect: MessageAckExpectKind,
         ep_list: HashSet<EndpointAddr>,
-        reporter: flume::Sender<Result<WaitAckSuccess, WaitAckError>>,
     ) -> Self {
         let status = HashMap::<EndpointAddr, MessageStatusKind>::from_iter(
             ep_list.into_iter().map(|ep| (ep, MessageStatusKind::Unsent)),
@@ -59,7 +57,6 @@ impl WaitAck {
             status: status.into(),
             timeout: None,
             expect,
-            reporter,
         }
     }
 }

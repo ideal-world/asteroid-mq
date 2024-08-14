@@ -20,7 +20,7 @@ use crate::{
 
 use super::{
     durable_message::DurableMessage,
-    wait_ack::{WaitAck, WaitAckError},
+    wait_ack::{WaitAck, WaitAckError, WaitAckHandle},
     Topic,
 };
 #[derive(Debug)]
@@ -35,6 +35,17 @@ impl HoldMessage {
             message: self.message.clone(),
             status: self.wait_ack.status.read().unwrap().clone(),
             time: Utc::now(),
+        }
+    }
+    pub(crate) fn from_durable(durable: DurableMessage) -> Self {
+        let wait_ack = WaitAck {
+            expect: durable.message.ack_kind(),
+            status: durable.status.into(),
+            timeout: None,
+        };
+        Self {
+            message: durable.message,
+            wait_ack,
         }
     }
     pub(crate) fn send_unsent(&self, context: &MessagePollContext) {
@@ -79,23 +90,27 @@ impl HoldMessage {
                 .all(|status| status.is_resolved(self.wait_ack.expect)),
         }
     }
-    pub(crate) fn resolve(self) {
+    pub(crate) fn resolve(self) -> Result<WaitAckSuccess, WaitAckError> {
         tracing::trace!("resolved: {self:?}");
         let wait_ack = self.wait_ack;
         let status = wait_ack.status.into_inner().unwrap();
         if status.iter().any(|(_, ack)| ack.is_failed()) {
-            let _ = wait_ack.reporter.send(Err(WaitAckError {
+            Err(WaitAckError {
                 status,
                 exception: None,
-            }));
+            })
         } else {
-            let _ = wait_ack.reporter.send(Ok(WaitAckSuccess { status }));
+            Ok(WaitAckSuccess { status })
         }
     }
 }
 
 pub(crate) struct MessagePollContext<'t> {
     pub(crate) topic: &'t Topic,
+}
+
+pub enum MessageContainer {
+    Durable(),
 }
 
 #[derive(Debug)]
@@ -105,6 +120,8 @@ pub(crate) struct MessageQueue {
     pub(crate) time_id: BTreeSet<Timed<MessageId>>,
     pub(crate) id_time: HashMap<MessageId, DateTime<Utc>>,
     pub(crate) resolved: RwLock<HashSet<MessageId>>,
+    pub(crate) waiting:
+        RwLock<HashMap<MessageId, flume::Sender<Result<WaitAckSuccess, WaitAckError>>>>,
     pub(crate) size: usize,
 }
 
@@ -117,6 +134,7 @@ impl MessageQueue {
             resolved: RwLock::new(HashSet::with_capacity(capacity)),
             id_time: HashMap::with_capacity(capacity),
             size: 0,
+            waiting: RwLock::default(),
         }
     }
     pub(crate) fn push(&mut self, message: HoldMessage) {
@@ -153,11 +171,10 @@ impl MessageQueue {
             None
         }
     }
-    pub(crate) fn set_ack(&self, ack: &MessageAck) {
-        tracing::trace!("set ack: {ack:?}");
-        if let Some(hm) = self.hold_messages.get(&ack.ack_to) {
+    pub(crate) fn set_ack(&self, ack_to: &MessageId, from: EndpointAddr, kind: MessageStatusKind) {
+        if let Some(hm) = self.hold_messages.get(ack_to) {
             let mut wg = hm.wait_ack.status.write().unwrap();
-            wg.insert(ack.from, ack.kind);
+            wg.insert(from, kind);
         }
     }
     // poll with resolved cache
@@ -242,15 +259,36 @@ impl MessageQueue {
         tracing::trace!(blocking = self.blocking, "flushing");
         if self.blocking {
             while let Some(m) = self.blocking_pop(context) {
-                m.resolve();
+                let id = m.message.id();
+                let result = m.resolve();
+                let wait = self.waiting.get_mut().unwrap();
+                if let Some(reporter) = wait.remove(&id) {
+                    let _ = reporter.send(result);
+                }
             }
         } else {
             for id in self.swap_out_resolved() {
                 if let Some(m) = self.remove(id) {
-                    m.resolve()
+                    let result = m.resolve();
+                    let wait = self.waiting.get_mut().unwrap();
+                    if let Some(reporter) = wait.remove(&id) {
+                        let _ = reporter.send(result);
+                    }
                 }
             }
         }
+    }
+    pub(crate) fn wait_ack(&self, message_id: MessageId) -> WaitAckHandle {
+        let (result_report, result_recv) = flume::bounded(1);
+        let handle = WaitAckHandle {
+            message_id,
+            result: result_recv.into_recv_async(),
+        };
+        self.waiting
+            .write()
+            .unwrap()
+            .insert(message_id, result_report);
+        handle
     }
 }
 
@@ -258,7 +296,7 @@ impl Topic {
     pub(crate) fn local_ack(&self, ack: MessageAck) {
         let poll_result = {
             let rg = self.queue.read().unwrap();
-            rg.set_ack(&ack);
+            rg.set_ack(&ack.ack_to, ack.from, ack.kind);
             rg.poll_message(ack.ack_to, &MessagePollContext { topic: self })
         };
         if let Some(Poll::Ready(())) = poll_result {

@@ -103,7 +103,6 @@ impl CodecType for () {
 impl CodecType for Bytes {
     fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
         let (size, bytes) = u32::decode(bytes)?;
-        tracing::debug!("decoding Bytes: size={}, rest={bytes:?}", size);
         if bytes.len() < size as usize {
             return Err(DecodeError::new::<Self>("too short payload: expect Bytes"));
         }
@@ -264,7 +263,7 @@ impl<K: CodecType + std::hash::Hash + Eq + Ord, V: CodecType> CodecType for BTre
     }
 }
 
-impl<K: CodecType + std::hash::Hash + Eq + Ord> CodecType for HashSet<K> {
+impl<K: CodecType + std::hash::Hash + Eq> CodecType for HashSet<K> {
     fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
         let (size, mut bytes) = u32::decode(bytes)?;
         let mut set = HashSet::new();

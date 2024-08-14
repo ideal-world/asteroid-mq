@@ -13,6 +13,14 @@ pub struct DurableMessage {
     pub time: DateTime<Utc>,
 }
 
+
+impl_codec!(
+    struct DurableMessage {
+        message: Message,
+        status: HashMap<EndpointAddr, MessageStatusKind>,
+        time: DateTime<Utc>,
+    }
+);
 #[derive(Debug, Clone)]
 pub struct DurableMessageQuery {
     limit: u32,

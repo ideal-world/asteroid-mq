@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ops::Deref, sync::Arc};
+use std::{borrow::Cow, ops::Deref, sync::Arc, time::Instant};
 
 use tokio::task::JoinHandle;
 use tracing::warn;
@@ -8,8 +8,8 @@ use crate::protocol::{
     node::{
         event::{N2NPayloadKind, N2nAuth},
         raft::{
-            FollowerState, Heartbeat, LeaderState, LogAck, LogAppend, LogCommit, LogReplicate,
-            RaftInfo, RaftRole, RequestVote, Vote,
+            FollowerState, Heartbeat, IndexedLog, LeaderState, LogAck, LogAppend, LogCommit,
+            LogEntry, LogReplicate, RaftInfo, RaftRole, RaftSnapshot, RequestVote, Vote,
         },
     },
 };
@@ -129,20 +129,45 @@ impl N2NConnectionInstance {
 
         let (outbound_tx, outbound_rx) = flume::bounded::<N2nPacket>(1024);
         let task = if node.is_cluster() && auth_event.info.kind.is_cluster() {
-            if auth_event.auth.cluster_id != node.auth.cluster_id {
+            if auth_event.auth.cluster_id != node.auth.read().unwrap().cluster_id {
                 return Err(N2NConnectionError::new(
                     N2NConnectionErrorKind::Protocol,
                     "cluster id mismatch",
                 ));
             }
             const HB_DURATION: std::time::Duration = std::time::Duration::from_secs(1);
+            {
+                let state = node.raft_state_unwrap().read().unwrap();
+                if state.role.is_leader() {
+                    let term = node.raft_state_unwrap().read().unwrap().term;
+                    outbound_tx
+                        .send(N2nPacket::raft_heartbeat(Heartbeat { term }))
+                        .map_err(|_| {
+                            N2NConnectionError::new(
+                                N2NConnectionErrorKind::Closed,
+                                "connection closed when send the first heartbeat",
+                            )
+                        })?;
+                    outbound_tx
+                        .send(N2nPacket::raft_snapshot(RaftSnapshot {
+                            term: state.term,
+                            index: state.index,
+                            data: node.snapshot(),
+                        }))
+                        .map_err(|_| {
+                            N2NConnectionError::new(
+                                N2NConnectionErrorKind::Closed,
+                                "connection closed when send the first heartbeat",
+                            )
+                        })?;
+                }
+            }
+
             enum PollEvent {
                 PacketIn(N2nPacket),
                 PacketOut(N2nPacket),
-                HbTimeout,
             }
             let internal_outbound_tx = outbound_tx.clone();
-            let (hb_timeout_report, hb_timeout_recv) = flume::bounded::<()>(1);
             let task = async move {
                 loop {
                     let event = futures_util::select! {
@@ -167,225 +192,272 @@ impl N2NConnectionInstance {
                             };
                             PollEvent::PacketOut(packet)
                         }
-                        hb_timeout = hb_timeout_recv.recv_async().fuse() => {
-                            PollEvent::HbTimeout
-                        }
                     };
                     match event {
-                        PollEvent::PacketIn(packet) => match packet.kind() {
-                            N2NPayloadKind::Auth => {
-                                // ignore
-                            }
-                            N2NPayloadKind::Event => {}
-                            N2NPayloadKind::Heartbeat => {
-                                let heartbeat = Heartbeat::decode_from_bytes(packet.payload)
-                                    .map_err(|e| {
-                                        N2NConnectionError::new(
-                                            N2NConnectionErrorKind::Decode(e),
-                                            "decode heartbeat",
-                                        )
-                                    })?;
-                                let mut self_state = node.raft_state_unwrap().write().unwrap();
-                                let self_term = self_state.term;
-                                if self_term < heartbeat.term {
-                                    // follow this leader
-                                    self_state.term = heartbeat.term;
-                                    self_state.role =
-                                        RaftRole::Follower(FollowerState::from_leader(
-                                            peer_id,
-                                            HB_DURATION * 2,
-                                            hb_timeout_report.clone(),
-                                        ));
+                        PollEvent::PacketIn(packet) => {
+                            tracing::debug!(?packet.header, "received packet");
+                            match packet.kind() {
+                                N2NPayloadKind::Auth => {
+                                    // ignore
                                 }
-                            }
-                            N2NPayloadKind::RequestVote => {
-                                let request_vote = RequestVote::decode_from_bytes(packet.payload)
-                                    .map_err(|e| {
-                                    N2NConnectionError::new(
-                                        N2NConnectionErrorKind::Decode(e),
-                                        "decode request vote",
-                                    )
-                                })?;
-                                let mut self_state = node.raft_state_unwrap().write().unwrap();
-                                let vote_this = match &mut self_state.role {
-                                    RaftRole::Leader(_) => false,
-                                    RaftRole::Follower(_) => !self_state
-                                        .voted_for
-                                        .is_some_and(|(_, term)| term >= request_vote.term),
-                                    RaftRole::Candidate(_) => {
-                                        request_vote.index > self_state.index
-                                            && request_vote.term >= self_state.term
-                                    }
-                                };
-                                if vote_this {
-                                    let result =
-                                        internal_outbound_tx.send(N2nPacket::raft_vote(Vote {
-                                            term: request_vote.term,
-                                        }));
-                                    if result.is_ok() {
-                                        self_state.voted_for = Some((peer_id, request_vote.term));
-                                    }
-                                }
-                            }
-                            N2NPayloadKind::Vote => {
-                                let vote =
-                                    Vote::decode_from_bytes(packet.payload).map_err(|e| {
-                                        N2NConnectionError::new(
-                                            N2NConnectionErrorKind::Decode(e),
-                                            "decode vote",
-                                        )
-                                    })?;
-                                let mut self_state = node.raft_state_unwrap().write().unwrap();
-                                if self_state.term == vote.term {
-                                    if let RaftRole::Candidate(candidate_state) =
-                                        &mut self_state.role
-                                    {
-                                        candidate_state.votes += 1;
-                                        if candidate_state.votes > node.cluster_size() / 2 {
-                                            self_state.role = RaftRole::Leader(LeaderState::new(
-                                                internal_outbound_tx.clone(),
-                                                HB_DURATION,
-                                                self_state.term,
+                                N2NPayloadKind::Event => {}
+                                N2NPayloadKind::Heartbeat => {
+                                    let heartbeat = Heartbeat::decode_from_bytes(packet.payload)
+                                        .map_err(|e| {
+                                            N2NConnectionError::new(
+                                                N2NConnectionErrorKind::Decode(e),
+                                                "decode heartbeat",
+                                            )
+                                        })?;
+                                    let mut self_state = node.raft_state_unwrap().write().unwrap();
+
+                                    let self_term = self_state.term;
+                                    match self_term.cmp(&heartbeat.term) {
+                                        std::cmp::Ordering::Less => {
+                                            // follow this leader
+                                            self_state.term = heartbeat.term;
+                                            let timeout_reporter =
+                                                self_state.timeout_reporter.clone();
+                                            self_state.set_role(RaftRole::Follower(
+                                                FollowerState::from_new_leader(
+                                                    peer_id,
+                                                    HB_DURATION * 2,
+                                                    timeout_reporter.clone(),
+                                                ),
                                             ));
                                         }
-                                    };
+                                        std::cmp::Ordering::Equal => {
+                                            match &mut self_state.role {
+                                                RaftRole::Leader(_) => {
+                                                    // this should not happen
+                                                }
+                                                RaftRole::Follower(ref mut f) => {
+                                                    f.record_hb(Instant::now(), HB_DURATION * 2)
+                                                }
+                                                RaftRole::Candidate(_) => {
+                                                    let timeout_reporter =
+                                                        self_state.timeout_reporter.clone();
+                                                    self_state.set_role(RaftRole::Follower(
+                                                        FollowerState::from_new_leader(
+                                                            peer_id,
+                                                            HB_DURATION * 2,
+                                                            timeout_reporter.clone(),
+                                                        ),
+                                                    ))
+                                                }
+                                            }
+                                        }
+                                        std::cmp::Ordering::Greater => {
+                                            // ignore
+                                        }
+                                    }
                                 }
-                            }
-                            N2NPayloadKind::LogAppend => {
-                                let log_append = LogAppend::decode_from_bytes(packet.payload)
+                                N2NPayloadKind::RequestVote => {
+                                    let request_vote = RequestVote::decode_from_bytes(
+                                        packet.payload,
+                                    )
                                     .map_err(|e| {
+                                        N2NConnectionError::new(
+                                            N2NConnectionErrorKind::Decode(e),
+                                            "decode request vote",
+                                        )
+                                    })?;
+                                    let mut self_state = node.raft_state_unwrap().write().unwrap();
+                                    let vote_this = match &mut self_state.role {
+                                        RaftRole::Leader(_) => false,
+                                        RaftRole::Follower(_) => !self_state
+                                            .voted_for
+                                            .is_some_and(|(_, term)| term >= request_vote.term),
+                                        RaftRole::Candidate(_) => {
+                                            request_vote.index >= self_state.index
+                                                && request_vote.term >= self_state.term
+                                        }
+                                    };
+                                    if vote_this {
+                                        let result =
+                                            internal_outbound_tx.send(N2nPacket::raft_vote(Vote {
+                                                term: request_vote.term,
+                                            }));
+                                        if result.is_ok() {
+                                            self_state.voted_for =
+                                                Some((peer_id, request_vote.term));
+                                        }
+                                    }
+                                }
+                                N2NPayloadKind::Vote => {
+                                    let vote =
+                                        Vote::decode_from_bytes(packet.payload).map_err(|e| {
+                                            N2NConnectionError::new(
+                                                N2NConnectionErrorKind::Decode(e),
+                                                "decode vote",
+                                            )
+                                        })?;
+                                    let mut self_state = node.raft_state_unwrap().write().unwrap();
+                                    if self_state.term == vote.term {
+                                        if let RaftRole::Candidate(candidate_state) =
+                                            &mut self_state.role
+                                        {
+                                            candidate_state.votes += 1;
+                                            if candidate_state.votes >= node.cluster_size() / 2 {
+                                                let term = self_state.term;
+                                                self_state.set_role(RaftRole::Leader(
+                                                    LeaderState::new(
+                                                        node.node_ref(),
+                                                        HB_DURATION,
+                                                        term,
+                                                    ),
+                                                ))
+                                            }
+                                        };
+                                    }
+                                }
+                                N2NPayloadKind::LogAppend => {
+                                    let log_append = LogAppend::decode_from_bytes(packet.payload)
+                                        .map_err(|e| {
                                         N2NConnectionError::new(
                                             N2NConnectionErrorKind::Decode(e),
                                             "decode log append",
                                         )
                                     })?;
-                                let mut state = node.raft_state_unwrap().write().unwrap();
-                                let term = state.term;
-                                match &mut state.role {
-                                    RaftRole::Leader(ls) => {
+                                    let mut state = node.raft_state_unwrap().write().unwrap();
+                                    let term = state.term;
+                                    let new_index = if state.role.is_leader() {
                                         if term != log_append.term {
                                             continue;
                                         }
-                                        ls.logs.insert(
-                                            log_append.id,
-                                            log_append.uncommitted(node.cluster_size()),
+                                        let new_index = state.index.inc();
+                                        state.pending_logs.push_log(IndexedLog {
+                                            index: new_index,
+                                            entry: log_append.entry.clone(),
+                                        });
+                                        new_index
+                                    } else {
+                                        continue;
+                                    };
+                                    if let RaftRole::Leader(ref mut ls) = state.role {
+                                        ls.ack_map.insert(new_index, 0);
+                                        node.cluster_wise_broadcast_packet(
+                                            N2nPacket::log_replicate(
+                                                log_append.replicate(new_index),
+                                            ),
                                         );
-
-                                        for peer in node.known_peer_cluster() {
-                                            if let Some(conn) = node.get_connection(peer) {
-                                                let _result =
-                                                    conn.outbound.send(N2nPacket::log_replicate(
-                                                        log_append.replicate(),
-                                                    ));
-                                            }
-                                        }
-                                    }
-                                    RaftRole::Follower(_) => {
-                                        // ignore
-                                    }
-                                    RaftRole::Candidate(_) => {
-                                        // ignore
                                     }
                                 }
-                            }
-                            N2NPayloadKind::LogReplicate => {
-                                let log_replicate = LogReplicate::decode_from_bytes(packet.payload)
+                                N2NPayloadKind::LogReplicate => {
+                                    let log_replicate = LogReplicate::decode_from_bytes(
+                                        packet.payload,
+                                    )
                                     .map_err(|e| {
                                         N2NConnectionError::new(
                                             N2NConnectionErrorKind::Decode(e),
                                             "decode LogReplicate",
                                         )
                                     })?;
-                                let mut state = node.raft_state_unwrap().write().unwrap();
-                                match &mut state.role {
-                                    RaftRole::Follower(f) => {
-                                        f.logs.insert(log_replicate.id, log_replicate);
+                                    let mut state = node.raft_state_unwrap().write().unwrap();
+                                    if !state.role.is_follower() && state.term <= log_replicate.term
+                                    {
+                                        let new_role = FollowerState::from_new_leader(
+                                            peer_id,
+                                            HB_DURATION * 2,
+                                            state.timeout_reporter.clone(),
+                                        );
+                                        state.set_role(RaftRole::Follower(new_role));
                                     }
-                                    _ => {
-                                        if state.term <= log_replicate.term {
-                                            let mut new_role = FollowerState::from_leader(
-                                                peer_id,
-                                                HB_DURATION * 2,
-                                                hb_timeout_report.clone(),
-                                            );
-                                            new_role.logs.insert(log_replicate.id, log_replicate);
-                                            state.role = RaftRole::Follower(new_role)
-                                        }
+                                    if state.role.is_follower() {
+                                        state.pending_logs.push_log(IndexedLog {
+                                            index: log_replicate.index,
+                                            entry: log_replicate.entry,
+                                        });
                                     }
                                 }
-                            }
-                            N2NPayloadKind::LogAck => {
-                                let log_ack =
-                                    LogAck::decode_from_bytes(packet.payload).map_err(|e| {
-                                        N2NConnectionError::new(
-                                            N2NConnectionErrorKind::Decode(e),
-                                            "decode LogAck",
-                                        )
-                                    })?;
-                                let mut state = node.raft_state_unwrap().write().unwrap();
-                                match &mut state.role {
-                                    RaftRole::Leader(l) => {
-                                        let is_yield =
-                                            if let Some(log) = l.logs.get_mut(&log_ack.id) {
-                                                log.ack_count += 1;
-                                                log.ack_count > log.ack_expect / 2
+                                N2NPayloadKind::LogAck => {
+                                    let log_ack = LogAck::decode_from_bytes(packet.payload)
+                                        .map_err(|e| {
+                                            N2NConnectionError::new(
+                                                N2NConnectionErrorKind::Decode(e),
+                                                "decode LogAck",
+                                            )
+                                        })?;
+                                    let mut state = node.raft_state_unwrap().write().unwrap();
+                                    let cluster_size = node.cluster_size();
+                                    match &mut state.role {
+                                        RaftRole::Leader(l) => {
+                                            let is_yield = if let Some(count) =
+                                                l.ack_map.get_mut(&log_ack.index)
+                                            {
+                                                *count += 1;
+                                                *count > cluster_size / 2
                                             } else {
                                                 false
                                             };
-                                        if is_yield {
-                                            // commit log
-                                            l.logs.remove(&log_ack.id);
-                                            for peer in node.known_peer_cluster() {
-                                                if let Some(conn) = node.get_connection(peer) {
-                                                    let index = state.index.inc();
-                                                    let _result = conn.outbound.send(
-                                                        N2nPacket::log_commit(LogCommit {
-                                                            id: log_ack.id,
-                                                            index,
-                                                        }),
-                                                    );
+                                            if is_yield {
+                                                state.pending_logs.resolve(log_ack.index);
+                                                while let Some(log) = state.pending_logs.blocking_pop_log() {
+                                                    node.apply_log(log.entry);
+                                                    node.cluster_wise_broadcast_packet(N2nPacket::log_commit(LogCommit {
+                                                        term: log_ack.term,
+                                                        index: log_ack.index,
+                                                    }))
                                                 }
                                             }
                                         }
-                                    }
-                                    _ => {
-                                        // ignore
+                                        _ => {
+                                            // ignore
+                                        }
                                     }
                                 }
-                            }
-                            N2NPayloadKind::LogCommit => {
-                                let log_commit = LogCommit::decode_from_bytes(packet.payload)
-                                    .map_err(|e| {
+                                N2NPayloadKind::LogCommit => {
+                                    let log_commit = LogCommit::decode_from_bytes(packet.payload)
+                                        .map_err(|e| {
                                         N2NConnectionError::new(
                                             N2NConnectionErrorKind::Decode(e),
                                             "decode LogCommit",
                                         )
                                     })?;
-                                let mut state = node.raft_state_unwrap().write().unwrap();
-                                match &mut state.role {
-                                    RaftRole::Follower(f) => {
-                                        if let Some(replicate) = f.logs.remove(&log_commit.id) {
-                                            todo!("commit")
+                                    let mut state = node.raft_state_unwrap().write().unwrap();
+                                    if log_commit.index <= state.index {
+                                        todo!("request sync");
+                                        continue;
+                                    }
+                                    if state.role.is_follower() {
+                                        state.pending_logs.resolve(log_commit.index);
+                                        while let Some(log) = state.pending_logs.blocking_pop_log() {
+                                            node.apply_log(log.entry);
                                         }
                                     }
-                                    _ => {
-                                        //ignore
+                                }
+                                N2NPayloadKind::Snapshot => {
+                                    let snapshot = RaftSnapshot::decode_from_bytes(packet.payload)
+                                        .map_err(|e| {
+                                            N2NConnectionError::new(
+                                                N2NConnectionErrorKind::Decode(e),
+                                                "decode RaftSnapshot",
+                                            )
+                                        })?;
+                                    let mut state = node.raft_state_unwrap().write().unwrap();
+                                    match &mut state.role {
+                                        RaftRole::Follower(_) => {
+                                            if state.term == snapshot.term {
+                                                state.index = snapshot.index;
+                                                node.apply_snapshot(snapshot.data);
+                                            }
+                                        }
+                                        _ => {
+                                            // ignore
+                                        }
                                     }
                                 }
+                                N2NPayloadKind::Unreachable => {
+                                    // handle unreachable
+                                }
+                                N2NPayloadKind::Unknown => {
+                                    warn!("received unknown packet from cluster node, ignore it");
+                                }
                             }
-                            N2NPayloadKind::Unreachable => {
-                                // handle unreachable
-                            }
-                            N2NPayloadKind::Unknown => {
-                                warn!("received unknown packet from cluster node, ignore it");
-                            }
-                        },
+                        }
                         PollEvent::PacketOut(packet) => {
                             sink.send(packet).await?;
                         }
-                        PollEvent::HbTimeout => {
-                            // todo : become a candidate
-                        },
                     }
                 }
 
@@ -403,8 +475,14 @@ impl N2NConnectionInstance {
             let peer_id = auth_event.info.id;
             tokio::spawn(async move {
                 let result = task.await;
+                let node = attached_node.upgrade();
+                if let Err(e) = result {
+                    if node.is_some() {
+                        warn!(?e, "connection task failed");
+                    }
+                }
                 alive_flag.store(false, std::sync::atomic::Ordering::Relaxed);
-                if let Some(node) = attached_node.upgrade() {
+                if let Some(node) = node {
                     node.remove_connection(peer_id);
                 }
             })

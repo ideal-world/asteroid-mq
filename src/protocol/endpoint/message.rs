@@ -5,7 +5,7 @@ use crate::{
     protocol::{
         codec::CodecType,
         interest::Subject,
-        topic::{durable_message::MessageDurabilityConfig, hold_message::HoldMessage, TopicCode},
+        topic::{durable_message::MessageDurabilityConfig,  TopicCode},
     },
 };
 use bytes::{BufMut, Bytes};

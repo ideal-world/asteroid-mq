@@ -6,6 +6,7 @@ use super::{
     codec::CodecType,
     node::{
         event::{N2nEvent, N2nEventKind},
+        raft::LogEntry,
         Node, NodeId, NodeRef,
     },
     topic::{wait_ack::WaitAckHandle, Topic, TopicCode, TopicRef},
@@ -82,12 +83,17 @@ impl LocalEndpoint {
             inner: Arc::downgrade(&self.inner),
         }
     }
-    pub fn send_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
+    pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, ()> {
         if let Some(topic) = self.topic() {
             if topic.node.is_edge() {
                 todo!("send to edge")
             } else {
-                Ok(topic.hold_new_message(message))
+                let handle = topic.wait_ack(message.id());
+                topic
+                    .node
+                    .commit_log(LogEntry::delegate_message(message))
+                    .await;
+                Ok(handle)
             }
         } else {
             Err(())

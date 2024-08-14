@@ -38,7 +38,7 @@ use asteroid_mq::protocol::{
 #[tokio::test]
 async fn test_nodes() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::DEBUG)
         .init();
 
     let node_server = Node::default();
@@ -120,7 +120,7 @@ async fn test_nodes() {
                     durability: None,
                 },
                 payload: message.into(),
-            })
+            }).await
             .unwrap();
         handles.push(ack_handle);
     }

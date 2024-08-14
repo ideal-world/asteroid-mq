@@ -120,14 +120,14 @@ pub enum OwnedInterestSegment {
 #[derive(Debug)]
 pub struct InterestMap<T> {
     root: InterestRadixTreeNode<T>,
-    reverse: HashMap<T, HashSet<Interest>>,
+    pub(crate) raw: HashMap<T, HashSet<Interest>>,
 }
 
 impl<T> Default for InterestMap<T> {
     fn default() -> Self {
         Self {
             root: Default::default(),
-            reverse: HashMap::default(),
+            raw: HashMap::default(),
         }
     }
 }
@@ -244,14 +244,25 @@ where
     pub fn new() -> Self {
         Self {
             root: InterestRadixTreeNode::default(),
-            reverse: HashMap::default(),
+            raw: HashMap::default(),
         }
+    }
+    pub fn from_raw(raw: HashMap<T, HashSet<Interest>>) -> Self {
+        let mut map = Self::new();
+        for (value, interests) in raw {
+            for interest in &interests {
+                map.root
+                    .insert_recursive(interest.as_segments(), value.clone());
+            }
+            map.raw.insert(value, interests);
+        }
+        map
     }
 
     pub fn insert(&mut self, interest: Interest, value: T) {
         self.root
             .insert_recursive(interest.as_segments(), value.clone());
-        self.reverse.entry(value).or_default().insert(interest);
+        self.raw.entry(value).or_default().insert(interest);
     }
 
     pub fn find(&self, subject: &Subject) -> HashSet<&T> {
@@ -262,7 +273,7 @@ where
     }
 
     pub fn delete(&mut self, value: &T) {
-        if let Some(interests) = self.reverse.remove(value) {
+        if let Some(interests) = self.raw.remove(value) {
             for interest in interests {
                 let mut path = interest.as_segments();
                 self.root.delete_recursive(&mut path, value);
@@ -271,7 +282,7 @@ where
     }
 
     pub fn interest_of(&self, value: &T) -> Option<&HashSet<Interest>> {
-        self.reverse.get(value)
+        self.raw.get(value)
     }
 }
 
