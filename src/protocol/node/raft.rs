@@ -1,13 +1,21 @@
 use std::{
+    borrow::Cow,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet, VecDeque},
+    future::Future,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 const ELECTION_TIMEOUT: Duration = Duration::from_secs(1);
 use bytes::Bytes;
 
-use crate::{impl_codec, protocol::{codec::CodecType, endpoint::Message}};
+use crate::{
+    impl_codec,
+    protocol::{
+        codec::CodecType,
+        endpoint::{EndpointOnline, Message, SetState},
+    },
+};
 
 use super::{
     event::{N2nEventKind, N2nPacket},
@@ -187,6 +195,7 @@ impl RaftRole {
 #[derive(Debug, Clone)]
 pub struct IndexedLog {
     pub index: RaftLogIndex,
+    pub trace_id: RaftTraceId,
     pub entry: LogEntry,
 }
 impl PartialEq for IndexedLog {
@@ -213,6 +222,7 @@ pub struct PendingLogQueue {
 
 impl PendingLogQueue {
     pub fn resolve(&mut self, index: RaftLogIndex) {
+        tracing::trace!(?index, "log resolved");
         self.resolved.insert(index);
     }
 
@@ -243,10 +253,69 @@ pub struct RaftState {
     pub node_ref: NodeRef,
     pub role: RaftRole,
     pub pending_logs: PendingLogQueue,
+    pub commit_hooks: HashMap<RaftTraceId, flume::Sender<Result<RaftLogIndex, RaftCommitError>>>,
     pub voted_for: Option<(NodeId, RaftTerm)>,
 }
+pub struct RaftCommitError {
+    kind: RaftCommitErrorKind,
+    context: Cow<'static, str>,
+}
+
+impl std::fmt::Debug for RaftCommitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RaftCommitError")
+            .field("kind", &self.kind)
+            .field("context", &self.context)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub enum RaftCommitErrorKind {
+    MissingReporter,
+}
+
+pin_project_lite::pin_project! {
+    pub struct CommitHook {
+        #[pin]
+        recv: flume::r#async::RecvFut<'static, Result<RaftLogIndex, RaftCommitError>>
+    }
+}
+
+impl std::future::Future for CommitHook {
+    type Output = Result<RaftLogIndex, RaftCommitError>;
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.project();
+        this.recv.poll(cx).map(|result| {
+            result.map_err(|_| RaftCommitError {
+                kind: RaftCommitErrorKind::MissingReporter,
+                context: "commit hook receiver dropped".into(),
+            })?
+        })
+    }
+}
+
 impl RaftState {
-    
+    pub fn add_commit_hook(&mut self, trace_id: RaftTraceId) -> CommitHook {
+        let (tx, rx) = flume::bounded(1);
+        let _ = self.commit_hooks.insert(trace_id, tx);
+        CommitHook {
+            recv: rx.into_recv_async(),
+        }
+    }
+    pub fn resolve_commit_hook(&mut self, trace_id: RaftTraceId, index: RaftLogIndex) {
+        if let Some(tx) = self.commit_hooks.remove(&trace_id) {
+            let _ = tx.send(Ok(index));
+        }
+    }
+    pub fn commit(&mut self, indexed: IndexedLog, node: &Node) {
+        node.apply_log(indexed.entry);
+        self.resolve_commit_hook(indexed.trace_id, indexed.index);
+    }
+
     pub fn get_info(&self) -> RaftInfo {
         RaftInfo {
             term: self.term,
@@ -315,12 +384,41 @@ pub struct LogEntry {
     pub payload: Bytes,
 }
 
-
 impl LogEntry {
+    pub fn create_append(self, term: RaftTerm) -> LogAppend {
+        LogAppend::new(self, term)
+    }
+    pub fn create_indexed(self, index: RaftLogIndex) -> IndexedLog {
+        IndexedLog {
+            index,
+            entry: self,
+            trace_id: RaftTraceId::new_snowflake(),
+        }
+    }
+    pub fn create_replicate(self, index: RaftLogIndex, term: RaftTerm) -> LogReplicate {
+        LogReplicate {
+            index,
+            term,
+            entry: self,
+            trace_id: RaftTraceId::new_snowflake(),
+        }
+    }
     pub fn delegate_message(message: Message) -> Self {
         Self {
             kind: N2nEventKind::DelegateMessage,
             payload: message.encode_to_bytes(),
+        }
+    }
+    pub fn ep_online(ep: EndpointOnline) -> Self {
+        Self {
+            kind: N2nEventKind::EpOnline,
+            payload: ep.encode_to_bytes(),
+        }
+    }
+    pub fn set_state(set_state: SetState) -> Self {
+        Self {
+            kind: N2nEventKind::SetState,
+            payload: set_state.encode_to_bytes()
         }
     }
 }
@@ -364,38 +462,109 @@ impl_codec!(
         term: RaftTerm,
     }
 );
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RaftTraceId {
+    pub bytes: [u8; 16],
+}
+impl_codec!(
+    struct RaftTraceId {
+        bytes: [u8; 16],
+    }
+);
+impl std::fmt::Debug for RaftTraceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("RaftTraceId")
+            .field(&crate::util::hex(&self.bytes))
+            .finish()
+    }
+}
 
+impl RaftTraceId {
+    pub fn new_snowflake() -> Self {
+        thread_local! {
+            static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let timestamp = crate::util::timestamp_sec();
+        let counter = COUNTER.with(|c| {
+            let v = c.get();
+            c.set(v.wrapping_add(1));
+            v
+        });
+        let eid = crate::util::executor_digest() as u32;
+        let mut bytes = [0; 16];
+        bytes[0..8].copy_from_slice(&timestamp.to_be_bytes());
+        bytes[8..12].copy_from_slice(&counter.to_be_bytes());
+        bytes[12..16].copy_from_slice(&eid.to_be_bytes());
+        Self { bytes }
+    }
+}
 #[derive(Debug, Clone)]
 pub struct LogAppend {
+    pub trace_id: RaftTraceId,
     pub term: RaftTerm,
     pub entry: LogEntry,
 }
 
 impl LogAppend {
+    pub fn indexed(self, index: RaftLogIndex) -> IndexedLog {
+        IndexedLog {
+            index,
+            trace_id: self.trace_id,
+            entry: self.entry,
+        }
+    }
+    pub fn new(entry: LogEntry, term: RaftTerm) -> Self {
+        Self {
+            trace_id: RaftTraceId::new_snowflake(),
+            term,
+            entry,
+        }
+    }
     pub fn replicate(&self, index: RaftLogIndex) -> LogReplicate {
         LogReplicate {
             index,
             term: self.term,
             entry: self.entry.clone(),
+            trace_id: self.trace_id,
         }
     }
 }
 
 impl_codec!(
     struct LogAppend {
+        trace_id: RaftTraceId,
         term: RaftTerm,
         entry: LogEntry,
     }
 );
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LogReplicate {
+    pub trace_id: RaftTraceId,
     pub index: RaftLogIndex,
     pub term: RaftTerm,
     pub entry: LogEntry,
 }
 
+impl LogReplicate {
+    pub fn indexed(self) -> IndexedLog {
+        IndexedLog {
+            index: self.index,
+            trace_id: self.trace_id,
+            entry: self.entry,
+        }
+    }
+    pub fn ack(&self) -> LogAck {
+        LogAck {
+            trace_id: self.trace_id,
+            term: self.term,
+            index: self.index,
+        }
+    }
+}
+
 impl_codec!(
     struct LogReplicate {
+        trace_id: RaftTraceId,
         index: RaftLogIndex,
         term: RaftTerm,
         entry: LogEntry,
@@ -404,12 +573,14 @@ impl_codec!(
 
 pub struct LogAck {
     pub term: RaftTerm,
+    pub trace_id: RaftTraceId,
     pub index: RaftLogIndex,
 }
 
 impl_codec!(
     struct LogAck {
         term: RaftTerm,
+        trace_id: RaftTraceId,
         index: RaftLogIndex,
     }
 );

@@ -195,7 +195,12 @@ impl N2NConnectionInstance {
                     };
                     match event {
                         PollEvent::PacketIn(packet) => {
-                            tracing::debug!(?packet.header, "received packet");
+                            if packet.header.kind != N2NPayloadKind::Heartbeat {
+                                tracing::debug!(?packet.header, "received packet");
+                                tracing::trace!(?packet.payload, "received packet");
+                            } else {
+                                tracing::trace!(?packet.header, "received heartbeat");
+                            }
                             match packet.kind() {
                                 N2NPayloadKind::Auth => {
                                     // ignore
@@ -326,10 +331,8 @@ impl N2NConnectionInstance {
                                             continue;
                                         }
                                         let new_index = state.index.inc();
-                                        state.pending_logs.push_log(IndexedLog {
-                                            index: new_index,
-                                            entry: log_append.entry.clone(),
-                                        });
+                                        let indexed_log = log_append.clone().indexed(new_index);
+                                        state.pending_logs.push_log(indexed_log);
                                         new_index
                                     } else {
                                         continue;
@@ -364,10 +367,11 @@ impl N2NConnectionInstance {
                                         state.set_role(RaftRole::Follower(new_role));
                                     }
                                     if state.role.is_follower() {
-                                        state.pending_logs.push_log(IndexedLog {
-                                            index: log_replicate.index,
-                                            entry: log_replicate.entry,
-                                        });
+                                        state
+                                            .pending_logs
+                                            .push_log(log_replicate.clone().indexed());
+                                        let log_ack = N2nPacket::log_ack(log_replicate.ack());
+                                        let _ = node.send_packet(log_ack, peer_id);
                                     }
                                 }
                                 N2NPayloadKind::LogAck => {
@@ -386,18 +390,23 @@ impl N2NConnectionInstance {
                                                 l.ack_map.get_mut(&log_ack.index)
                                             {
                                                 *count += 1;
-                                                *count > cluster_size / 2
+                                                *count >= cluster_size / 2
                                             } else {
                                                 false
                                             };
+                                            tracing::debug!(?is_yield, "log ack");
                                             if is_yield {
                                                 state.pending_logs.resolve(log_ack.index);
-                                                while let Some(log) = state.pending_logs.blocking_pop_log() {
-                                                    node.apply_log(log.entry);
-                                                    node.cluster_wise_broadcast_packet(N2nPacket::log_commit(LogCommit {
-                                                        term: log_ack.term,
-                                                        index: log_ack.index,
-                                                    }))
+                                                while let Some(log) =
+                                                    state.pending_logs.blocking_pop_log()
+                                                {
+                                                    state.commit(log, &node);
+                                                    node.cluster_wise_broadcast_packet(
+                                                        N2nPacket::log_commit(LogCommit {
+                                                            term: log_ack.term,
+                                                            index: log_ack.index,
+                                                        }),
+                                                    )
                                                 }
                                             }
                                         }
@@ -421,8 +430,9 @@ impl N2NConnectionInstance {
                                     }
                                     if state.role.is_follower() {
                                         state.pending_logs.resolve(log_commit.index);
-                                        while let Some(log) = state.pending_logs.blocking_pop_log() {
-                                            node.apply_log(log.entry);
+                                        while let Some(log) = state.pending_logs.blocking_pop_log()
+                                        {
+                                            state.commit(log, &node);
                                         }
                                     }
                                 }

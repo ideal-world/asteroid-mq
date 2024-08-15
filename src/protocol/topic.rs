@@ -27,7 +27,10 @@ use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException, WaitAckHandle};
 
 use crate::{
     impl_codec,
-    protocol::endpoint::{CastMessage, LocalEndpointInner},
+    protocol::{
+        endpoint::{CastMessage, LocalEndpointInner},
+        node::raft::{LogAppend, LogEntry},
+    },
     TimestampSec,
 };
 
@@ -210,7 +213,10 @@ impl Topic {
         }
     }
 
-    pub fn create_endpoint(&self, interests: impl IntoIterator<Item = Interest>) -> LocalEndpoint {
+    pub async fn create_endpoint(
+        &self,
+        interests: impl IntoIterator<Item = Interest>,
+    ) -> Result<LocalEndpoint, crate::Error> {
         let channel = flume::unbounded();
         let topic_code = self.code().clone();
         let ep = LocalEndpoint {
@@ -224,48 +230,21 @@ impl Topic {
                 attached_topic: self.reference(),
             }),
         };
+        let _ = self
+            .node
+            .commit_log(LogEntry::ep_online(EndpointOnline {
+                topic_code: topic_code.clone(),
+                endpoint: ep.address,
+                interests: ep.interest.clone(),
+                host: self.node.id(),
+            }))
+            .await
+            .map_err(crate::Error::contextual("create endpoint"))?;
         self.local_endpoints
             .write()
             .unwrap()
             .insert(ep.address, ep.reference());
-        {
-            let mut wg = self.ep_interest_map.write().unwrap();
-
-            for interest in &ep.interest {
-                wg.insert(interest.clone(), ep.address);
-            }
-
-            if self.node.is_edge() {
-                todo!("notify remote cluster node!")
-            }
-        }
-        {
-            let mut wg = self.ep_routing_table.write().unwrap();
-            wg.insert(ep.address, self.node.id());
-        }
-        {
-            let mut wg = self.ep_latest_active.write().unwrap();
-            wg.insert(ep.address, TimestampSec::now());
-        }
-        let payload = EndpointOnline {
-            topic_code: topic_code.clone(),
-            endpoint: ep.address,
-            interests: ep.interest.clone(),
-            host: self.node.id(),
-        }
-        .encode_to_bytes();
-        let peers = self.node.known_peer_cluster();
-        tracing::debug!("notify peers: {peers:?}");
-        for node in peers {
-            let packet = N2nPacket::event(N2nEvent {
-                to: node,
-                trace: self.node.new_trace(),
-                kind: N2nEventKind::EpOnline,
-                payload: payload.clone(),
-            });
-            self.node.send_packet(packet, node);
-        }
-        ep
+        Ok(ep)
     }
     pub fn delete_endpoint(&self, addr: EndpointAddr) {
         {
@@ -296,12 +275,13 @@ impl Topic {
         }
     }
 
-    pub(crate) fn send_out_message(
+    pub(crate) fn dispatch_message(
         &self,
         message: &Message,
         ep_list: impl Iterator<Item = EndpointAddr>,
     ) -> Vec<(EndpointAddr, Result<(), ()>)> {
         let map = self.resolve_node_ep_map(ep_list);
+        tracing::debug!(?map, "dispatch message");
         let mut results = vec![];
         for (node, eps) in map {
             if self.node.is(node) {
@@ -314,34 +294,6 @@ impl Topic {
                             results.push((*ep, Err(())));
                         }
                     }
-                }
-            } else if let Some(next_jump) = self.node.get_next_jump(node) {
-                tracing::trace!(node_id=?node, eps=?eps, "send to remote node");
-                let message_event = self.node.new_cast_message(
-                    node,
-                    CastMessage {
-                        target_eps: eps.clone(),
-                        message: message.clone(),
-                    },
-                );
-                match self
-                    .node
-                    .send_packet(N2nPacket::event(message_event), next_jump)
-                {
-                    Ok(_) => {
-                        for ep in eps {
-                            results.push((ep, Ok(())));
-                        }
-                    }
-                    Err(_) => {
-                        for ep in eps {
-                            results.push((ep, Err(())));
-                        }
-                    }
-                }
-            } else {
-                for ep in eps {
-                    results.push((ep, Err(())));
                 }
             }
         }
@@ -445,7 +397,7 @@ impl Topic {
             let id = message.message.id();
             if queue.hold_messages.contains_key(&id) {
                 for (from, ack) in message.status {
-                    queue.set_ack(&id, from, ack)
+                    queue.update_ack(&id, from, ack)
                 }
                 queue.poll_message(id, &poll_context);
             } else {

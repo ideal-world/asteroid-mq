@@ -16,6 +16,7 @@ use super::EndpointAddr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageStatusKind {
+    Sending = 0xfe,
     Unsent = 0xff,
     Sent = 0x00,
     Received = 0x01,
@@ -38,6 +39,7 @@ impl_codec! {
 }
 impl_codec! {
     enum MessageStatusKind {
+        Sending = 0xfe,
         Unsent = 0xff,
         Sent = 0x00,
         Received = 0x01,

@@ -33,7 +33,7 @@ macro_rules! impl_codec {
                 let (val, bytes) = u8::decode(bytes)?;
                 let val = match val {
                     $($val => <$ImplTy>::$Variant,)*
-                    _ => return Err($crate::protocol::codec::DecodeError::new::<Self>("invalid kind")),
+                    _ => return Err($crate::protocol::codec::DecodeError::new::<Self>(format!("invalid kind {val:02x}"))),
                 };
                 Ok((val, bytes))
             }

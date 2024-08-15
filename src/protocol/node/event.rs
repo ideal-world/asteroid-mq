@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 
 use super::{
-    raft::{Heartbeat, LogCommit, LogEntry, LogReplicate, RaftInfo, RaftSnapshot, Vote},
+    raft::{Heartbeat, LogAck, LogAppend, LogCommit, LogEntry, LogReplicate, RaftInfo, RaftSnapshot, Vote},
     NodeId, NodeInfo,
 };
 
@@ -190,6 +190,17 @@ impl N2nPacket {
         }
     }
 
+    pub fn log_ack(log: LogAck) -> Self {
+        let payload = log.encode_to_bytes();
+        Self {
+            header: N2nPacketHeader {
+                id: N2nPacketId::new_snowflake(),
+                kind: N2NPayloadKind::LogAck,
+                payload_size: payload.len() as u32,
+            },
+            payload,
+        }
+    }
     pub fn log_commit(commit: LogCommit) -> Self {
         let payload = commit.encode_to_bytes();
         Self {
@@ -202,7 +213,7 @@ impl N2nPacket {
         }
     }
 
-    pub fn log_append(log: LogEntry) -> Self {
+    pub fn log_append(log: LogAppend) -> Self {
         let payload = log.encode_to_bytes();
         Self {
             header: N2nPacketHeader {
@@ -316,6 +327,8 @@ pub enum N2nEventKind {
     Ack = 0x12,
     /// Ack Report: The delegate cluster node report ack status to the edge node.
     AckReport = 0x13,
+    /// Set State: set ack state
+    SetState = 0x14,
     /// En Online: report endpoint online.
     EpOnline = 0x20,
     /// En Online: report endpoint offline.
@@ -330,6 +343,7 @@ impl_codec!(
         CastMessage = 0x11,
         Ack = 0x12,
         AckReport = 0x13,
+        SetState = 0x14,
         EpOnline = 0x20,
         EpOffline = 0x21,
         EpSync = 0x22,

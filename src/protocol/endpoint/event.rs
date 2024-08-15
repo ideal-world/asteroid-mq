@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{impl_codec, protocol::{interest::Interest, node::NodeId, topic::TopicCode}, TimestampSec};
 
-use super::{EndpointAddr, Message};
+use super::{EndpointAddr, Message, MessageId, MessageStatusKind};
 
 #[derive(Debug)]
 pub struct DelegateMessage {
@@ -56,6 +56,22 @@ impl_codec!(
         host: NodeId,
     }
 );
+
+#[derive(Debug)]
+pub struct SetState {
+    pub message_id: MessageId,
+    pub topic: TopicCode,
+    pub status: HashMap<EndpointAddr, MessageStatusKind>
+}
+
+impl_codec!(
+    struct SetState {
+        message_id: MessageId,
+        topic: TopicCode,
+        status: HashMap<EndpointAddr, MessageStatusKind>
+    }
+);
+
 #[derive(Debug)]
 pub struct EndpointSync {
     pub entries: Vec<(TopicCode, Vec<EpInfo>)>,

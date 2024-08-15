@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
+    hash::Hash,
     sync::{atomic::AtomicUsize, Mutex, RwLock},
     task::Poll,
 };
@@ -11,8 +12,9 @@ use crate::{
     protocol::{
         endpoint::{
             EndpointAddr, Message, MessageAck, MessageHeader, MessageId, MessageStatusKind,
+            SetState,
         },
-        node::event::N2nPacket,
+        node::{event::N2nPacket, raft::LogEntry},
         topic::wait_ack::{self, WaitAckSuccess},
     },
     util::Timed,
@@ -49,17 +51,42 @@ impl HoldMessage {
         }
     }
     pub(crate) fn send_unsent(&self, context: &MessagePollContext) {
-        let mut status = self.wait_ack.status.write().unwrap();
-        let eps = status
-            .iter()
-            .filter_map(|(ep, status)| status.is_unsent().then_some(*ep));
-        // if the message is the first one, call send
-        for (ep, result) in context.topic.send_out_message(&self.message, eps) {
-            if result.is_ok() {
-                status.insert(ep, MessageStatusKind::Sent);
-            } else {
-                status.insert(ep, MessageStatusKind::Failed);
+        let status_update = {
+            let mut status = self.wait_ack.status.write().unwrap();
+            let eps = status
+                .iter()
+                .filter_map(|(ep, status)| status.is_unsent().then_some(*ep));
+            let mut status_update = HashMap::new();
+            // if the message is the first one, call send
+            for (ep, result) in context.topic.dispatch_message(&self.message, eps) {
+                // it's Ok to do so because the node hear own these endpoints
+                if result.is_ok() {
+                    status.insert(ep, MessageStatusKind::Sending);
+                    status_update.insert(ep, MessageStatusKind::Sent);
+                } else {
+                    status.insert(ep, MessageStatusKind::Sending);
+                    status_update.insert(ep, MessageStatusKind::Unreachable);
+                }
             }
+            status_update
+        };
+        if !status_update.is_empty() {
+            let set_state = SetState {
+                message_id: self.message.id(),
+                topic: self.message.topic().clone(),
+                status: status_update,
+            };
+            let topic = context.topic.clone();
+            tokio::task::spawn(async move {
+                match topic.node.commit_log(LogEntry::set_state(set_state)).await {
+                    Ok(_) => {
+                        //
+                    }
+                    Err(e) => {
+                        tracing::error!(?e, "failed to commit log");
+                    }
+                }
+            });
         }
     }
     pub(crate) fn is_resolved(&self) -> bool {
@@ -104,7 +131,6 @@ impl HoldMessage {
         }
     }
 }
-
 pub(crate) struct MessagePollContext<'t> {
     pub(crate) topic: &'t Topic,
 }
@@ -171,9 +197,42 @@ impl MessageQueue {
             None
         }
     }
-    pub(crate) fn set_ack(&self, ack_to: &MessageId, from: EndpointAddr, kind: MessageStatusKind) {
+    pub(crate) fn update_ack(
+        &self,
+        ack_to: &MessageId,
+        from: EndpointAddr,
+        kind: MessageStatusKind,
+    ) {
         if let Some(hm) = self.hold_messages.get(ack_to) {
             let mut wg = hm.wait_ack.status.write().unwrap();
+            if let Some(status) = wg.get_mut(&from) {
+                // resolved message should not be updated
+                if status.is_resolved(hm.wait_ack.expect) {
+                    return;
+                }
+                match status {
+                    MessageStatusKind::Processed => return,
+                    MessageStatusKind::Received => {
+                        if kind == MessageStatusKind::Processed || kind == MessageStatusKind::Failed
+                        {
+                            *status = kind;
+                        }
+                    }
+                    MessageStatusKind::Sending => {
+                        if kind != MessageStatusKind::Unsent {
+                            *status = kind;
+                        }
+                    }
+                    MessageStatusKind::Sent => {
+                        if kind != MessageStatusKind::Unsent || kind != MessageStatusKind::Sending {
+                            *status = kind;
+                        }
+                    }
+                    _ => {
+                        // otherwise, it must be resolved
+                    }
+                }
+            }
             wg.insert(from, kind);
         }
     }
@@ -210,6 +269,7 @@ impl MessageQueue {
 
         if message.is_resolved() {
             // durable: archive the message
+            tracing::debug!("message resolved: {:?}", id);
             if let Some(durability_service) = context.topic.durability_service.clone() {
                 let durable = message.as_durable();
                 tokio::spawn(async move {
@@ -222,6 +282,7 @@ impl MessageQueue {
             Some(Poll::Ready(()))
         } else {
             // durable: save the message
+            tracing::debug!("message not resolved: {:?}", id);
             if let Some(durability_service) = context.topic.durability_service.clone() {
                 let durable = message.as_durable();
                 tokio::spawn(async move {
@@ -293,11 +354,13 @@ impl MessageQueue {
 }
 
 impl Topic {
-    pub(crate) fn local_ack(&self, ack: MessageAck) {
+    pub(crate) fn update_and_flush(&self, update: SetState) {
         let poll_result = {
             let rg = self.queue.read().unwrap();
-            rg.set_ack(&ack.ack_to, ack.from, ack.kind);
-            rg.poll_message(ack.ack_to, &MessagePollContext { topic: self })
+            for (from, status) in update.status {
+                rg.update_ack(&update.message_id, from, status)
+            }
+            rg.poll_message(update.message_id, &MessagePollContext { topic: self })
         };
         if let Some(Poll::Ready(())) = poll_result {
             self.queue
@@ -306,16 +369,15 @@ impl Topic {
                 .flush(&MessagePollContext { topic: self });
         }
     }
-    pub(crate) fn handle_ack(&self, ack: MessageAck) {
-        if self.node.is(ack.holder) {
-            self.local_ack(ack);
-        } else if let Some(next_jump) = self.node.get_next_jump(ack.holder) {
-            if let Err(e) = self.node.send_packet(
-                N2nPacket::event(self.node.new_ack(ack.holder, ack)),
-                next_jump,
-            ) {}
-        } else {
-            // handle unreachable
-        }
+    pub(crate) async fn single_ack(&self, ack: MessageAck) -> Result<(), crate::Error> {
+        self.node
+            .commit_log(LogEntry::set_state(SetState {
+                message_id: ack.ack_to,
+                topic: self.code().clone(),
+                status: HashMap::from([(ack.from, ack.kind)]),
+            }))
+            .await
+            .map_err(crate::Error::contextual("commit single ack"))?;
+        Ok(())
     }
 }

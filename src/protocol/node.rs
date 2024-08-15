@@ -13,6 +13,7 @@ use std::{
 
 use super::{
     codec::CodecType,
+    endpoint::SetState,
     topic::{Topic, TopicCode, TopicInner, TopicSnapshot},
 };
 use connection::{
@@ -22,8 +23,8 @@ use connection::{
 use crossbeam::{epoch::Atomic, sync::ShardedLock};
 use event::{N2NAuth, N2NUnreachableEvent, N2nEvent, N2nEventKind, N2nPacket, NodeKind, NodeTrace};
 use raft::{
-    CandidateState, FollowerState, IndexedLog, LogEntry, RaftInfo, RaftLogIndex, RaftRole,
-    RaftRoleKind, RaftState, RaftTerm, Vote,
+    CandidateState, CommitHook, FollowerState, IndexedLog, LogAppend, LogEntry, RaftCommitError,
+    RaftInfo, RaftLogIndex, RaftRole, RaftRoleKind, RaftState, RaftTerm, Vote,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -32,7 +33,7 @@ use crate::{
     impl_codec,
     protocol::{
         endpoint::{EndpointAddr, EndpointOnline},
-        interest::InterestMap,
+        interest::InterestMap, topic::hold_message::MessagePollContext,
     },
     TimestampSec,
 };
@@ -169,6 +170,7 @@ impl Default for Node {
                         inner: this.clone(),
                     },
                     pending_logs: Default::default(),
+                    commit_hooks: Default::default(),
                 })),
             }),
         };
@@ -306,42 +308,66 @@ impl Node {
     pub fn is(&self, id: NodeId) -> bool {
         self.id() == id
     }
-    pub async fn commit_log(&self, log: LogEntry) {
-        loop {
-            let is_candidate = self.raft_state_unwrap().read().unwrap().role.is_ready();
-            if is_candidate {
-                tokio::task::yield_now().await;
-            } else {
-                break;
-            }
-        }
+    fn commit_log_cluster_wise(&self, log: LogEntry) -> Result<CommitHook, LogEntry> {
         let mut raft_state = self.raft_state_unwrap().write().unwrap();
+        if !raft_state.role.is_ready() {
+            return Err(log);
+        }
         if raft_state.role.is_leader() {
             let index = raft_state.index.inc();
-            if self.cluster_size() == 1 {
-                self.apply_log(log);
-            } else {
-                let term = raft_state.term;
-                let indexed_log = IndexedLog {
-                    index,
-                    entry: log.clone(),
-                };
-                raft_state.pending_logs.push_log(indexed_log);
-                let log_replicate = N2nPacket::log_replicate(raft::LogReplicate {
-                    index,
-                    term,
-                    entry: log,
-                });
-                self.cluster_wise_broadcast_packet(log_replicate);
+            let term = raft_state.term;
+            let log_replicate = log.create_replicate(index, term);
+            let indexed_log = log_replicate.clone().indexed();
+            raft_state.pending_logs.push_log(indexed_log.clone());
+            let RaftRole::Leader(ref mut ls) = raft_state.role else {
+                unreachable!("should be leader");
+            };
+            ls.ack_map.insert(index, 0);
+            let commit_hook = raft_state.add_commit_hook(log_replicate.trace_id);
+            {
+                drop(raft_state);
             }
+            self.cluster_wise_broadcast_packet(N2nPacket::log_replicate(log_replicate));
+            Ok(commit_hook)
         } else if raft_state.role.is_follower() {
-            let log_append = N2nPacket::log_append(log);
+            let log_append = log.create_append(raft_state.term);
+            let trace_id = log_append.trace_id;
+            let log_append = N2nPacket::log_append(log_append);
             let RaftRole::Follower(ref fs) = raft_state.role else {
                 unreachable!("should be follower");
             };
             let leader = fs.leader.expect("should have leader");
+            let commit_hook = raft_state.add_commit_hook(trace_id);
+            {
+                drop(raft_state);
+            }
             self.send_packet(log_append, leader)
                 .expect("should send log append");
+            Ok(commit_hook)
+        } else {
+            unreachable!("should be ready");
+        }
+    }
+    pub async fn commit_log(&self, mut log: LogEntry) -> Result<RaftLogIndex, RaftCommitError> {
+        if self.cluster_size() == 1 {
+            let index = {
+                let mut raft_state = self.raft_state_unwrap().write().unwrap();
+                raft_state.index.inc()
+            };
+            self.apply_log(log);
+            Ok(index)
+        } else {
+            loop {
+                match self.commit_log_cluster_wise(log) {
+                    Ok(hook) => {
+                        return hook.await;
+                    }
+                    Err(prev_log) => {
+                        tokio::task::yield_now().await;
+                        log = prev_log;
+                    }
+                }
+            }
         }
     }
     pub fn apply_log(&self, log: LogEntry) {
@@ -350,6 +376,8 @@ impl Node {
                 let Ok((evt, _)) = DelegateMessage::decode(log.payload) else {
                     return;
                 };
+                tracing::debug!(?evt, "apply DelegateMessage");
+
                 self.get_or_init_topic(evt.message.topic().clone())
                     .hold_new_message(evt.message);
             }
@@ -373,13 +401,6 @@ impl Node {
                     }
                 }
             }
-            event::N2nEventKind::Ack => {
-                let Ok((evt, _)) = MessageAck::decode(log.payload) else {
-                    return;
-                };
-                self.get_or_init_topic(evt.topic_code.clone())
-                    .local_ack(evt);
-            }
             event::N2nEventKind::AckReport => todo!(),
             event::N2nEventKind::EpOnline => {
                 let Ok((evt, _)) = EndpointOnline::decode(log.payload) else {
@@ -402,6 +423,17 @@ impl Node {
                 };
                 self.handle_ep_sync(evt);
             }
+            N2nEventKind::SetState => {
+                let Ok((evt, _)) = SetState::decode(log.payload) else {
+                    return;
+                };
+                tracing::debug!(?evt, "apply SetState");
+                let topic = self.get_or_init_topic(evt.topic.clone());
+                topic.update_and_flush(evt)
+            }
+            _ => {
+                tracing::warn!(?log, "unhandled log");
+            }
         }
     }
     #[instrument(skip_all, fields(node = ?self.id()))]
@@ -416,71 +448,7 @@ impl Node {
     }
     #[instrument(skip_all, fields(node = ?self.id()))]
     pub(crate) async fn handle_message_as_destination(&self, message_evt: N2nEvent) {
-        match message_evt.kind {
-            event::N2nEventKind::DelegateMessage => {
-                let Ok((evt, _)) = DelegateMessage::decode(message_evt.payload) else {
-                    return;
-                };
-                let handle = self
-                    .get_or_init_topic(evt.message.topic().clone())
-                    .hold_new_message(evt.message);
-                // TODO: handle delegate message
-            }
-            event::N2nEventKind::CastMessage => {
-                let Ok((evt, _)) = CastMessage::decode(message_evt.payload).inspect_err(|e| {
-                    tracing::error!(error = ?e, "failed to decode cast message");
-                }) else {
-                    return;
-                };
-                tracing::debug!(
-                    "cast message {id:?} to {eps:?}",
-                    id = evt.message.id(),
-                    eps = evt.target_eps
-                );
-                for ep in &evt.target_eps {
-                    let result = self
-                        .get_or_init_topic(evt.message.topic().clone())
-                        .push_message_to_local_ep(ep, evt.message.clone());
-                    if result.is_err() {
-                        // TODO: handle error
-                    }
-                }
-            }
-            event::N2nEventKind::Ack => {
-                let Ok((evt, _)) = MessageAck::decode(message_evt.payload) else {
-                    return;
-                };
-                self.get_or_init_topic(evt.topic_code.clone())
-                    .local_ack(evt)
-            }
-            event::N2nEventKind::AckReport => todo!(),
-            event::N2nEventKind::EpOnline => {
-                let Ok((evt, _)) = EndpointOnline::decode(message_evt.payload) else {
-                    return;
-                };
-                tracing::debug!("ep {ep:?} online", ep = evt.endpoint);
-                if evt.host == message_evt.trace.source() {
-                    let topic = self.get_or_init_topic(evt.topic_code.clone());
-                    topic.ep_online(evt);
-                }
-            }
-            event::N2nEventKind::EpOffline => {
-                let Ok((evt, _)) = EndpointOffline::decode(message_evt.payload) else {
-                    return;
-                };
-                let ep = evt.endpoint;
-                if evt.host == message_evt.trace.source() {
-                    let topic = self.get_or_init_topic(evt.topic_code.clone());
-                    topic.ep_offline(&ep);
-                }
-            }
-            event::N2nEventKind::EpSync => {
-                let Ok((evt, _)) = EndpointSync::decode(message_evt.payload) else {
-                    return;
-                };
-                self.handle_ep_sync(evt);
-            }
-        }
+        todo!()
     }
     pub(crate) fn known_nodes(&self) -> Vec<NodeId> {
         self.connections.read().unwrap().keys().cloned().collect()

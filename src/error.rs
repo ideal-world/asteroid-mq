@@ -9,12 +9,12 @@ pub struct Error {
 }
 
 impl Error {
-    pub const fn contextual<T: Into<ErrorKind>>(context: impl Into<Cow<'static, str>>) -> impl FnOnce(T) -> Self {
-        move |kind| {
-            Self {
-                context: context.into(),
-                kind: kind.into(),
-            }
+    pub const fn contextual<T: Into<ErrorKind>>(
+        context: impl Into<Cow<'static, str>>,
+    ) -> impl FnOnce(T) -> Self {
+        move |kind| Self {
+            context: context.into(),
+            kind: kind.into(),
         }
     }
     pub fn new(context: impl Into<Cow<'static, str>>, kind: impl Into<ErrorKind>) -> Self {
@@ -23,29 +23,40 @@ impl Error {
             kind: kind.into(),
         }
     }
+    pub fn unknown(context: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            context: context.into(),
+            kind: ErrorKind::Custom("unknown error".into()),
+        }
+    }
 }
 
 macro_rules! error_kind {
     (
         pub enum $ErrorKind: ident {
-            $($Kind: ident: $InnerType: ty)*
+            $($Kind: ident$(: $InnerType: ty)?),*
         }
     ) => {
         #[derive(Debug)]
         pub enum ErrorKind {
-            $($Kind($InnerType),)*
+            $($Kind$(($InnerType))?,)*
         }
         $(
-            impl From<$InnerType> for ErrorKind {
-                fn from(e: $InnerType) -> Self {
-                    ErrorKind::$Kind(e)
+            $(
+                impl From<$InnerType> for ErrorKind {
+                    fn from(e: $InnerType) -> Self {
+                        ErrorKind::$Kind(e)
+                    }
                 }
-            }
+            )?
         )*
     };
 }
 error_kind! {
     pub enum ErrorKind {
-        Durability: DurabilityError
+        Durability: DurabilityError,
+        Raft: crate::protocol::node::raft::RaftCommitError,
+        Offline,
+        Custom: Box<dyn std::error::Error + Send + Sync>
     }
 }
