@@ -92,7 +92,7 @@ impl<T: Eq> Eq for Timed<T> {}
 impl<T: PartialEq> PartialOrd for Timed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         if self.data != other.data {
-            return None;
+            None
         } else {
             self.time.partial_cmp(&other.time)
         }

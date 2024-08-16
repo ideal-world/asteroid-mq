@@ -1,15 +1,21 @@
 use std::collections::HashMap;
 
-use crate::{impl_codec, protocol::{interest::Interest, node::NodeId, topic::TopicCode}, TimestampSec};
+use crate::{
+    impl_codec,
+    protocol::{interest::Interest, node::NodeId, topic::TopicCode},
+    TimestampSec,
+};
 
 use super::{EndpointAddr, Message, MessageId, MessageStatusKind};
 
 #[derive(Debug)]
 pub struct DelegateMessage {
+    pub topic: TopicCode,
     pub message: Message,
 }
 impl_codec!(
     struct DelegateMessage {
+        topic: TopicCode,
         message: Message,
     }
 );
@@ -25,6 +31,7 @@ impl_codec!(
         message: Message,
     }
 );
+
 #[derive(Debug)]
 
 pub struct EndpointOnline {
@@ -58,17 +65,40 @@ impl_codec!(
 );
 
 #[derive(Debug)]
-pub struct SetState {
+pub struct MessageStateUpdate {
     pub message_id: MessageId,
+    pub status: HashMap<EndpointAddr, MessageStatusKind>,
+}
+
+impl_codec!(
+    struct MessageStateUpdate {
+        message_id: MessageId,
+        status: HashMap<EndpointAddr, MessageStatusKind>,
+    }
+);
+
+impl MessageStateUpdate {
+    pub fn new(message_id: MessageId, status: HashMap<EndpointAddr, MessageStatusKind>) -> Self {
+        Self { message_id, status }
+    }
+    pub fn new_empty(message_id: MessageId) -> Self {
+        Self {
+            message_id,
+            status: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SetState {
     pub topic: TopicCode,
-    pub status: HashMap<EndpointAddr, MessageStatusKind>
+    pub update: MessageStateUpdate,
 }
 
 impl_codec!(
     struct SetState {
-        message_id: MessageId,
         topic: TopicCode,
-        status: HashMap<EndpointAddr, MessageStatusKind>
+        update: MessageStateUpdate,
     }
 );
 

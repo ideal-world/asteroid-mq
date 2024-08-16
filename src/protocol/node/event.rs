@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 
 use super::{
-    raft::{Heartbeat, LogAck, LogAppend, LogCommit, LogEntry, LogReplicate, RaftInfo, RaftSnapshot, Vote},
+    raft::{Heartbeat, LogAck, LogAppend, LogCommit, LogReplicate, RaftSnapshot, Vote},
     NodeId, NodeInfo,
 };
 
@@ -112,8 +112,6 @@ pub struct N2nPacketHeader {
     pub payload_size: u32,
 }
 
-
-
 impl_codec!(
     struct N2nPacketHeader {
         id: N2nPacketId,
@@ -163,6 +161,16 @@ impl N2nPacket {
                 payload_size: payload.len() as u32,
             },
             payload,
+        }
+    }
+    pub fn request_snapshot() -> Self {
+        Self {
+            header: N2nPacketHeader {
+                id: N2nPacketId::new_snowflake(),
+                kind: N2NPayloadKind::RequestSnapshot,
+                payload_size: 0,
+            },
+            payload: Bytes::new(),
         }
     }
 
@@ -264,6 +272,7 @@ pub enum N2NPayloadKind {
     LogAck = 0x22,
     LogCommit = 0x23,
     Snapshot = 0x24,
+    RequestSnapshot = 0x25,
     Unreachable = 0x80,
     Unknown = 0xf0,
 }
@@ -280,6 +289,7 @@ impl_codec!(
         LogAck = 0x22,
         LogCommit = 0x23,
         Snapshot = 0x24,
+        RequestSnapshot = 0x25,
         Unreachable = 0x80,
         Unknown = 0xf0,
     }
@@ -329,6 +339,9 @@ pub enum N2nEventKind {
     AckReport = 0x13,
     /// Set State: set ack state
     SetState = 0x14,
+    /// Load Queue: load messages into the topic queue.
+    LoadTopic = 0x15,
+    UnloadTopic = 0x16,
     /// En Online: report endpoint online.
     EpOnline = 0x20,
     /// En Online: report endpoint offline.
@@ -344,6 +357,7 @@ impl_codec!(
         Ack = 0x12,
         AckReport = 0x13,
         SetState = 0x14,
+        LoadTopic = 0x15,
         EpOnline = 0x20,
         EpOffline = 0x21,
         EpSync = 0x22,

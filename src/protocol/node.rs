@@ -8,40 +8,31 @@ use std::{
     collections::HashMap,
     ops::Deref,
     sync::{self, atomic::AtomicUsize, Arc, RwLock},
-    time::{Duration, Instant},
 };
 
 use super::{
     codec::CodecType,
     endpoint::SetState,
-    topic::{Topic, TopicCode, TopicInner, TopicSnapshot},
+    topic::{TopicCode, TopicInner, TopicSnapshot},
 };
 use connection::{
     ConnectionConfig, N2NConnection, N2NConnectionError, N2NConnectionErrorKind,
     N2NConnectionInstance, N2NConnectionRef,
 };
-use crossbeam::{epoch::Atomic, sync::ShardedLock};
+use crossbeam::sync::ShardedLock;
 use event::{N2NAuth, N2NUnreachableEvent, N2nEvent, N2nEventKind, N2nPacket, NodeKind, NodeTrace};
 use raft::{
-    CandidateState, CommitHook, FollowerState, IndexedLog, LogAppend, LogEntry, RaftCommitError,
-    RaftInfo, RaftLogIndex, RaftRole, RaftRoleKind, RaftState, RaftTerm, Vote,
+    CommitHandle, FollowerState, LogEntry, RaftCommitError, RaftLogIndex, RaftRole, RaftState,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
     impl_codec,
-    protocol::{
-        endpoint::{EndpointAddr, EndpointOnline},
-        interest::InterestMap, topic::hold_message::MessagePollContext,
-    },
-    TimestampSec,
+    protocol::{endpoint::EndpointOnline, topic::durable_message::{LoadTopic, UnloadTopic}},
 };
 
-use super::endpoint::{
-    CastMessage, DelegateMessage, EndpointOffline, EndpointSync, EpInfo, LocalEndpointRef,
-    MessageAck, MessageId,
-};
+use super::endpoint::{CastMessage, DelegateMessage, EndpointOffline, EndpointSync, MessageAck};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -308,7 +299,7 @@ impl Node {
     pub fn is(&self, id: NodeId) -> bool {
         self.id() == id
     }
-    fn commit_log_cluster_wise(&self, log: LogEntry) -> Result<CommitHook, LogEntry> {
+    fn commit_log_cluster_wise(&self, log: LogEntry) -> Result<CommitHandle, LogEntry> {
         let mut raft_state = self.raft_state_unwrap().write().unwrap();
         if !raft_state.role.is_ready() {
             return Err(log);
@@ -323,7 +314,7 @@ impl Node {
                 unreachable!("should be leader");
             };
             ls.ack_map.insert(index, 0);
-            let commit_hook = raft_state.add_commit_hook(log_replicate.trace_id);
+            let commit_hook = raft_state.add_commit_handle(log_replicate.trace_id);
             {
                 drop(raft_state);
             }
@@ -337,13 +328,13 @@ impl Node {
                 unreachable!("should be follower");
             };
             let leader = fs.leader.expect("should have leader");
-            let commit_hook = raft_state.add_commit_hook(trace_id);
+            let commit_handle = raft_state.add_commit_handle(trace_id);
             {
                 drop(raft_state);
             }
             self.send_packet(log_append, leader)
                 .expect("should send log append");
-            Ok(commit_hook)
+            Ok(commit_handle)
         } else {
             unreachable!("should be ready");
         }
@@ -376,37 +367,36 @@ impl Node {
                 let Ok((evt, _)) = DelegateMessage::decode(log.payload) else {
                     return;
                 };
-                tracing::debug!(?evt, "apply DelegateMessage");
-
-                self.get_or_init_topic(evt.message.topic().clone())
+                tracing::info!(message=?evt.message, "hold message");
+                self.get_or_init_topic(evt.topic)
                     .hold_new_message(evt.message);
             }
-            event::N2nEventKind::CastMessage => {
-                let Ok((evt, _)) = CastMessage::decode(log.payload).inspect_err(|e| {
-                    tracing::error!(error = ?e, "failed to decode cast message");
-                }) else {
+            event::N2nEventKind::LoadTopic => {
+                let Ok((mut evt, _)) = LoadTopic::decode(log.payload) else {
                     return;
                 };
-                tracing::debug!(
-                    "cast message {id:?} to {eps:?}",
-                    id = evt.message.id(),
-                    eps = evt.target_eps
-                );
-                for ep in &evt.target_eps {
-                    let result = self
-                        .get_or_init_topic(evt.message.topic().clone())
-                        .push_message_to_local_ep(ep, evt.message.clone());
-                    if result.is_err() {
-                        // TODO: handle error
-                    }
-                }
+                tracing::debug!(config = ?evt.config, "load topic");
+                let topic = self.apply_load_topic(evt.config);
+                evt.queue.sort_by_key(|m| m.time);
+                topic.apply_snapshot(TopicSnapshot {
+                    ep_routing_table: Default::default(),
+                    ep_interest_map: Default::default(),
+                    ep_latest_active: Default::default(),
+                    queue: evt.queue,
+                });
             }
-            event::N2nEventKind::AckReport => todo!(),
+            event::N2nEventKind::UnloadTopic => {
+                let Ok((evt, _)) = UnloadTopic::decode(log.payload) else {
+                    return;
+                };
+                tracing::debug!(code=?evt.code, "unload topic");
+                self.remove_topic(&evt.code);
+            }
             event::N2nEventKind::EpOnline => {
                 let Ok((evt, _)) = EndpointOnline::decode(log.payload) else {
                     return;
                 };
-                tracing::debug!("ep {ep:?} online", ep = evt.endpoint);
+                tracing::info!("ep {ep:?} online", ep = evt.endpoint);
                 let topic = self.get_or_init_topic(evt.topic_code.clone());
                 topic.ep_online(evt);
             }
@@ -427,9 +417,9 @@ impl Node {
                 let Ok((evt, _)) = SetState::decode(log.payload) else {
                     return;
                 };
-                tracing::debug!(?evt, "apply SetState");
-                let topic = self.get_or_init_topic(evt.topic.clone());
-                topic.update_and_flush(evt)
+                tracing::debug!(topic=?evt.topic, update=?evt.update, "set message state");
+                let topic = self.get_or_init_topic(evt.topic);
+                topic.update_and_flush(evt.update)
             }
             _ => {
                 tracing::warn!(?log, "unhandled log");

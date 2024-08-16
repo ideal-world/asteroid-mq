@@ -10,27 +10,23 @@ pub mod wait_ack;
 
 use std::{
     borrow::Borrow,
-    collections::{BinaryHeap, HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     hash::Hash,
     ops::Deref,
     sync::{Arc, RwLock, Weak},
 };
 
 use bytes::Bytes;
-use chrono::Utc;
 use config::TopicConfig;
 use crossbeam::sync::ShardedLock;
-use durable_message::{DurabilityService, DurableMessage, DurableMessageQuery};
+use durable_message::{DurabilityService, DurableMessage, LoadTopic, UnloadTopic};
 use hold_message::{HoldMessage, MessagePollContext, MessageQueue};
 use tracing::instrument;
 use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException, WaitAckHandle};
 
 use crate::{
     impl_codec,
-    protocol::{
-        endpoint::{CastMessage, LocalEndpointInner},
-        node::raft::{LogAppend, LogEntry},
-    },
+    protocol::{endpoint::LocalEndpointInner, node::raft::LogEntry},
     TimestampSec,
 };
 
@@ -38,7 +34,7 @@ use super::{
     codec::CodecType,
     endpoint::{
         EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint, LocalEndpointRef,
-        Message, MessageId,
+        Message, MessageId, MessageStateUpdate,
     },
     interest::{Interest, InterestMap, Subject},
     node::{
@@ -184,9 +180,6 @@ impl TopicInner {
         }
         Err(message)
     }
-    pub(crate) fn get_remote_ep(&self, ep: &EndpointAddr) -> Option<NodeId> {
-        self.ep_routing_table.read().unwrap().get(ep).copied()
-    }
     pub(crate) fn resolve_node_ep_map(
         &self,
         ep_list: impl Iterator<Item = EndpointAddr>,
@@ -271,7 +264,7 @@ impl Topic {
                 kind: N2nEventKind::EpOffline,
                 payload: payload.clone(),
             });
-            self.node.send_packet(packet, peer);
+            let _ = self.node.send_packet(packet, peer);
         }
     }
 
@@ -290,7 +283,7 @@ impl Topic {
                         Ok(_) => {
                             results.push((*ep, Ok(())));
                         }
-                        Err(message) => {
+                        Err(_) => {
                             results.push((*ep, Err(())));
                         }
                     }
@@ -300,7 +293,7 @@ impl Topic {
         results
     }
 
-    #[instrument(skip(self, message), fields(node_id=?self.node.id(), topic_code=?self.config))]
+    #[instrument(skip(self, message), fields(node_id=?self.node.id(), topic_code=?self.config.code))]
     pub(crate) fn hold_new_message(&self, message: Message) {
         let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
         let hold_message = HoldMessage {
@@ -316,28 +309,30 @@ impl Topic {
                 if waiting_size >= size {
                     match overflow_config.policy {
                         config::OverflowPolicy::RejectNew => {
-                            // result_report
-                            //     .send(Err(WaitAckError::exception(
-                            //         WaitAckErrorException::Overflow,
-                            //     )))
-                            //     .expect("channel just created");
-                            // return message.create_wait_handle(result_recv);
+                            if let Some(report) =
+                                queue.waiting.get_mut().unwrap().remove(&message.id())
+                            {
+                                let _ = report.send(Err(WaitAckError::exception(
+                                    WaitAckErrorException::Overflow,
+                                )));
+                            }
                         }
                         config::OverflowPolicy::DropOld => {
                             let old = queue.pop().expect("queue at least one element");
-                            // let _ = old.wait_ack.reporter.send(Err(WaitAckError::exception(
-                            //     WaitAckErrorException::Overflow,
-                            // )));
+                            if let Some(report) =
+                                queue.waiting.get_mut().unwrap().remove(&old.message.id())
+                            {
+                                let _ = report.send(Err(WaitAckError::exception(
+                                    WaitAckErrorException::Overflow,
+                                )));
+                            }
                         }
                     }
                 }
             }
             queue.push(hold_message);
         }
-        {
-            let queue = self.queue.read().unwrap();
-            queue.poll_message(message.id(), &MessagePollContext { topic: self });
-        }
+        self.update_and_flush(MessageStateUpdate::new_empty(message.id()));
         tracing::debug!(?ep_collect, "hold new message");
     }
 }
@@ -385,24 +380,21 @@ impl_codec!(
 );
 impl Topic {
     pub fn apply_snapshot(&self, snapshot: TopicSnapshot) {
-        let mut ep_routing_table = self.ep_routing_table.write().unwrap();
-        let mut ep_interest_map = self.ep_interest_map.write().unwrap();
-        let mut ep_latest_active = self.ep_latest_active.write().unwrap();
-        let mut queue = self.queue.write().unwrap();
-        *ep_routing_table = snapshot.ep_routing_table;
-        *ep_interest_map = InterestMap::from_raw(snapshot.ep_interest_map);
-        *ep_latest_active = snapshot.ep_latest_active;
-        let poll_context = MessagePollContext { topic: self };
-        for message in snapshot.queue {
-            let id = message.message.id();
-            if queue.hold_messages.contains_key(&id) {
-                for (from, ack) in message.status {
-                    queue.update_ack(&id, from, ack)
-                }
-                queue.poll_message(id, &poll_context);
-            } else {
+        {
+            let mut ep_routing_table = self.ep_routing_table.write().unwrap();
+            let mut ep_interest_map = self.ep_interest_map.write().unwrap();
+            let mut ep_latest_active = self.ep_latest_active.write().unwrap();
+            let mut queue = self.queue.write().unwrap();
+            *ep_routing_table = snapshot.ep_routing_table;
+            *ep_interest_map = InterestMap::from_raw(snapshot.ep_interest_map);
+            *ep_latest_active = snapshot.ep_latest_active;
+            let context = MessagePollContext { topic: self };
+            queue.clear();
+            for message in snapshot.queue {
                 queue.push(HoldMessage::from_durable(message));
             }
+            queue.poll_all(&context);
+            queue.flush(&context);
         }
     }
 }
@@ -449,51 +441,70 @@ impl TopicInner {
 }
 
 impl Node {
-    pub async fn initialize_topic<C: Into<TopicConfig>>(
-        &self,
-        config: C,
-    ) -> Result<Topic, crate::Error> {
+    // return: is leader
+    pub async fn wait_raft_cluster_ready(&self) -> bool {
+        loop {
+            {
+                let state = self.raft_state_unwrap().read().unwrap();
+                if state.role.is_ready() {
+                    break state.role.is_leader();
+                }
+            };
+            tokio::task::yield_now().await;
+        }
+    }
+    pub async fn new_topic<C: Into<TopicConfig>>(&self, config: C) -> Result<Topic, crate::Error> {
+        self.load_topic(LoadTopic::from_config(config)).await
+    }
+    pub async fn load_topic(&self, load_topic: LoadTopic) -> Result<Topic, crate::Error> {
+        let code = load_topic.config.code.clone();
+        let is_leader = self.wait_raft_cluster_ready().await;
+        let topic = if is_leader {
+            self.commit_log(LogEntry::load_topic(load_topic))
+                .await
+                .map_err(crate::Error::contextual("new topic"))?;
+            self.get_topic(&code).expect("topic should be loaded")
+        } else {
+            loop {
+                if let Some(topic) = self.get_topic(&code) {
+                    break topic;
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        Ok(topic)
+    }
+    pub async fn delete_topic(&self, code: TopicCode) {
+        let is_leader = self.wait_raft_cluster_ready().await;
+        if is_leader {
+            self.commit_log(LogEntry::unload_topic(UnloadTopic::new(code)))
+                .await
+                .expect("cancel topic");
+        }
+    }
+    pub(crate) fn apply_load_topic<C: Into<TopicConfig>>(&self, config: C) -> Topic {
         let topic = Arc::new(TopicInner::new(config));
         self.topics
             .write()
             .unwrap()
             .insert(topic.config.code.clone(), topic.clone());
-        let topic = self.wrap_topic(topic);
-
-        if let Some(ds) = topic.durability_service.clone() {
-            const PAGE_SIZE: u32 = 128;
-            let mut query = DurableMessageQuery::new(0, PAGE_SIZE);
-            loop {
-                let messages = ds
-                    .batch_retrieve(query.clone())
-                    .await
-                    .map_err(crate::Error::contextual("retrieve durable message"))?;
-                if messages.is_empty() {
-                    break;
-                } else {
-                    for message in messages {
-                        let message = message.message;
-                        if matches!(
-                            message.header.target_kind,
-                            crate::protocol::endpoint::MessageTargetKind::Durable
-                        ) && message.header.durability.is_some()
-                        {
-                            topic.hold_new_message(message);
-                        }
-                    }
-                    query = query.next_page();
-                }
-            }
-        };
-
-        Ok(topic)
+        self.wrap_topic(topic)
     }
     pub fn remove_topic<Q>(&self, code: &Q)
     where
         TopicCode: Borrow<Q>,
         Q: Hash + Eq,
     {
-        self.topics.write().unwrap().remove(code);
+        if let Some(topic) = self.topics.write().unwrap().remove(code) {
+            let mut queue = topic.queue.write().unwrap();
+            let waitings = queue.waiting.get_mut().unwrap();
+            for (_, report) in waitings.drain() {
+                let _ = report.send(Err(WaitAckError::exception(
+                    WaitAckErrorException::MessageDropped,
+                )));
+            }
+            queue.clear();
+        }
     }
     pub(crate) fn wrap_topic(&self, topic_inner: Arc<TopicInner>) -> Topic {
         Topic {

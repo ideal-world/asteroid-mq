@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::num::NonZeroU32;
 use std::{borrow::Cow, mem::size_of};
 
 use bytes::{Buf as _, BufMut, Bytes, BytesMut};
@@ -174,6 +175,18 @@ impl CodecType for i64 {
 
     fn encode(&self, buf: &mut BytesMut) {
         buf.put_i64(*self);
+    }
+}
+
+impl CodecType for NonZeroU32 {
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        let (value, bytes) = u32::decode(bytes)?;
+        let value = NonZeroU32::new(value).ok_or_else(|| DecodeError::new::<Self>("zero value"))?;
+        Ok((value, bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        self.get().encode(buf);
     }
 }
 impl<T> CodecType for Option<T>

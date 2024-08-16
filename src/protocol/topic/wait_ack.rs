@@ -46,12 +46,11 @@ pub enum AckWaitErrorKind {
 }
 
 impl WaitAck {
-    pub fn new(
-        expect: MessageAckExpectKind,
-        ep_list: HashSet<EndpointAddr>,
-    ) -> Self {
+    pub fn new(expect: MessageAckExpectKind, ep_list: HashSet<EndpointAddr>) -> Self {
         let status = HashMap::<EndpointAddr, MessageStatusKind>::from_iter(
-            ep_list.into_iter().map(|ep| (ep, MessageStatusKind::Unsent)),
+            ep_list
+                .into_iter()
+                .map(|ep| (ep, MessageStatusKind::Unsent)),
         );
         Self {
             status: status.into(),
@@ -76,17 +75,7 @@ impl WaitAckHandle {
     }
 }
 
-impl Message {
-    pub(crate) fn create_wait_handle(
-        &self,
-        recv: flume::Receiver<Result<WaitAckSuccess, WaitAckError>>,
-    ) -> WaitAckHandle {
-        WaitAckHandle {
-            message_id: self.id(),
-            result: recv.into_recv_async(),
-        }
-    }
-}
+impl Message {}
 
 impl Future for WaitAckHandle {
     type Output = Result<WaitAckSuccess, WaitAckError>;

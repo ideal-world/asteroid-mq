@@ -1,21 +1,6 @@
-use std::{
-    net::SocketAddr,
-    num::{NonZeroU32, NonZeroUsize},
-    str::FromStr,
-    time::Duration,
-};
+use std::{net::SocketAddr, time::Duration};
 
-use bytes::Bytes;
-
-use asteroid_mq::protocol::{
-    endpoint::{MessageAckExpectKind, MessageHeader, MessageId, MessageTargetKind},
-    interest::{Interest, Subject},
-    node::{connection::tokio_tcp::TokioTcp, Node},
-    topic::{
-        config::{OverflowPolicy, TopicConfig, TopicOverflowConfig},
-        TopicCode,
-    },
-};
+use asteroid_mq::protocol::node::{connection::tokio_tcp::TokioTcp, Node};
 
 #[tokio::test]
 async fn test_raft() {
@@ -25,7 +10,7 @@ async fn test_raft() {
 
     const CLUSTER_SIZE: u64 = 5;
     let mut node_list: Vec<(Node, u16)> = vec![];
-    for port_bias in 0..CLUSTER_SIZE-1 {
+    for port_bias in 0..CLUSTER_SIZE - 1 {
         let node = Node::default();
         node.set_cluster_size(CLUSTER_SIZE);
         node_list.push((node, 19000 + port_bias as u16));
@@ -67,22 +52,17 @@ async fn test_raft() {
             node.create_connection(TokioTcp::new(stream)).await.unwrap();
         }
     }
-    
+
     tokio::time::sleep(Duration::from_secs(5)).await;
     let node = Node::default();
     node.set_cluster_size(CLUSTER_SIZE);
     for (i, (node, port)) in node_list.iter().enumerate() {
         let stream = tokio::net::TcpSocket::new_v4()
             .unwrap()
-            .connect(
-                format!("127.0.0.1:{}", port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
+            .connect(format!("127.0.0.1:{}", port).parse::<SocketAddr>().unwrap())
             .await
             .unwrap();
         node.create_connection(TokioTcp::new(stream)).await.unwrap();
     }
     tokio::time::sleep(Duration::from_secs(5)).await;
-
 }

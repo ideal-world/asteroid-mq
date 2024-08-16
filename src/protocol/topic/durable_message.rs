@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, future::Future, ops::RangeToInclusive, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, future::Future, sync::Arc};
 
 use chrono::{DateTime, Utc};
 
@@ -7,12 +7,13 @@ use crate::{
     protocol::endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind},
 };
 
+use super::{config::TopicConfig, TopicCode};
+#[derive(Debug)]
 pub struct DurableMessage {
     pub message: Message,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
     pub time: DateTime<Utc>,
 }
-
 
 impl_codec!(
     struct DurableMessage {
@@ -21,6 +22,48 @@ impl_codec!(
         time: DateTime<Utc>,
     }
 );
+
+#[derive(Debug)]
+
+pub struct LoadTopic {
+    pub config: TopicConfig,
+    pub queue: Vec<DurableMessage>,
+}
+
+impl LoadTopic {
+    pub fn from_config<C: Into<TopicConfig>>(config: C) -> Self {
+        Self {
+            config: config.into(),
+            queue: Vec::new(),
+        }
+    }
+}
+
+impl_codec!(
+    struct LoadTopic {
+        config: TopicConfig,
+        queue: Vec<DurableMessage>,
+    }
+);
+
+
+#[derive(Debug)]
+pub struct UnloadTopic {
+    pub code: TopicCode
+}
+
+impl UnloadTopic {
+    pub fn new(code: TopicCode) -> Self {
+        Self { code }
+    }
+}
+
+impl_codec!(
+    struct UnloadTopic {
+        code: TopicCode
+    }
+);
+
 #[derive(Debug, Clone)]
 pub struct DurableMessageQuery {
     limit: u32,
@@ -94,7 +137,7 @@ impl DurabilityService {
     #[inline(always)]
     pub async fn batch_retrieve(
         &self,
-        query: DurableMessageQuery ,
+        query: DurableMessageQuery,
     ) -> Result<Vec<DurableMessage>, DurabilityError> {
         self.inner.batch_retrieve(query).await
     }
@@ -131,9 +174,7 @@ pub trait Durability: Send + Sync + 'static {
 }
 
 mod sealed {
-    use std::{future::Future, ops::RangeToInclusive, pin::Pin};
-
-    use chrono::{DateTime, Utc};
+    use std::{future::Future, pin::Pin};
 
     use crate::protocol::endpoint::MessageId;
 

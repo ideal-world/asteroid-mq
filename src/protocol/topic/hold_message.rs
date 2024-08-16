@@ -1,21 +1,19 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
-    hash::Hash,
-    sync::{atomic::AtomicUsize, Mutex, RwLock},
+    collections::{BTreeSet, HashMap, HashSet},
+    sync::RwLock,
     task::Poll,
 };
 
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
 
 use crate::{
     protocol::{
         endpoint::{
-            EndpointAddr, Message, MessageAck, MessageHeader, MessageId, MessageStatusKind,
+            EndpointAddr, Message, MessageAck, MessageId, MessageStateUpdate, MessageStatusKind,
             SetState,
         },
-        node::{event::N2nPacket, raft::LogEntry},
-        topic::wait_ack::{self, WaitAckSuccess},
+        node::raft::LogEntry,
+        topic::wait_ack::WaitAckSuccess,
     },
     util::Timed,
 };
@@ -71,14 +69,18 @@ impl HoldMessage {
             status_update
         };
         if !status_update.is_empty() {
+            let update = MessageStateUpdate::new(self.message.id(), status_update);
             let set_state = SetState {
-                message_id: self.message.id(),
-                topic: self.message.topic().clone(),
-                status: status_update,
+                topic: context.topic.code().clone(),
+                update,
             };
             let topic = context.topic.clone();
             tokio::task::spawn(async move {
-                match topic.node.commit_log(LogEntry::set_state(set_state)).await {
+                match topic
+                    .node
+                    .commit_log(LogEntry::set_state(set_state))
+                    .await
+                {
                     Ok(_) => {
                         //
                     }
@@ -152,6 +154,13 @@ pub(crate) struct MessageQueue {
 }
 
 impl MessageQueue {
+    pub(crate) fn clear(&mut self) {
+        self.hold_messages.clear();
+        self.time_id.clear();
+        self.id_time.clear();
+        self.resolved.write().unwrap().clear();
+        self.size = 0;
+    }
     pub(crate) fn new(blocking: bool, capacity: usize) -> Self {
         Self {
             blocking,
@@ -236,6 +245,11 @@ impl MessageQueue {
             wg.insert(from, kind);
         }
     }
+    pub(crate) fn poll_all(&self, context: &MessagePollContext<'_>) {
+        for id in self.hold_messages.keys().copied().collect::<Vec<_>>() {
+            self.poll_message(id, context);
+        }
+    }
     // poll with resolved cache
     pub(crate) fn poll_message(
         &self,
@@ -295,9 +309,7 @@ impl MessageQueue {
             Some(Poll::Pending)
         }
     }
-    pub(crate) fn is_empty(&self) -> bool {
-        self.size == 0
-    }
+
     pub(crate) fn len(&self) -> usize {
         self.size
     }
@@ -354,7 +366,7 @@ impl MessageQueue {
 }
 
 impl Topic {
-    pub(crate) fn update_and_flush(&self, update: SetState) {
+    pub(crate) fn update_and_flush(&self, update: MessageStateUpdate) {
         let poll_result = {
             let rg = self.queue.read().unwrap();
             for (from, status) in update.status {
@@ -372,9 +384,8 @@ impl Topic {
     pub(crate) async fn single_ack(&self, ack: MessageAck) -> Result<(), crate::Error> {
         self.node
             .commit_log(LogEntry::set_state(SetState {
-                message_id: ack.ack_to,
                 topic: self.code().clone(),
-                status: HashMap::from([(ack.from, ack.kind)]),
+                update: MessageStateUpdate::new(ack.ack_to, HashMap::from([(ack.from, ack.kind)])),
             }))
             .await
             .map_err(crate::Error::contextual("commit single ack"))?;

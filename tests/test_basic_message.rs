@@ -16,14 +16,7 @@
 //!	消息6阻塞,等待消息5消费
 //!
 
-use std::{
-    net::SocketAddr,
-    num::{NonZeroU32, NonZeroUsize},
-    str::FromStr,
-    time::Duration,
-};
-
-use bytes::Bytes;
+use std::{net::SocketAddr, num::NonZeroU32, str::FromStr, time::Duration};
 
 use asteroid_mq::protocol::{
     endpoint::{Message, MessageAckExpectKind, MessageHeader, MessageId, MessageTargetKind},
@@ -49,17 +42,15 @@ async fn test_nodes() {
     fn topic_config() -> TopicConfig {
         TopicConfig {
             code: TopicCode::const_new("events"),
-            blocking: true,
+            blocking: false,
             overflow_config: Some(TopicOverflowConfig {
                 policy: OverflowPolicy::RejectNew,
                 size: NonZeroU32::new(500).unwrap(),
             }),
-            durability_service: None,
         }
     }
 
     tokio::spawn(async move {
-        let event_topic = node_server.initialize_topic(topic_config()).await.unwrap();
         {
             let node_server = node_server.clone();
             tokio::spawn(async move {
@@ -73,9 +64,11 @@ async fn test_nodes() {
                 }
             });
         }
+        let event_topic = node_server.new_topic(topic_config()).await.unwrap();
         let node_server_user = event_topic
             .create_endpoint(vec![Interest::new("events/**")])
-            .await.unwrap();
+            .await
+            .unwrap();
 
         loop {
             let message = node_server_user.next_message().await;
@@ -91,15 +84,17 @@ async fn test_nodes() {
         .connect(SocketAddr::from_str("127.0.0.1:10080").unwrap())
         .await
         .unwrap();
-    let event_topic = node_client.initialize_topic(topic_config()).await.unwrap();
 
     node_client
         .create_connection(TokioTcp::new(stream_client))
         .await
         .unwrap();
+
+    let event_topic = node_client.new_topic(topic_config()).await.unwrap();
     let node_client_sender = event_topic
         .create_endpoint(vec![Interest::new("events/hello-world")])
-        .await.unwrap();
+        .await
+        .unwrap();
 
     tokio::spawn(async move {
         loop {
@@ -112,20 +107,14 @@ async fn test_nodes() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let mut handles = vec![];
     for no in 0..10 {
-        let message = format!("Message No.{no}");
         let ack_handle = ep
-            .send_message(Message {
-                header: MessageHeader {
-                    message_id: MessageId::new_snowflake(),
-                    holder_node: node_client.id(),
-                    ack_kind: MessageAckExpectKind::Processed,
-                    target_kind: MessageTargetKind::Online,
-                    subjects: vec![Subject::new("events/hello-world")].into(),
-                    topic: event_topic.code().clone(),
-                    durability: None,
-                },
-                payload: message.into(),
-            })
+            .send_message(Message::new(
+                MessageHeader::builder([Subject::new("events/hello-world")])
+                    .ack_kind(MessageAckExpectKind::Processed)
+                    .mode_online()
+                    .build(),
+                format!("Message No.{no}"),
+            ))
             .await
             .unwrap();
         handles.push(ack_handle);

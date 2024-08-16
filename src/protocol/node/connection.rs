@@ -1,6 +1,5 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc, time::Instant};
 
-use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::protocol::{
@@ -8,13 +7,13 @@ use crate::protocol::{
     node::{
         event::{N2NPayloadKind, N2nAuth},
         raft::{
-            FollowerState, Heartbeat, IndexedLog, LeaderState, LogAck, LogAppend, LogCommit,
-            LogEntry, LogReplicate, RaftInfo, RaftRole, RaftSnapshot, RequestVote, Vote,
+            FollowerState, Heartbeat, LeaderState, LogAck, LogAppend, LogCommit, LogReplicate,
+            RaftRole, RaftSnapshot, RequestVote, Vote,
         },
     },
 };
 
-use super::{N2NAuth, N2nEvent, N2nPacket, NodeInfo, NodeRef};
+use super::{N2NAuth, N2nPacket, NodeInfo, NodeRef};
 
 pub mod tokio_tcp;
 #[derive(Debug)]
@@ -43,7 +42,7 @@ pub enum N2NConnectionErrorKind {
 #[derive(Debug)]
 
 pub struct N2NSendError {
-    pub raw_event: N2nPacket,
+    pub raw_packet: N2nPacket,
     pub error: Box<dyn std::error::Error + Send + Sync>,
 }
 use futures_util::{FutureExt, Sink, SinkExt, Stream, StreamExt};
@@ -195,12 +194,7 @@ impl N2NConnectionInstance {
                     };
                     match event {
                         PollEvent::PacketIn(packet) => {
-                            if packet.header.kind != N2NPayloadKind::Heartbeat {
-                                tracing::debug!(?packet.header, "received packet");
-                                tracing::trace!(?packet.payload, "received packet");
-                            } else {
-                                tracing::trace!(?packet.header, "received heartbeat");
-                            }
+                            tracing::trace!(?packet, "received packet");
                             match packet.kind() {
                                 N2NPayloadKind::Auth => {
                                     // ignore
@@ -394,7 +388,6 @@ impl N2NConnectionInstance {
                                             } else {
                                                 false
                                             };
-                                            tracing::debug!(?is_yield, "log ack");
                                             if is_yield {
                                                 state.pending_logs.resolve(log_ack.index);
                                                 while let Some(log) =
@@ -425,7 +418,16 @@ impl N2NConnectionInstance {
                                     })?;
                                     let mut state = node.raft_state_unwrap().write().unwrap();
                                     if log_commit.index <= state.index {
-                                        todo!("request sync");
+                                        let packet = N2nPacket::request_snapshot();
+                                        internal_outbound_tx.send(packet).map_err(|e| {
+                                            N2NConnectionError::new(
+                                                N2NConnectionErrorKind::Send(N2NSendError {
+                                                    raw_packet: e.0,
+                                                    error: "missing outbound sender".into(),
+                                                }),
+                                                "decode LogCommit",
+                                            )
+                                        })?;
                                         continue;
                                     }
                                     if state.role.is_follower() {
@@ -462,6 +464,24 @@ impl N2NConnectionInstance {
                                 }
                                 N2NPayloadKind::Unknown => {
                                     warn!("received unknown packet from cluster node, ignore it");
+                                }
+                                N2NPayloadKind::RequestSnapshot => {
+                                    let raft_state = node.raft_state_unwrap().read().unwrap();
+                                    let raft_snapshot = RaftSnapshot {
+                                        term: raft_state.term,
+                                        index: raft_state.index,
+                                        data: node.snapshot(),
+                                    };
+                                    let packet = N2nPacket::raft_snapshot(raft_snapshot);
+                                    internal_outbound_tx.send(packet).map_err(|e| {
+                                        N2NConnectionError::new(
+                                            N2NConnectionErrorKind::Send(N2NSendError {
+                                                raw_packet: e.0,
+                                                error: "missing outbound sender".into(),
+                                            }),
+                                            "decode LogCommit",
+                                        )
+                                    })?;
                                 }
                             }
                         }

@@ -1,9 +1,7 @@
 use std::{
     borrow::Cow,
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, HashSet, VecDeque},
-    future::Future,
-    sync::{Arc, Mutex},
+    collections::{BinaryHeap, HashMap, HashSet},
     time::{Duration, Instant},
 };
 const ELECTION_TIMEOUT: Duration = Duration::from_secs(1);
@@ -13,7 +11,7 @@ use crate::{
     impl_codec,
     protocol::{
         codec::CodecType,
-        endpoint::{EndpointOnline, Message, SetState},
+        endpoint::{EndpointOnline, Message, SetState}, topic::durable_message::{LoadTopic, UnloadTopic},
     },
 };
 
@@ -114,7 +112,7 @@ impl FollowerState {
             let timeout_reporter = timeout_reporter.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(timeout).await;
-                timeout_reporter.send(());
+                let _ = timeout_reporter.send(());
             })
         };
         Self {
@@ -258,9 +256,23 @@ pub struct RaftState {
 }
 pub struct RaftCommitError {
     kind: RaftCommitErrorKind,
+    reason: Option<Cow<'static, str>>,
     context: Cow<'static, str>,
 }
 
+impl RaftCommitError {
+    pub fn process_failed(context: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            kind: RaftCommitErrorKind::ProcessFailed,
+            reason: None,
+            context: context.into(),
+        }
+    }
+    pub fn with_reason(mut self, reason: impl Into<Cow<'static, str>>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+}
 impl std::fmt::Debug for RaftCommitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RaftCommitError")
@@ -272,17 +284,18 @@ impl std::fmt::Debug for RaftCommitError {
 
 #[derive(Debug)]
 pub enum RaftCommitErrorKind {
-    MissingReporter,
+    MissingReporter = 0,
+    ProcessFailed = 1,
 }
 
 pin_project_lite::pin_project! {
-    pub struct CommitHook {
+    pub struct CommitHandle {
         #[pin]
         recv: flume::r#async::RecvFut<'static, Result<RaftLogIndex, RaftCommitError>>
     }
 }
 
-impl std::future::Future for CommitHook {
+impl std::future::Future for CommitHandle {
     type Output = Result<RaftLogIndex, RaftCommitError>;
     fn poll(
         self: std::pin::Pin<&mut Self>,
@@ -293,16 +306,17 @@ impl std::future::Future for CommitHook {
             result.map_err(|_| RaftCommitError {
                 kind: RaftCommitErrorKind::MissingReporter,
                 context: "commit hook receiver dropped".into(),
+                reason: None,
             })?
         })
     }
 }
 
 impl RaftState {
-    pub fn add_commit_hook(&mut self, trace_id: RaftTraceId) -> CommitHook {
+    pub fn add_commit_handle(&mut self, trace_id: RaftTraceId) -> CommitHandle {
         let (tx, rx) = flume::bounded(1);
         let _ = self.commit_hooks.insert(trace_id, tx);
-        CommitHook {
+        CommitHandle {
             recv: rx.into_recv_async(),
         }
     }
@@ -373,6 +387,9 @@ impl RaftLogIndex {
         self.0 = self.0.wrapping_add(1);
         *self
     }
+    pub fn next(&self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
 }
 
 impl_codec!(
@@ -403,6 +420,18 @@ impl LogEntry {
             trace_id: RaftTraceId::new_snowflake(),
         }
     }
+    pub fn load_topic(load: LoadTopic) -> Self {
+        Self {
+            kind: N2nEventKind::LoadTopic,
+            payload: load.encode_to_bytes(),
+        }
+    }
+    pub fn unload_topic(unload: UnloadTopic) -> Self {
+        Self {
+            kind: N2nEventKind::UnloadTopic,
+            payload: unload.encode_to_bytes(),
+        }
+    }
     pub fn delegate_message(message: Message) -> Self {
         Self {
             kind: N2nEventKind::DelegateMessage,
@@ -418,7 +447,7 @@ impl LogEntry {
     pub fn set_state(set_state: SetState) -> Self {
         Self {
             kind: N2nEventKind::SetState,
-            payload: set_state.encode_to_bytes()
+            payload: set_state.encode_to_bytes(),
         }
     }
 }

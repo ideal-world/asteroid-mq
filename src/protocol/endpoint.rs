@@ -1,32 +1,18 @@
-use tracing::instrument;
 mod event;
 mod message;
 
 use super::{
-    codec::CodecType,
-    node::{
-        event::{N2nEvent, N2nEventKind},
-        raft::LogEntry,
-        Node, NodeId, NodeRef,
-    },
+    node::{raft::LogEntry, Node, NodeRef},
     topic::{wait_ack::WaitAckHandle, Topic, TopicCode, TopicRef},
 };
 pub use event::*;
 pub use message::*;
 use std::{
-    collections::{HashMap, HashSet},
     ops::Deref,
     sync::{Arc, Weak},
 };
 
-use crate::{
-    protocol::{
-        interest::{Interest, Subject},
-        node::event::N2nPacket,
-        topic::wait_ack::WaitAck,
-    },
-    TimestampSec,
-};
+use crate::protocol::interest::Interest;
 #[derive(Clone, Debug)]
 pub struct LocalEndpoint {
     pub(crate) inner: Arc<LocalEndpointInner>,
@@ -162,7 +148,6 @@ impl Message {
     ) -> MessageAck {
         MessageAck {
             ack_to: self.id(),
-            holder: self.header.holder_node,
             kind,
             from,
             topic_code,

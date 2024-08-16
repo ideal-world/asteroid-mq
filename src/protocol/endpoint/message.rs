@@ -5,7 +5,7 @@ use crate::{
     protocol::{
         codec::CodecType,
         interest::Subject,
-        topic::{durable_message::MessageDurabilityConfig,  TopicCode},
+        topic::{durable_message::MessageDurabilityConfig, TopicCode},
     },
 };
 use bytes::{BufMut, Bytes};
@@ -24,8 +24,9 @@ pub enum MessageStatusKind {
     Failed = 0x80,
     Unreachable = 0x81,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MessageAckExpectKind {
+    #[default]
     Sent = 0x00,
     Received = 0x01,
     Processed = 0x02,
@@ -141,33 +142,83 @@ impl Message {
     pub fn id(&self) -> MessageId {
         self.header.message_id
     }
-    pub fn topic(&self) -> &TopicCode {
-        &self.header.topic
-    }
     pub fn ack_kind(&self) -> MessageAckExpectKind {
         self.header.ack_kind
+    }
+}
+
+impl Message {
+    pub fn new(header: MessageHeader, payload: impl Into<Bytes>) -> Self {
+        Self { header, payload: payload.into() }
     }
 }
 #[derive(Debug, Clone)]
 pub struct MessageHeader {
     pub message_id: MessageId,
-    pub holder_node: NodeId,
     pub ack_kind: MessageAckExpectKind,
     pub target_kind: MessageTargetKind,
     pub durability: Option<MessageDurabilityConfig>,
     pub subjects: Arc<[Subject]>,
-    pub topic: TopicCode,
+}
+pub struct MessageHeaderBuilder {
+    pub ack_kind: MessageAckExpectKind,
+    target_kind: MessageTargetKind,
+    durability: Option<MessageDurabilityConfig>,
+    pub subjects: Vec<Subject>,
+}
+
+impl MessageHeader {
+    pub fn builder(subjects: impl IntoIterator<Item = Subject>) -> MessageHeaderBuilder {
+        MessageHeaderBuilder::new(subjects)
+    }
+}
+
+impl MessageHeaderBuilder {
+    #[inline(always)]
+    pub fn new(subjects: impl IntoIterator<Item = Subject>) -> Self {
+        Self {
+            ack_kind: MessageAckExpectKind::Sent,
+            target_kind: MessageTargetKind::Online,
+            durability: None,
+            subjects: subjects.into_iter().collect(),
+        }
+    }
+    #[inline(always)]
+    pub fn ack_kind(mut self, ack_kind: MessageAckExpectKind) -> Self {
+        self.ack_kind = ack_kind;
+        self
+    }
+    pub fn mode_online(mut self) -> Self {
+        self.target_kind = MessageTargetKind::Online;
+        self
+    }
+    pub fn mode_durable(mut self, config: MessageDurabilityConfig) -> Self {
+        self.target_kind = MessageTargetKind::Durable;
+        self.durability = Some(config);
+        self
+    }
+    pub fn mode_push(mut self) -> Self {
+        self.target_kind = MessageTargetKind::Push;
+        self
+    }
+    pub fn build(self) -> MessageHeader {
+        MessageHeader {
+            message_id: MessageId::new_snowflake(),
+            ack_kind: self.ack_kind,
+            target_kind: self.target_kind,
+            durability: self.durability,
+            subjects: self.subjects.into(),
+        }
+    }
 }
 
 impl_codec! {
     struct MessageHeader {
         message_id: MessageId,
-        holder_node: NodeId,
         ack_kind: MessageAckExpectKind,
         target_kind: MessageTargetKind,
         durability:  Option<MessageDurabilityConfig>,
         subjects: Arc<[Subject]>,
-        topic: TopicCode,
     }
 }
 #[derive(Debug, Clone)]
@@ -175,7 +226,6 @@ pub struct MessageAck {
     pub ack_to: MessageId,
     pub topic_code: TopicCode,
     pub from: EndpointAddr,
-    pub holder: NodeId,
     pub kind: MessageStatusKind,
 }
 
@@ -184,7 +234,6 @@ impl_codec! {
         ack_to: MessageId,
         topic_code: TopicCode,
         from: EndpointAddr,
-        holder: NodeId,
         kind: MessageStatusKind,
     }
 }
