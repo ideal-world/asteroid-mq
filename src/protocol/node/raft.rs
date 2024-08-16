@@ -11,7 +11,8 @@ use crate::{
     impl_codec,
     protocol::{
         codec::CodecType,
-        endpoint::{EndpointOnline, Message, SetState}, topic::durable_message::{LoadTopic, UnloadTopic},
+        endpoint::{EndpointOnline, Message, SetState},
+        topic::durable_message::{LoadTopic, UnloadTopic},
     },
 };
 
@@ -341,30 +342,42 @@ impl RaftState {
             },
         }
     }
-    pub fn term_timeout(&mut self) -> Option<Vote> {
+    pub fn term_timeout(&mut self) -> Option<RequestVote> {
         match &mut self.role {
             RaftRole::Leader(_) => None,
             RaftRole::Follower(_) | RaftRole::Candidate(_) => {
                 let node = self.node_ref.upgrade()?;
                 self.term = self.term.next();
-                if node.cluster_size() == 1 {
+                let cluster_size = node.cluster_size();
+                if cluster_size == 1 {
                     self.set_role(RaftRole::Leader(LeaderState::new(
                         self.node_ref.clone(),
                         ELECTION_TIMEOUT,
                         self.term,
                     )));
-                    return None;
+                    None
+                } else if cluster_size == 0 {
+                    self.set_role(RaftRole::Follower(FollowerState::new(
+                        crate::util::random_duration_ms(100..500),
+                        self.timeout_reporter.clone(),
+                    )));
+                    None
+                } else {
+                    self.set_role(RaftRole::Candidate(CandidateState::new(
+                        ELECTION_TIMEOUT,
+                        self.timeout_reporter.clone(),
+                    )));
+                    self.term = self.term.next();
+                    Some(RequestVote {
+                        term: self.term,
+                        index: self.index,
+                    })
                 }
-                self.set_role(RaftRole::Candidate(CandidateState::new(
-                    ELECTION_TIMEOUT,
-                    self.timeout_reporter.clone(),
-                )));
-                Some(Vote { term: self.term })
             }
         }
     }
     pub fn set_role(&mut self, role: RaftRole) {
-        tracing::debug!("set role: {:?}", role);
+        tracing::info!("set role: {:?}", role);
         self.role = role;
     }
 }
@@ -470,7 +483,7 @@ impl_codec!(
         term: RaftTerm,
     }
 );
-
+#[derive(Debug, Clone)]
 pub struct RequestVote {
     pub term: RaftTerm,
     pub index: RaftLogIndex,

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 
 use super::{
-    raft::{Heartbeat, LogAck, LogAppend, LogCommit, LogReplicate, RaftSnapshot, Vote},
+    raft::{Heartbeat, LogAck, LogAppend, LogCommit, LogReplicate, RaftSnapshot, RequestVote, Vote},
     NodeId, NodeInfo,
 };
 
@@ -140,7 +140,17 @@ impl N2nPacket {
             payload: payload_buf.into(),
         }
     }
-
+    pub fn raft_request_vote(vote: RequestVote) -> Self {
+        let payload = vote.encode_to_bytes();
+        Self {
+            header: N2nPacketHeader {
+                id: N2nPacketId::new_snowflake(),
+                kind: N2NPayloadKind::RequestVote,
+                payload_size: payload.len() as u32,
+            },
+            payload,
+        }
+    }
     pub fn raft_vote(vote: Vote) -> Self {
         let payload = vote.encode_to_bytes();
         Self {

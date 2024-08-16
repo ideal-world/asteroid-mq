@@ -1,68 +1,65 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{future::Future, net::SocketAddr, time::Duration};
 
-use asteroid_mq::protocol::node::{connection::tokio_tcp::TokioTcp, Node};
+use asteroid_mq::protocol::{
+    cluster::{TcpClusterInfo, TcpClusterProvider},
+    node::{connection::tokio_tcp::TokioTcp, Node},
+};
 
 #[tokio::test]
 async fn test_raft() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::TRACE)
         .init();
-
-    const CLUSTER_SIZE: u64 = 5;
-    let mut node_list: Vec<(Node, u16)> = vec![];
-    for port_bias in 0..CLUSTER_SIZE - 1 {
-        let node = Node::default();
-        node.set_cluster_size(CLUSTER_SIZE);
-        node_list.push((node, 19000 + port_bias as u16));
+    #[derive(Debug, Clone)]
+    pub struct LocalClusterProvider {
+        size: u64,
+        nodes: Vec<SocketAddr>,
+        next: tokio::time::Instant,
     }
-    // create listener
-    for (node, port) in node_list.clone() {
-        let listener = tokio::net::TcpListener::bind(
-            format!("127.0.0.1:{}", port).parse::<SocketAddr>().unwrap(),
-        )
-        .await
-        .unwrap();
-        tokio::spawn(async move {
-            while let Ok((stream, peer)) = listener.accept().await {
-                tracing::info!(peer=?peer, "new connection");
-                let node = node.clone();
-                tokio::spawn(async move {
-                    let conn = TokioTcp::new(stream);
-                    node.create_connection(conn).await.unwrap();
-                });
+    impl LocalClusterProvider {
+        pub fn new(size: u64, from_port: u16) -> Self {
+            let nodes = (0..size)
+                .map(|i| format!("0.0.0.0:{}", from_port + i as u16).parse().unwrap())
+                .collect();
+            Self {
+                size,
+                nodes,
+                next: tokio::time::Instant::now(),
             }
-        });
+        }
     }
-
-    // create connections
-    for (i, (node, _)) in node_list.iter().enumerate() {
-        for (j, (_, peer_port)) in node_list.iter().enumerate() {
-            if i <= j {
-                break;
+    impl TcpClusterProvider for LocalClusterProvider {
+        fn next_update(&mut self) -> impl Future<Output = TcpClusterInfo> + Send {
+            let next = self.next;
+            self.next = next + Duration::from_secs(5);
+            let size = self.size;
+            let nodes = self.nodes.clone();
+            async move {
+                tokio::time::sleep_until(next).await;
+                TcpClusterInfo { size, nodes }
             }
-            let stream = tokio::net::TcpSocket::new_v4()
-                .unwrap()
-                .connect(
-                    format!("127.0.0.1:{}", peer_port)
-                        .parse::<SocketAddr>()
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            node.create_connection(TokioTcp::new(stream)).await.unwrap();
         }
     }
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    let node = Node::default();
-    node.set_cluster_size(CLUSTER_SIZE);
-    for (i, (node, port)) in node_list.iter().enumerate() {
-        let stream = tokio::net::TcpSocket::new_v4()
-            .unwrap()
-            .connect(format!("127.0.0.1:{}", port).parse::<SocketAddr>().unwrap())
-            .await
+    const CLUSTER_SIZE: u64 = 5;
+    let provider = LocalClusterProvider::new(CLUSTER_SIZE, 19000);
+    for port_bias in 0..CLUSTER_SIZE - 1 {
+        let node = Node::default();
+        let _handle = node
+            .create_cluster(
+                provider.clone(),
+                format!("0.0.0.0:{}", 19000 + port_bias).parse().unwrap(),
+            )
             .unwrap();
-        node.create_connection(TokioTcp::new(stream)).await.unwrap();
     }
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let node = Node::default();
+    node.create_cluster(
+        provider.clone(),
+        format!("0.0.0.0:{}", 19000 + CLUSTER_SIZE).parse().unwrap(),
+    )
+    .unwrap();
+
     tokio::time::sleep(Duration::from_secs(5)).await;
 }

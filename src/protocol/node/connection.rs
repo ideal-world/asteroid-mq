@@ -91,6 +91,7 @@ impl N2NConnectionInstance {
         config: ConnectionConfig,
         connection: C,
     ) -> Result<Self, N2NConnectionError> {
+        tracing::debug!(?config, "init connection");
         let config_clone = config.clone();
         let (mut sink, mut stream) = connection.split();
         let Some(node) = config.attached_node.upgrade() else {
@@ -261,6 +262,7 @@ impl N2NConnectionInstance {
                                             "decode request vote",
                                         )
                                     })?;
+                                    tracing::trace!(?request_vote, "received request vote");
                                     let mut self_state = node.raft_state_unwrap().write().unwrap();
                                     let vote_this = match &mut self_state.role {
                                         RaftRole::Leader(_) => false,

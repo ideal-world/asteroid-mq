@@ -171,9 +171,9 @@ impl Default for Node {
                 let Some(node) = node_ref.upgrade() else {
                     break;
                 };
-                let vote = node.raft_state_unwrap().write().unwrap().term_timeout();
-                if let Some(vote) = vote {
-                    node.cluster_wise_broadcast_packet(N2nPacket::raft_vote(vote));
+                let req = node.raft_state_unwrap().write().unwrap().term_timeout();
+                if let Some(req) = req {
+                    node.cluster_wise_broadcast_packet(N2nPacket::raft_request_vote(req));
                 }
             }
         });
@@ -259,7 +259,7 @@ impl Node {
     pub async fn create_connection<C: N2NConnection>(
         &self,
         conn: C,
-    ) -> Result<(), N2NConnectionError> {
+    ) -> Result<NodeId, N2NConnectionError> {
         let config = ConnectionConfig {
             attached_node: self.node_ref(),
             auth: self.auth.read().unwrap().clone(),
@@ -290,7 +290,7 @@ impl Node {
         .map_err(|_| {
             N2NConnectionError::new(N2NConnectionErrorKind::Closed, "fail to send sync error")
         })?;
-        Ok(())
+        Ok(peer)
     }
     pub fn id(&self) -> NodeId {
         self.info.id

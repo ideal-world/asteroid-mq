@@ -10,8 +10,6 @@ use crate::{
 };
 use bytes::{BufMut, Bytes};
 
-use crate::protocol::node::NodeId;
-
 use super::EndpointAddr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
