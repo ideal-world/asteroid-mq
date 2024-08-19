@@ -357,7 +357,7 @@ impl RaftState {
                     None
                 } else if cluster_size == 0 {
                     self.set_role(RaftRole::Follower(FollowerState::new(
-                        crate::util::random_duration_ms(200..700),
+                        crate::util::random_duration_ms(Node::RAFT_RANDOM_DURATION_RANGE),
                         self.timeout_reporter.clone(),
                     )));
                     None

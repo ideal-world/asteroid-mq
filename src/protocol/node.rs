@@ -49,18 +49,29 @@ impl std::fmt::Debug for NodeId {
             .finish()
     }
 }
+
 impl NodeId {
+    pub const KIND_SNOWFLAKE: u8 = 0x00;
+    pub const KIND_K8S_CLUSTER: u8 = 0x01;
+    pub const KIND_WEB_BROWSER: u8 = 0x02;
+    pub fn sha256(bytes: &[u8]) -> Self {
+        let dg = <sha2::Sha256 as sha2::Digest>::digest(bytes);
+        let mut bytes = [0; 16];
+        bytes.copy_from_slice(&dg.as_slice()[0..16]);
+        NodeId { bytes }
+    }
     pub fn snowflake() -> NodeId {
         static INSTANCE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let dg = crate::util::executor_digest();
         let mut bytes = [0; 16];
-        bytes[0..8].copy_from_slice(&dg.to_be_bytes());
-        bytes[8..12].copy_from_slice(&(crate::util::timestamp_sec() as u32).to_be_bytes());
-        bytes[12..16].copy_from_slice(
+        bytes[0] = Self::KIND_SNOWFLAKE;
+        bytes[1..9].copy_from_slice(&dg.to_be_bytes());
+        bytes[9..13].copy_from_slice(
             &INSTANCE_ID
                 .fetch_add(1, sync::atomic::Ordering::SeqCst)
                 .to_be_bytes(),
         );
+        bytes[13..16].copy_from_slice(&(crate::util::timestamp_sec() as u32).to_be_bytes()[0..3]);
         NodeId { bytes }
     }
 }
@@ -150,7 +161,7 @@ impl Deref for Node {
 
 impl Default for Node {
     fn default() -> Self {
-        let timeout = crate::util::random_duration_ms(200..700);
+        let timeout = crate::util::random_duration_ms(Self::RAFT_RANDOM_DURATION_RANGE);
         let (timeout_reporter, timeout_receiver) = flume::bounded(1);
 
         let this = Self {
@@ -193,8 +204,9 @@ impl Default for Node {
 }
 
 impl Node {
+    const RAFT_RANDOM_DURATION_RANGE: std::ops::Range<u64> = 200..700;
     pub fn new(cluster_info: NodeInfo) -> Self {
-        let timeout = crate::util::random_duration_ms(200..700);
+        let timeout = crate::util::random_duration_ms(Self::RAFT_RANDOM_DURATION_RANGE);
         let (timeout_reporter, timeout_receiver) = flume::bounded(1);
         let this = Self {
             inner: Arc::new_cyclic(|this| NodeInner {
@@ -372,7 +384,10 @@ impl Node {
             unreachable!("should be ready");
         }
     }
-    pub(crate) async fn commit_log(&self, mut log: LogEntry) -> Result<RaftLogIndex, RaftCommitError> {
+    pub(crate) async fn commit_log(
+        &self,
+        mut log: LogEntry,
+    ) -> Result<RaftLogIndex, RaftCommitError> {
         tracing::debug!(?log, "commit log");
         if self.cluster_size() == 1 {
             let index = {

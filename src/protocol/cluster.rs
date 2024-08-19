@@ -1,3 +1,5 @@
+#[cfg(feature = "cluster-k8s")]
+pub mod k8s;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,

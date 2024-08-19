@@ -10,5 +10,8 @@
         "Sharded",
         "subsec",
         "Uninit"
+    ],
+    "rust-analyzer.cargo.features": [
+        "cluster-k8s"
     ]
 }
