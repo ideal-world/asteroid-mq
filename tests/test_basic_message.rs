@@ -1,6 +1,6 @@
 //! 1. 按照主题的权限 4
-//!   - 1.1. 事件中心接口
-//!   - 1.2. bios实现
+//!   - 1.1. 事件中心接口 TODO  
+//!   - 1.2. bios实现 TODO
 //! 2. 主题系统 4
 //!   - 2.1. 主题的数据流是否阻塞 DONE
 //! 3. 主题，消息持久化 3 TO BE CONTINUE
@@ -9,17 +9,11 @@
 //! 6. RUST SDK 1
 //! 7. RUST 接入 2
 //!
-//! spi-log:需要按照顺序单个接收日志
-//!	发送「消息1,消息2,消息3,消息4,消息5,消息6」
-//!	服务a:消息1✅,消息2✅,消息5❌
-//!	服务 b:消息3✅,消息4✅
-//!	消息6阻塞,等待消息5消费
-//!
 
 use std::{net::SocketAddr, num::NonZeroU32, str::FromStr, time::Duration};
 
 use asteroid_mq::protocol::{
-    endpoint::{Message, MessageAckExpectKind, MessageHeader, MessageId, MessageTargetKind},
+    endpoint::{Message, MessageAckExpectKind, MessageHeader},
     interest::{Interest, Subject},
     node::{connection::tokio_tcp::TokioTcp, Node},
     topic::{
@@ -111,7 +105,45 @@ async fn test_nodes() {
             .send_message(Message::new(
                 MessageHeader::builder([Subject::new("events/hello-world")])
                     .ack_kind(MessageAckExpectKind::Processed)
-                    .mode_online()
+                    .mode_push()
+                    .build(),
+                format!("Message No.{no}"),
+            ))
+            .await
+            .unwrap();
+        handles.push(ack_handle);
+    }
+    for ack_handle in handles {
+        let success = ack_handle.await.unwrap();
+        tracing::info!("recv all ack: {success:?}")
+    }
+
+    let mut handles = vec![];
+    for no in 0..10 {
+        let ack_handle = ep
+            .send_message(Message::new(
+                MessageHeader::builder([Subject::new("events/hello-world")])
+                    .ack_kind(MessageAckExpectKind::Sent)
+                    .mode_push()
+                    .build(),
+                format!("Message No.{no}"),
+            ))
+            .await
+            .unwrap();
+        handles.push(ack_handle);
+    }
+    for ack_handle in handles {
+        let success = ack_handle.await.unwrap();
+        tracing::info!("recv all ack: {success:?}")
+    }
+
+    let mut handles = vec![];
+    for no in 0..10 {
+        let ack_handle = ep
+            .send_message(Message::new(
+                MessageHeader::builder([Subject::new("events/hello-world")])
+                    .ack_kind(MessageAckExpectKind::Received)
+                    .mode_push()
                     .build(),
                 format!("Message No.{no}"),
             ))

@@ -129,6 +129,7 @@ impl Sink<N2nPacket> for TokioTcp {
                     if *this.write_index == this.write_payload_buf.len() {
                         *this.write_state = WriteState::Ready;
                         *this.write_index = 0;
+
                         return std::task::Poll::Ready(Ok(()));
                     }
                 }
@@ -161,12 +162,13 @@ impl Stream for TokioTcp {
             match this.read_state {
                 ReadState::ExpectingHeader => {
                     let mut buffer = ReadBuf::new(&mut this.read_header_buf[(*this.read_index)..]);
-                    ready!(inner.as_mut().poll_read(cx, &mut buffer)).map_err(|e| {
+                    let poll_read_result = inner.as_mut().poll_read(cx, &mut buffer).map_err(|e| {
                         N2NConnectionError::new(
                             N2NConnectionErrorKind::Io(e),
                             "failed to read header",
                         )
-                    })?;
+                    });
+                    ready!(poll_read_result)?;
                     let remaining = buffer.remaining();
                     if remaining == 0 {
                         *this.read_state = ReadState::ExpectingPayload;

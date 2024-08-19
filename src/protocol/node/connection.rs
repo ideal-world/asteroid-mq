@@ -38,6 +38,7 @@ pub enum N2NConnectionErrorKind {
     Closed,
     Timeout,
     Protocol,
+    Existed,
 }
 #[derive(Debug)]
 
@@ -110,6 +111,7 @@ impl N2NConnectionInstance {
             auth: my_auth,
         });
         sink.send(evt).await?;
+        tracing::trace!("sent auth");
         let auth = stream.next().await.unwrap_or(Err(N2NConnectionError::new(
             N2NConnectionErrorKind::Closed,
             "event stream reached unexpected end when send auth packet",
@@ -123,8 +125,19 @@ impl N2NConnectionInstance {
         let auth_event = N2nAuth::decode(auth.payload)
             .map_err(|e| N2NConnectionError::new(N2NConnectionErrorKind::Decode(e), "decode auth"))?
             .0;
-        tracing::debug!(auth=?auth_event, "received auth event");
+        tracing::debug!(auth=?auth_event, "received auth");
         let peer_id = auth_event.info.id;
+
+        if let Some(existed_connection) = node.get_connection(peer_id) {
+            if existed_connection.is_alive() {
+                return Err(N2NConnectionError::new(
+                    N2NConnectionErrorKind::Existed,
+                    "connection already exists",
+                ));
+            } else {
+                node.remove_connection(peer_id);
+            }
+        }
         // if peer is cluster, and we are cluster:
 
         let (outbound_tx, outbound_rx) = flume::bounded::<N2nPacket>(1024);
@@ -135,7 +148,7 @@ impl N2NConnectionInstance {
                     "cluster id mismatch",
                 ));
             }
-            const HB_DURATION: std::time::Duration = std::time::Duration::from_secs(1);
+            const HB_DURATION: std::time::Duration = std::time::Duration::from_secs(5);
             {
                 let state = node.raft_state_unwrap().read().unwrap();
                 if state.role.is_leader() {

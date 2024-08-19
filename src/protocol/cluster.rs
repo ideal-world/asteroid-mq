@@ -2,17 +2,19 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
-use dashmap::DashMap;
-use tracing::warn;
+use tokio::sync::RwLock;
+use tracing::{warn, Instrument};
+
+use crate::protocol::node::connection;
 
 use super::node::{Node, NodeId};
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TcpClusterInfo {
     pub size: u64,
-    pub nodes: Vec<SocketAddr>,
+    pub nodes: HashMap<NodeId, SocketAddr>,
 }
 
 pub struct TcpClusterConnection {}
@@ -25,100 +27,122 @@ impl Node {
     pub fn create_cluster(
         &self,
         mut provider: impl TcpClusterProvider,
-        local_bind: SocketAddr,
+        listen_on: SocketAddr,
     ) -> std::io::Result<tokio::task::JoinHandle<()>> {
         let this = self.clone();
-        let listener = std::net::TcpListener::bind(local_bind)?;
-        let listener = tokio::net::TcpListener::from_std(listener)?;
 
-        let task = tokio::spawn(async move {
-            let connection_state: Arc<DashMap<SocketAddr, NodeId>> = Arc::new(DashMap::new());
-            enum Event {
-                Accept((tokio::net::TcpStream, SocketAddr)),
-                Update(TcpClusterInfo),
-            }
-            let (event_sender, event_receiver) = flume::unbounded();
-
-            {
-                let event_sender = event_sender.clone();
-                tokio::spawn(async move {
-                    loop {
-                        let update = provider.next_update().await;
-                        let result = event_sender.send(Event::Update(update));
-                        if result.is_err() {
-                            return;
-                        }
-                    }
-                })
-            };
-            tokio::spawn(async move {
-                loop {
-                    if let Ok((stream, peer)) = listener.accept().await.inspect_err(|e| {
-                        warn!(?e, "accept error");
-                    }) {
-                        let result = event_sender.send(Event::Accept((stream, peer)));
-                        if result.is_err() {
-                            return;
-                        }
-                    }
-                }
-            });
-            loop {
-                let event = event_receiver.recv_async().await;
-                let Ok(event) = event else { break };
-                match event {
-                    Event::Accept((stream, peer)) => {
-                        let node = this.clone();
-                        let conn =
-                            crate::protocol::node::connection::tokio_tcp::TokioTcp::new(stream);
-                        let connection_state = connection_state.clone();
-
-                        tokio::spawn(async move {
-                            let peer_id = node.create_connection(conn).await;
-                            if let Ok(peer_id) = peer_id {
-                                connection_state.insert(peer, peer_id);
+        let task = tokio::spawn(
+            async move {
+                let listener = tokio::net::TcpListener::bind(listen_on).await.unwrap();
+                let connection_state: Arc<RwLock<HashMap<NodeId, SocketAddr>>> = Default::default();
+                {
+                    let node = this.clone();
+                    let connection_state = connection_state.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            let info = provider.next_update().await;
+                            node.set_cluster_size(info.size);
+                            let mut lock = connection_state.write().await;
+                            let mut deleted = HashSet::new();
+                            let mut added = HashMap::new();
+                            for (peer_node_id, addr) in &info.nodes {
+                                if !lock.contains_key(peer_node_id) && *peer_node_id != node.id() {
+                                    added.insert(*peer_node_id, *addr);
+                                }
                             }
-                        });
-                    }
-                    Event::Update(info) => {
-                        this.set_cluster_size(info.size);
-                        let mut deleted = HashSet::new();
-                        let mut added = HashSet::new();
-                        for update in info.nodes {
-                            if connection_state.contains_key(&update) {
-                                deleted.insert(update);
-                            } else {
-                                added.insert(update);
+                            for (key, _peer_addr) in lock.iter() {
+                                if !info.nodes.contains_key(key) && *key != node.id() {
+                                    deleted.insert(*key);
+                                }
+                            }
+                            tracing::info!(?added, ?deleted, "cluster update");
+                            for delete in deleted {
+                                if let Some(_peer_addr) = lock.remove(&delete) {
+                                    node.remove_connection(delete)
+                                }
+                            }
+                            for (peer_id, peer_addr) in added {
+                                let node = node.clone();
+                                let connection_state = connection_state.clone();
+                                tokio::spawn(async move {
+                                    let stream = tokio::net::TcpStream::connect(peer_addr).await;
+                                    if let Ok(stream) = stream {
+                                        let conn =
+                                        crate::protocol::node::connection::tokio_tcp::TokioTcp::new(
+                                            stream,
+                                        );
+                                        match node.create_connection(conn).await {
+                                            Ok(peer_id) => {
+                                                connection_state
+                                                    .write()
+                                                    .await
+                                                    .insert(peer_id, peer_addr);
+                                                tracing::info!(
+                                                    ?peer_id,
+                                                    ?peer_addr,
+                                                    "connected to new node"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                if let connection::N2NConnectionErrorKind::Existed =
+                                                    e.kind
+                                                {
+                                                    tracing::debug!(
+                                                        ?peer_id,
+                                                        ?peer_addr,
+                                                        "connection existed"
+                                                    );
+                                                } else {
+                                                    warn!(?e, "failed to create connection");
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
                             }
                         }
-                        tracing::info!(?added, ?deleted, "cluster update");
-
-                        for delete in deleted {
-                            if let Some((_, id)) = connection_state.remove(&delete) {
-                                this.remove_connection(id)
-                            }
-                        }
-                        for add in added {
-                            let node = this.clone();
-                            let connection_state = connection_state.clone();
-                            tokio::spawn(async move {
-                                let stream = tokio::net::TcpStream::connect(add).await;
-                                tracing::debug!(?add, "connecting to new node");
-                                if let Ok(stream) = stream {
+                    })
+                };
+                {
+                    let node = this.clone();
+                    let connection_state = connection_state.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            if let Ok((stream, peer)) = listener.accept().await.inspect_err(|e| {
+                                warn!(?e, "accept error");
+                            }) {
+                                let connection_state = connection_state.clone();
+                                let node = node.clone();
+                                tokio::spawn(async move {
+                                    tracing::debug!(?peer, "accept new tcp connection");
                                     let conn =
                                         crate::protocol::node::connection::tokio_tcp::TokioTcp::new(
                                             stream,
                                         );
-                                    if let Ok(peer_id) = node.create_connection(conn).await {
-                                        connection_state.insert(add, peer_id);
+                                    let mut lock = connection_state.write().await;
+                                    match node.create_connection(conn).await {
+                                        Ok(peer_id) => {
+                                            lock.insert(peer_id, peer);
+                                            tracing::info!(?peer, "new connection");
+                                        }
+                                        Err(e) => {
+                                            if let connection::N2NConnectionErrorKind::Existed =
+                                                e.kind
+                                            {
+                                                tracing::debug!(?peer, "connection existed");
+                                            } else {
+                                                warn!(?e, "failed to create connection");
+                                            }
+                                        }
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
-                    }
+                    });
                 }
             }
-        });
+            .instrument(tracing::info_span!("cluster")),
+        );
         Ok(task)
     }
 }

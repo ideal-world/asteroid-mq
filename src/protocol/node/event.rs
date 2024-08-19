@@ -1,14 +1,15 @@
 use crate::{impl_codec, protocol::codec::CodecType};
 use bytes::{Bytes, BytesMut};
-use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 
 use super::{
-    raft::{Heartbeat, LogAck, LogAppend, LogCommit, LogReplicate, RaftSnapshot, RequestVote, Vote},
+    raft::{
+        Heartbeat, LogAck, LogAppend, LogCommit, LogReplicate, RaftSnapshot, RequestVote, Vote,
+    },
     NodeId, NodeInfo,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 
 pub struct NodeTrace {
     pub source: NodeId,
@@ -33,7 +34,7 @@ impl NodeTrace {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum NodeKind {
     Cluster = 0,
@@ -338,7 +339,7 @@ impl_codec!(
 );
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
-pub enum N2nEventKind {
+pub enum EventKind {
     /// Hold Message: edge node ask cluster node to hold a message.
     DelegateMessage = 0x10,
     /// Cast Message: distribute message to clusters.
@@ -354,14 +355,16 @@ pub enum N2nEventKind {
     UnloadTopic = 0x16,
     /// En Online: report endpoint online.
     EpOnline = 0x20,
-    /// En Online: report endpoint offline.
+    /// En Offline: report endpoint offline.
     EpOffline = 0x21,
-    /// En Online: sync endpoint info.
+    /// En Sync: sync endpoint info.
     EpSync = 0x22,
+    /// En Interest: set endpoint's interests.
+    EpInterest = 0x23,
 }
 
 impl_codec!(
-    enum N2nEventKind {
+    enum EventKind {
         DelegateMessage = 0x10,
         CastMessage = 0x11,
         Ack = 0x12,
@@ -378,7 +381,7 @@ impl_codec!(
 pub struct N2nEvent {
     pub to: NodeId,
     pub trace: NodeTrace,
-    pub kind: N2nEventKind,
+    pub kind: EventKind,
     pub payload: Bytes,
 }
 
@@ -386,7 +389,7 @@ impl_codec!(
     struct N2nEvent {
         to: NodeId,
         trace: NodeTrace,
-        kind: N2nEventKind,
+        kind: EventKind,
         payload: Bytes,
     }
 );

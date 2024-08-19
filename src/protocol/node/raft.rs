@@ -11,13 +11,13 @@ use crate::{
     impl_codec,
     protocol::{
         codec::CodecType,
-        endpoint::{EndpointOnline, Message, SetState},
+        endpoint::{DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, SetState},
         topic::durable_message::{LoadTopic, UnloadTopic},
     },
 };
 
 use super::{
-    event::{N2nEventKind, N2nPacket},
+    event::{EventKind, N2nPacket},
     Node, NodeId, NodeRef, NodeSnapshot,
 };
 
@@ -347,7 +347,6 @@ impl RaftState {
             RaftRole::Leader(_) => None,
             RaftRole::Follower(_) | RaftRole::Candidate(_) => {
                 let node = self.node_ref.upgrade()?;
-                self.term = self.term.next();
                 let cluster_size = node.cluster_size();
                 if cluster_size == 1 {
                     self.set_role(RaftRole::Leader(LeaderState::new(
@@ -358,7 +357,7 @@ impl RaftState {
                     None
                 } else if cluster_size == 0 {
                     self.set_role(RaftRole::Follower(FollowerState::new(
-                        crate::util::random_duration_ms(100..500),
+                        crate::util::random_duration_ms(200..700),
                         self.timeout_reporter.clone(),
                     )));
                     None
@@ -410,7 +409,7 @@ impl_codec!(
 );
 #[derive(Debug, Clone)]
 pub struct LogEntry {
-    pub kind: N2nEventKind,
+    pub kind: EventKind,
     pub payload: Bytes,
 }
 
@@ -435,38 +434,50 @@ impl LogEntry {
     }
     pub fn load_topic(load: LoadTopic) -> Self {
         Self {
-            kind: N2nEventKind::LoadTopic,
+            kind: EventKind::LoadTopic,
             payload: load.encode_to_bytes(),
         }
     }
     pub fn unload_topic(unload: UnloadTopic) -> Self {
         Self {
-            kind: N2nEventKind::UnloadTopic,
+            kind: EventKind::UnloadTopic,
             payload: unload.encode_to_bytes(),
         }
     }
-    pub fn delegate_message(message: Message) -> Self {
+    pub fn delegate_message(message: DelegateMessage) -> Self {
         Self {
-            kind: N2nEventKind::DelegateMessage,
+            kind: EventKind::DelegateMessage,
             payload: message.encode_to_bytes(),
         }
     }
     pub fn ep_online(ep: EndpointOnline) -> Self {
         Self {
-            kind: N2nEventKind::EpOnline,
+            kind: EventKind::EpOnline,
+            payload: ep.encode_to_bytes(),
+        }
+    }
+    pub fn ep_offline(ep: EndpointOffline) -> Self {
+        Self {
+            kind: EventKind::EpOffline,
+            payload: ep.encode_to_bytes(),
+        }
+    }
+    pub fn ep_interest(ep: EndpointInterest) -> Self {
+        Self {
+            kind: EventKind::EpInterest,
             payload: ep.encode_to_bytes(),
         }
     }
     pub fn set_state(set_state: SetState) -> Self {
         Self {
-            kind: N2nEventKind::SetState,
+            kind: EventKind::SetState,
             payload: set_state.encode_to_bytes(),
         }
     }
 }
 impl_codec!(
     struct LogEntry {
-        kind: N2nEventKind,
+        kind: EventKind,
         payload: Bytes,
     }
 );

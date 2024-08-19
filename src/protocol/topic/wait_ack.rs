@@ -38,6 +38,7 @@ impl WaitAckError {
 pub enum WaitAckErrorException {
     MessageDropped,
     Overflow,
+    NoAvailableTarget,
 }
 
 pub enum AckWaitErrorKind {

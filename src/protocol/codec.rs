@@ -93,6 +93,11 @@ pub trait CodecType: Sized {
     }
 }
 
+
+/*******************************************************************************************
+                                    CODEC FOR PRIMITIVE TYPES
+*******************************************************************************************/
+
 impl CodecType for () {
     fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
         Ok(((), bytes))
@@ -105,7 +110,9 @@ impl CodecType for Bytes {
     fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
         let (size, bytes) = u32::decode(bytes)?;
         if bytes.len() < size as usize {
-            return Err(DecodeError::new::<Self>("too short payload: expect Bytes"));
+            return Err(DecodeError::new::<Self>(format!(
+                "too short payload: expect {size} bytes, rest bytes: {bytes:?}"
+            )));
         }
         Ok((bytes.slice(0..size as usize), bytes.slice(size as usize..)))
     }

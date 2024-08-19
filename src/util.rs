@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{fmt::Write, hash::Hash};
 
 use chrono::{DateTime, Utc};
 
@@ -109,4 +109,11 @@ pub fn random_duration_ms(range: std::ops::Range<u64>) -> std::time::Duration {
     let ms = rand::Rng::gen_range(&mut rng, range.start..range.end);
 
     std::time::Duration::from_millis(ms)
+}
+
+pub fn hash64<T: Hash>(value: &T) -> u64 {
+    use std::hash::{DefaultHasher, Hasher};
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    Hasher::finish(&hasher)
 }

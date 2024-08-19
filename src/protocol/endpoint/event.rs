@@ -65,6 +65,21 @@ impl_codec!(
 );
 
 #[derive(Debug)]
+pub struct EndpointInterest {
+    pub topic_code: TopicCode,
+    pub endpoint: EndpointAddr,
+    pub interests: Vec<Interest>,
+}
+
+impl_codec!(
+    struct EndpointInterest {
+        topic_code: TopicCode,
+        endpoint: EndpointAddr,
+        interests: Vec<Interest>,
+    }
+);
+
+#[derive(Debug)]
 pub struct MessageStateUpdate {
     pub message_id: MessageId,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,

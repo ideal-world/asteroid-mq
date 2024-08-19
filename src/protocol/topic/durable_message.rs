@@ -46,10 +46,9 @@ impl_codec!(
     }
 );
 
-
 #[derive(Debug)]
 pub struct UnloadTopic {
-    pub code: TopicCode
+    pub code: TopicCode,
 }
 
 impl UnloadTopic {
@@ -60,7 +59,7 @@ impl UnloadTopic {
 
 impl_codec!(
     struct UnloadTopic {
-        code: TopicCode
+        code: TopicCode,
     }
 );
 

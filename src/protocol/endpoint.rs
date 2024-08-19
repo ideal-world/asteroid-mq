@@ -38,8 +38,21 @@ pub struct LocalEndpointInner {
 
 impl Drop for LocalEndpointInner {
     fn drop(&mut self) {
+        let endpoint = self.address;
         if let Some(topic) = self.attached_topic.upgrade() {
-            topic.delete_endpoint(self.address);
+            tokio::spawn(async move {
+                topic
+                    .node
+                    .commit_log(LogEntry::ep_offline(EndpointOffline {
+                        topic_code: topic.code().clone(),
+                        endpoint,
+                        host: topic.node.id(),
+                    }))
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!("commit ep_offline failed: {:?}", e);
+                    })
+            });
         }
     }
 }
@@ -77,7 +90,10 @@ impl LocalEndpoint {
                 let handle = topic.wait_ack(message.id());
                 topic
                     .node
-                    .commit_log(LogEntry::delegate_message(message))
+                    .commit_log(LogEntry::delegate_message(DelegateMessage {
+                        topic: self.topic_code.clone(),
+                        message,
+                    }))
                     .await
                     .map_err(crate::Error::contextual("send message"))?;
                 Ok(handle)
@@ -125,7 +141,7 @@ impl LocalEndpoint {
             ))
         }
     }
-    pub fn push_message(&self, message: Message) {
+    pub(crate) fn push_message(&self, message: Message) {
         self.mail_addr
             .send(message)
             .expect("ep self hold the receiver");
@@ -135,6 +151,25 @@ impl LocalEndpoint {
             .recv_async()
             .await
             .expect("ep self hold a sender")
+    }
+    pub async fn update_interest(&self, interests: Vec<Interest>) -> Result<(), crate::Error> {
+        if let Some(topic) = self.topic() {
+            let _ = topic
+                .node
+                .commit_log(LogEntry::ep_interest(EndpointInterest {
+                    topic_code: topic.code().clone(),
+                    endpoint: self.address,
+                    interests,
+                }))
+                .await
+                .map_err(crate::Error::contextual("update_interest"))?;
+            Ok(())
+        } else {
+            Err(crate::Error::new(
+                "topic not found",
+                crate::error::ErrorKind::Offline,
+            ))
+        }
     }
 }
 
@@ -201,6 +236,12 @@ impl EndpointAddr {
         bytes[8..12].copy_from_slice(&counter.to_be_bytes());
         bytes[12..16].copy_from_slice(&eid.to_be_bytes());
         Self { bytes }
+    }
+    pub fn hash64(&self) -> u64 {
+        use std::hash::{DefaultHasher, Hasher};
+        let mut hasher = DefaultHasher::new();
+        Hasher::write(&mut hasher, &self.bytes);
+        Hasher::finish(&hasher)
     }
 }
 

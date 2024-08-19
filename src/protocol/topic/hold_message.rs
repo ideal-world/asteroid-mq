@@ -76,11 +76,7 @@ impl HoldMessage {
             };
             let topic = context.topic.clone();
             tokio::task::spawn(async move {
-                match topic
-                    .node
-                    .commit_log(LogEntry::set_state(set_state))
-                    .await
-                {
+                match topic.node.commit_log(LogEntry::set_state(set_state)).await {
                     Ok(_) => {
                         //
                     }

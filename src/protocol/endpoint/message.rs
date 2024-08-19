@@ -147,7 +147,10 @@ impl Message {
 
 impl Message {
     pub fn new(header: MessageHeader, payload: impl Into<Bytes>) -> Self {
-        Self { header, payload: payload.into() }
+        Self {
+            header,
+            payload: payload.into(),
+        }
     }
 }
 #[derive(Debug, Clone)]
@@ -175,8 +178,8 @@ impl MessageHeaderBuilder {
     #[inline(always)]
     pub fn new(subjects: impl IntoIterator<Item = Subject>) -> Self {
         Self {
-            ack_kind: MessageAckExpectKind::Sent,
-            target_kind: MessageTargetKind::Online,
+            ack_kind: MessageAckExpectKind::default(),
+            target_kind: MessageTargetKind::default(),
             durability: None,
             subjects: subjects.into_iter().collect(),
         }
@@ -236,12 +239,13 @@ impl_codec! {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum MessageTargetKind {
     Durable = 0,
     Online = 1,
     Available = 2,
+    #[default]
     Push = 3,
 }
 

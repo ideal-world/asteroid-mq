@@ -1,4 +1,7 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    fmt::{Display, Formatter},
+};
 
 use crate::protocol::topic::durable_message::DurabilityError;
 
@@ -6,6 +9,12 @@ use crate::protocol::topic::durable_message::DurabilityError;
 pub struct Error {
     pub context: Cow<'static, str>,
     pub kind: ErrorKind,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {:?}", self.context, self.kind)
+    }
 }
 
 impl Error {

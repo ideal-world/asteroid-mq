@@ -1,9 +1,14 @@
 {
     "cSpell.words": [
         "Bincode",
+        "chrono",
         "Deque",
         "kademlia",
+        "nanos",
+        "nsecs",
         "Protobuf",
-        "Sharded"
+        "Sharded",
+        "subsec",
+        "Uninit"
     ]
 }

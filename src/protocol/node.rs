@@ -2,8 +2,6 @@ pub mod connection;
 pub mod event;
 pub mod raft;
 
-// pub mod hold_message;
-// pub mod wait_ack;
 use std::{
     collections::HashMap,
     ops::Deref,
@@ -12,30 +10,30 @@ use std::{
 
 use super::{
     codec::CodecType,
-    endpoint::SetState,
+    endpoint::{EndpointInterest, SetState},
     topic::{TopicCode, TopicInner, TopicSnapshot},
 };
 use connection::{
-    ConnectionConfig, N2NConnection, N2NConnectionError, N2NConnectionErrorKind,
-    N2NConnectionInstance, N2NConnectionRef,
+    ConnectionConfig, N2NConnection, N2NConnectionError, N2NConnectionInstance, N2NConnectionRef,
 };
 use crossbeam::sync::ShardedLock;
-use event::{N2NAuth, N2NUnreachableEvent, N2nEvent, N2nEventKind, N2nPacket, NodeKind, NodeTrace};
+use event::{EventKind, N2NAuth, N2NUnreachableEvent, N2nEvent, N2nPacket, NodeKind, NodeTrace};
 use raft::{
     CommitHandle, FollowerState, LogEntry, RaftCommitError, RaftLogIndex, RaftRole, RaftState,
 };
-use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
     impl_codec,
-    protocol::{endpoint::EndpointOnline, topic::durable_message::{LoadTopic, UnloadTopic}},
+    protocol::{
+        endpoint::EndpointOnline,
+        topic::durable_message::{LoadTopic, UnloadTopic},
+    },
 };
 
 use super::endpoint::{CastMessage, DelegateMessage, EndpointOffline, EndpointSync, MessageAck};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId {
     pub bytes: [u8; 16],
 }
@@ -52,7 +50,7 @@ impl std::fmt::Debug for NodeId {
     }
 }
 impl NodeId {
-    pub(crate) fn snowflake() -> NodeId {
+    pub fn snowflake() -> NodeId {
         static INSTANCE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let dg = crate::util::executor_digest();
         let mut bytes = [0; 16];
@@ -76,6 +74,18 @@ impl Default for NodeId {
 pub struct NodeInfo {
     pub id: NodeId,
     pub kind: NodeKind,
+}
+
+impl NodeInfo {
+    pub fn new(id: NodeId, kind: NodeKind) -> Self {
+        Self { id, kind }
+    }
+    pub fn new_cluster_by_id(id: NodeId) -> Self {
+        Self::new(id, NodeKind::Cluster)
+    }
+    pub fn new_cluster() -> Self {
+        Self::new(NodeId::snowflake(), NodeKind::Cluster)
+    }
 }
 
 impl_codec!(
@@ -140,7 +150,7 @@ impl Deref for Node {
 
 impl Default for Node {
     fn default() -> Self {
-        let timeout = crate::util::random_duration_ms(100..500);
+        let timeout = crate::util::random_duration_ms(200..700);
         let (timeout_reporter, timeout_receiver) = flume::bounded(1);
 
         let this = Self {
@@ -172,6 +182,7 @@ impl Default for Node {
                     break;
                 };
                 let req = node.raft_state_unwrap().write().unwrap().term_timeout();
+                tracing::debug!(?req, "raft term timeout");
                 if let Some(req) = req {
                     node.cluster_wise_broadcast_packet(N2nPacket::raft_request_vote(req));
                 }
@@ -182,7 +193,47 @@ impl Default for Node {
 }
 
 impl Node {
-    pub fn snapshot(&self) -> NodeSnapshot {
+    pub fn new(cluster_info: NodeInfo) -> Self {
+        let timeout = crate::util::random_duration_ms(200..700);
+        let (timeout_reporter, timeout_receiver) = flume::bounded(1);
+        let this = Self {
+            inner: Arc::new_cyclic(|this| NodeInner {
+                cluster_size: AtomicUsize::new(0),
+                info: cluster_info,
+                topics: Default::default(),
+                n2n_routing_table: ShardedLock::new(HashMap::new()),
+                connections: ShardedLock::new(HashMap::new()),
+                auth: Default::default(),
+                raft_state: Some(RwLock::new(RaftState {
+                    term: Default::default(),
+                    timeout_reporter: timeout_reporter.clone(),
+                    role: RaftRole::Follower(FollowerState::new(timeout, timeout_reporter)),
+                    index: Default::default(),
+                    voted_for: None,
+                    node_ref: NodeRef {
+                        inner: this.clone(),
+                    },
+                    pending_logs: Default::default(),
+                    commit_hooks: Default::default(),
+                })),
+            }),
+        };
+        let node_ref = this.node_ref();
+        tokio::spawn(async move {
+            while let Ok(()) = timeout_receiver.recv_async().await {
+                let Some(node) = node_ref.upgrade() else {
+                    break;
+                };
+                let req = node.raft_state_unwrap().write().unwrap().term_timeout();
+                tracing::debug!(?req, "raft term timeout");
+                if let Some(req) = req {
+                    node.cluster_wise_broadcast_packet(N2nPacket::raft_request_vote(req));
+                }
+            }
+        });
+        this
+    }
+    pub(crate) fn snapshot(&self) -> NodeSnapshot {
         let topics = self.topics.read().unwrap();
         let routing = self.n2n_routing_table.read().unwrap();
         NodeSnapshot {
@@ -193,7 +244,7 @@ impl Node {
             routing: routing.clone(),
         }
     }
-    pub fn apply_snapshot(&self, snapshot: NodeSnapshot) {
+    pub(crate) fn apply_snapshot(&self, snapshot: NodeSnapshot) {
         let mut routing = self.n2n_routing_table.write().unwrap();
         for (code, topic_snapshot) in snapshot.topics {
             let topic = self.get_or_init_topic(code);
@@ -203,7 +254,7 @@ impl Node {
             routing.insert(node, info);
         }
     }
-    pub fn raft_state_unwrap(&self) -> &RwLock<RaftState> {
+    pub(crate) fn raft_state_unwrap(&self) -> &RwLock<RaftState> {
         self.raft_state.as_ref().unwrap()
     }
     pub fn cluster_size(&self) -> u64 {
@@ -235,7 +286,7 @@ impl Node {
             to,
             trace: self.new_trace(),
             payload: message.encode_to_bytes(),
-            kind: N2nEventKind::CastMessage,
+            kind: EventKind::CastMessage,
         }
     }
     pub(crate) fn new_ack(&self, to: NodeId, message: MessageAck) -> N2nEvent {
@@ -243,7 +294,7 @@ impl Node {
             to,
             trace: self.new_trace(),
             payload: message.encode_to_bytes(),
-            kind: N2nEventKind::Ack,
+            kind: EventKind::Ack,
         }
     }
     pub(crate) fn get_ep_sync(&self) -> EndpointSync {
@@ -269,27 +320,7 @@ impl Node {
         {
             let mut wg = self.connections.write().unwrap();
             wg.insert(peer, Arc::new(conn_inst));
-            self.n2n_routing_table.write().unwrap().insert(
-                peer,
-                N2nRoutingInfo {
-                    next_jump: peer,
-                    hops: 0,
-                },
-            );
         }
-        let sync_info = self.get_ep_sync();
-        self.send_packet(
-            N2nPacket::event(N2nEvent {
-                to: peer,
-                trace: self.new_trace(),
-                kind: N2nEventKind::EpSync,
-                payload: sync_info.encode_to_bytes(),
-            }),
-            peer,
-        )
-        .map_err(|_| {
-            N2NConnectionError::new(N2NConnectionErrorKind::Closed, "fail to send sync error")
-        })?;
         Ok(peer)
     }
     pub fn id(&self) -> NodeId {
@@ -318,6 +349,7 @@ impl Node {
             {
                 drop(raft_state);
             }
+            tracing::debug!(?log_replicate, "log replicate");
             self.cluster_wise_broadcast_packet(N2nPacket::log_replicate(log_replicate));
             Ok(commit_hook)
         } else if raft_state.role.is_follower() {
@@ -332,6 +364,7 @@ impl Node {
             {
                 drop(raft_state);
             }
+            tracing::debug!(?log_append, "log append");
             self.send_packet(log_append, leader)
                 .expect("should send log append");
             Ok(commit_handle)
@@ -339,7 +372,8 @@ impl Node {
             unreachable!("should be ready");
         }
     }
-    pub async fn commit_log(&self, mut log: LogEntry) -> Result<RaftLogIndex, RaftCommitError> {
+    pub(crate) async fn commit_log(&self, mut log: LogEntry) -> Result<RaftLogIndex, RaftCommitError> {
+        tracing::debug!(?log, "commit log");
         if self.cluster_size() == 1 {
             let index = {
                 let mut raft_state = self.raft_state_unwrap().write().unwrap();
@@ -361,17 +395,19 @@ impl Node {
             }
         }
     }
-    pub fn apply_log(&self, log: LogEntry) {
+    pub(crate) fn apply_log(&self, log: LogEntry) {
         match log.kind {
-            event::N2nEventKind::DelegateMessage => {
-                let Ok((evt, _)) = DelegateMessage::decode(log.payload) else {
+            event::EventKind::DelegateMessage => {
+                let Ok((evt, _)) = DelegateMessage::decode(log.payload).inspect_err(|e| {
+                    tracing::error!("failed to decode delegate message: {e:?}");
+                }) else {
                     return;
                 };
                 tracing::info!(message=?evt.message, "hold message");
                 self.get_or_init_topic(evt.topic)
                     .hold_new_message(evt.message);
             }
-            event::N2nEventKind::LoadTopic => {
+            event::EventKind::LoadTopic => {
                 let Ok((mut evt, _)) = LoadTopic::decode(log.payload) else {
                     return;
                 };
@@ -385,14 +421,14 @@ impl Node {
                     queue: evt.queue,
                 });
             }
-            event::N2nEventKind::UnloadTopic => {
+            event::EventKind::UnloadTopic => {
                 let Ok((evt, _)) = UnloadTopic::decode(log.payload) else {
                     return;
                 };
                 tracing::debug!(code=?evt.code, "unload topic");
                 self.remove_topic(&evt.code);
             }
-            event::N2nEventKind::EpOnline => {
+            event::EventKind::EpOnline => {
                 let Ok((evt, _)) = EndpointOnline::decode(log.payload) else {
                     return;
                 };
@@ -400,20 +436,27 @@ impl Node {
                 let topic = self.get_or_init_topic(evt.topic_code.clone());
                 topic.ep_online(evt);
             }
-            event::N2nEventKind::EpOffline => {
+            event::EventKind::EpOffline => {
                 let Ok((evt, _)) = EndpointOffline::decode(log.payload) else {
                     return;
                 };
                 self.get_or_init_topic(evt.topic_code.clone())
                     .ep_offline(&evt.endpoint);
             }
-            event::N2nEventKind::EpSync => {
+            event::EventKind::EpInterest => {
+                let Ok(evt) = EndpointInterest::decode_from_bytes(log.payload) else {
+                    return;
+                };
+                self.get_or_init_topic(evt.topic_code.clone())
+                    .update_ep_interest(&evt.endpoint, evt.interests);
+            }
+            event::EventKind::EpSync => {
                 let Ok((evt, _)) = EndpointSync::decode(log.payload) else {
                     return;
                 };
                 self.handle_ep_sync(evt);
             }
-            N2nEventKind::SetState => {
+            event::EventKind::SetState => {
                 let Ok((evt, _)) = SetState::decode(log.payload) else {
                     return;
                 };
@@ -437,8 +480,8 @@ impl Node {
         }
     }
     #[instrument(skip_all, fields(node = ?self.id()))]
-    pub(crate) async fn handle_message_as_destination(&self, message_evt: N2nEvent) {
-        todo!()
+    pub(crate) async fn handle_message_as_destination(&self, _message_evt: N2nEvent) {
+        // TODO: implement this for edge nodes
     }
     pub(crate) fn known_nodes(&self) -> Vec<NodeId> {
         self.connections.read().unwrap().keys().cloned().collect()
@@ -468,7 +511,9 @@ impl Node {
         self.connections.write().unwrap().remove(&to);
     }
     pub(crate) fn cluster_wise_broadcast_packet(&self, packet: N2nPacket) {
-        for peer in self.known_peer_cluster() {
+        let known_peer_cluster = self.known_peer_cluster();
+        tracing::trace!(header = ?packet.header, peers=?known_peer_cluster, "cluster wise broadcast");
+        for peer in known_peer_cluster {
             let _ = self.send_packet(packet.clone(), peer);
         }
     }

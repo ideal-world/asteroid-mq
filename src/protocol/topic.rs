@@ -34,11 +34,11 @@ use super::{
     codec::CodecType,
     endpoint::{
         EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint, LocalEndpointRef,
-        Message, MessageId, MessageStateUpdate,
+        Message, MessageId, MessageStateUpdate, MessageStatusKind, MessageTargetKind,
     },
     interest::{Interest, InterestMap, Subject},
     node::{
-        event::{N2nEvent, N2nEventKind, N2nPacket},
+        event::{EventKind, N2nEvent, N2nPacket},
         Node, NodeId,
     },
 };
@@ -85,7 +85,11 @@ pub struct Topic {
     pub node: Node,
     pub(crate) inner: Arc<TopicInner>,
 }
-
+impl Topic {
+    pub fn node(&self) -> Node {
+        self.node.clone()
+    }
+}
 impl Deref for Topic {
     type Target = TopicInner;
 
@@ -133,24 +137,6 @@ impl TopicInner {
                 interest_wg.insert(interest.clone(), ep.addr);
             }
         }
-    }
-    pub(crate) fn ep_online(&self, ep_online: EndpointOnline) {
-        let mut routing_wg = self.ep_routing_table.write().unwrap();
-        let mut interest_wg = self.ep_interest_map.write().unwrap();
-        let mut active_wg = self.ep_latest_active.write().unwrap();
-        active_wg.insert(ep_online.endpoint, TimestampSec::now());
-        routing_wg.insert(ep_online.endpoint, ep_online.host);
-        for interest in &ep_online.interests {
-            interest_wg.insert(interest.clone(), ep_online.endpoint);
-        }
-    }
-    pub(crate) fn ep_offline(&self, ep: &EndpointAddr) {
-        let mut routing_wg = self.ep_routing_table.write().unwrap();
-        let mut interest_wg = self.ep_interest_map.write().unwrap();
-        let mut active_wg = self.ep_latest_active.write().unwrap();
-        active_wg.remove(ep);
-        routing_wg.remove(ep);
-        interest_wg.delete(ep);
     }
 
     pub(crate) fn collect_addr_by_subjects<'i>(
@@ -261,7 +247,7 @@ impl Topic {
             let packet = N2nPacket::event(N2nEvent {
                 to: peer,
                 trace: self.node.new_trace(),
-                kind: N2nEventKind::EpOffline,
+                kind: EventKind::EpOffline,
                 payload: payload.clone(),
             });
             let _ = self.node.send_packet(packet, peer);
@@ -295,7 +281,39 @@ impl Topic {
 
     #[instrument(skip(self, message), fields(node_id=?self.node.id(), topic_code=?self.config.code))]
     pub(crate) fn hold_new_message(&self, message: Message) {
-        let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
+        let ep_collect = match message.header.target_kind {
+            MessageTargetKind::Durable | MessageTargetKind::Online => {
+                self.collect_addr_by_subjects(message.header.subjects.iter())
+                // just accept all
+            }
+            MessageTargetKind::Available => {
+                unimplemented!("available kind is not supported");
+                // unsupported
+            }
+            MessageTargetKind::Push => {
+                let message_hash = crate::util::hash64(&message.id());
+                let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
+
+                let mut hash_ring = ep_collect
+                    .iter()
+                    .map(|ep| (crate::util::hash64(ep), *ep))
+                    .collect::<Vec<_>>();
+                hash_ring.sort_by_key(|x| x.0);
+                if hash_ring.is_empty() {
+                    let queue = self.queue.read().unwrap();
+                    if let Some(report) = queue.waiting.write().unwrap().remove(&message.id()) {
+                        let _ = report.send(Err(WaitAckError::exception(
+                            WaitAckErrorException::NoAvailableTarget,
+                        )));
+                    }
+                    return;
+                } else {
+                    let ep = hash_ring[(message_hash as usize) % (hash_ring.len())].1;
+                    tracing::debug!(?ep, "select ep");
+                    HashSet::from([ep])
+                }
+            }
+        };
         let hold_message = HoldMessage {
             message: message.clone(),
             wait_ack: WaitAck::new(message.ack_kind(), ep_collect.clone()),
@@ -316,6 +334,7 @@ impl Topic {
                                     WaitAckErrorException::Overflow,
                                 )));
                             }
+                            return;
                         }
                         config::OverflowPolicy::DropOld => {
                             let old = queue.pop().expect("queue at least one element");
@@ -334,6 +353,59 @@ impl Topic {
         }
         self.update_and_flush(MessageStateUpdate::new_empty(message.id()));
         tracing::debug!(?ep_collect, "hold new message");
+    }
+
+    pub(crate) fn ep_online(&self, ep_online: EndpointOnline) {
+        let mut message_need_poll = HashSet::new();
+        {
+            let mut routing_wg = self.ep_routing_table.write().unwrap();
+            let mut interest_wg = self.ep_interest_map.write().unwrap();
+            let mut active_wg = self.ep_latest_active.write().unwrap();
+
+            active_wg.insert(ep_online.endpoint, TimestampSec::now());
+            routing_wg.insert(ep_online.endpoint, ep_online.host);
+            for interest in &ep_online.interests {
+                interest_wg.insert(interest.clone(), ep_online.endpoint);
+            }
+            let queue = self.queue.read().unwrap();
+            for (id, message) in &queue.hold_messages {
+                if message.message.header.target_kind == MessageTargetKind::Durable {
+                    let mut status = message.wait_ack.status.write().unwrap();
+
+                    if !status.contains_key(&ep_online.endpoint)
+                        && message
+                            .message
+                            .header
+                            .subjects
+                            .iter()
+                            .any(|s| interest_wg.find(s).contains(&ep_online.endpoint))
+                    {
+                        status.insert(ep_online.endpoint, MessageStatusKind::Unsent);
+                        message_need_poll.insert(*id);
+                    }
+                }
+            }
+        }
+        for id in message_need_poll {
+            self.update_and_flush(MessageStateUpdate::new_empty(id));
+        }
+    }
+
+    pub(crate) fn ep_offline(&self, ep: &EndpointAddr) {
+        let mut routing_wg = self.ep_routing_table.write().unwrap();
+        let mut interest_wg = self.ep_interest_map.write().unwrap();
+        let mut active_wg = self.ep_latest_active.write().unwrap();
+        active_wg.remove(ep);
+        routing_wg.remove(ep);
+        interest_wg.delete(ep);
+    }
+
+    pub(crate) fn update_ep_interest(&self, ep: &EndpointAddr, interests: Vec<Interest>) {
+        let mut interest_wg = self.ep_interest_map.write().unwrap();
+        interest_wg.delete(ep);
+        for interest in interests {
+            interest_wg.insert(interest, *ep);
+        }
     }
 }
 
@@ -379,7 +451,7 @@ impl_codec!(
     }
 );
 impl Topic {
-    pub fn apply_snapshot(&self, snapshot: TopicSnapshot) {
+    pub(crate) fn apply_snapshot(&self, snapshot: TopicSnapshot) {
         {
             let mut ep_routing_table = self.ep_routing_table.write().unwrap();
             let mut ep_interest_map = self.ep_interest_map.write().unwrap();
@@ -399,7 +471,7 @@ impl Topic {
     }
 }
 impl TopicInner {
-    pub fn snapshot(&self) -> TopicSnapshot {
+    pub(crate) fn snapshot(&self) -> TopicSnapshot {
         let ep_routing_table = self.ep_routing_table.read().unwrap().clone();
         let ep_interest_map = self.ep_interest_map.read().unwrap().raw.clone();
         let ep_latest_active = self.ep_latest_active.read().unwrap().clone();
@@ -419,7 +491,7 @@ impl TopicInner {
         }
     }
 
-    pub fn new<C: Into<TopicConfig>>(config: C) -> Self {
+    pub(crate) fn new<C: Into<TopicConfig>>(config: C) -> Self {
         const DEFAULT_CAPACITY: usize = 128;
         let config: TopicConfig = config.into();
         let capacity = if let Some(ref overflow_config) = config.overflow_config {
