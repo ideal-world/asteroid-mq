@@ -1,8 +1,13 @@
-use std::{borrow::Cow, collections::HashMap, sync::OnceLock};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    sync::OnceLock,
+};
 
 use k8s_openapi::api::core::v1::Pod;
 
-use crate::protocol::node::NodeId;
+use crate::protocol::node::{Node, NodeId, NodeInfo};
 
 /// The node id is created by sha256 hash of the pod uid. Use [`NodeId::sha256`] to create a node id.
 ///
@@ -29,17 +34,31 @@ fn namespace_from_file() -> &'static str {
 }
 
 impl K8sClusterProvider {
-    pub async fn new(param: ListParams, port: u16) -> kube::Result<Self> {
-        let client = kube::Client::try_default().await?;
+    pub async fn new(label: impl Into<String>, port: u16) -> Self {
+        let client = kube::Client::try_default()
+            .await
+            .expect("failed to create k8s client, is this program running in a k8s pod?");
 
-        Ok(K8sClusterProvider {
+        let param = ListParams {
+            label_selector: Some(label.into()),
+            ..Default::default()
+        };
+        K8sClusterProvider {
             namespace: namespace_from_file().into(),
             param,
             client,
             next_update: tokio::time::Instant::now(),
             poll_interval: std::time::Duration::from_secs(1),
             port,
-        })
+        }
+    }
+    pub async fn run(self, uid: String) -> Result<(), crate::Error> {
+        let node = Node::new(NodeInfo::new_cluster_by_id(NodeId::sha256(uid.as_bytes())));
+        let port = self.port;
+        node.create_cluster(self, SocketAddr::new(crate::DEFAULT_TCP_ADDR, port))
+            .await
+            .map_err(crate::Error::contextual("create k8s cluster"))?;
+        Ok(())
     }
 }
 

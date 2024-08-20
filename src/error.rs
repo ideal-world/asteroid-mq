@@ -66,6 +66,7 @@ error_kind! {
         Durability: DurabilityError,
         Raft: crate::protocol::node::raft::RaftCommitError,
         Offline,
-        Custom: Box<dyn std::error::Error + Send + Sync>
+        Custom: Box<dyn std::error::Error + Send + Sync>,
+        Io: std::io::Error
     }
 }
