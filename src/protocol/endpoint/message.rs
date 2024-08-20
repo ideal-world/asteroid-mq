@@ -143,6 +143,9 @@ impl Message {
     pub fn ack_kind(&self) -> MessageAckExpectKind {
         self.header.ack_kind
     }
+    pub fn subjects(&self) -> &[Subject] {
+        &self.header.subjects
+    }
 }
 
 impl Message {

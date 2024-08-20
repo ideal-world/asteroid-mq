@@ -1,10 +1,19 @@
 pub mod error;
 pub mod protocol;
+pub mod handler;
 pub(crate) mod util;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub use bytes;
 pub use error::Error;
+
+pub mod prelude {
+    pub use crate::error::Error;
+    pub use crate::protocol::interest::{Interest, Subject};
+    pub use crate::protocol::node::{Node, NodeId, NodeInfo};
+    pub use crate::protocol::topic::{Topic, TopicCode};
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TimestampSec(u64);
 impl_codec!(

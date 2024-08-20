@@ -10,7 +10,7 @@ use bytes::Bytes;
 
 use crate::impl_codec;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq ,Eq, Hash)]
 pub struct Subject(pub(crate) Bytes);
 
 impl_codec!(
@@ -18,6 +18,9 @@ impl_codec!(
 );
 
 impl Subject {
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_ref()
+    }
     pub fn new<B: Into<Bytes>>(bytes: B) -> Self {
         Self(bytes.into())
     }
