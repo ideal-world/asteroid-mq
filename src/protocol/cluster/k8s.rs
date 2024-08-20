@@ -52,13 +52,13 @@ impl K8sClusterProvider {
             port,
         }
     }
-    pub async fn run(self, uid: String) -> Result<(), crate::Error> {
+    pub async fn run(self, uid: String) -> Result<Node, crate::Error> {
         let node = Node::new(NodeInfo::new_cluster_by_id(NodeId::sha256(uid.as_bytes())));
         let port = self.port;
         node.create_cluster(self, SocketAddr::new(crate::DEFAULT_TCP_ADDR, port))
             .await
             .map_err(crate::Error::contextual("create k8s cluster"))?;
-        Ok(())
+        Ok(node)
     }
 }
 
