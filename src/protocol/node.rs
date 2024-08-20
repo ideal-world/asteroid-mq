@@ -42,9 +42,10 @@ impl std::fmt::Debug for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("NodeId")
             .field(&crate::util::dashed(&[
-                crate::util::hex(&self.bytes[0..8]),
-                crate::util::hex(&self.bytes[8..12]),
-                crate::util::hex(&self.bytes[12..16]),
+                crate::util::hex(&self.bytes[0..1]),
+                crate::util::hex(&self.bytes[1..9]),
+                crate::util::hex(&self.bytes[9..13]),
+                crate::util::hex(&self.bytes[13..16]),
             ]))
             .finish()
     }
@@ -52,12 +53,12 @@ impl std::fmt::Debug for NodeId {
 
 impl NodeId {
     pub const KIND_SNOWFLAKE: u8 = 0x00;
-    pub const KIND_K8S_CLUSTER: u8 = 0x01;
-    pub const KIND_WEB_BROWSER: u8 = 0x02;
+    pub const KIND_SHA256: u8 = 0x01;
     pub fn sha256(bytes: &[u8]) -> Self {
         let dg = <sha2::Sha256 as sha2::Digest>::digest(bytes);
         let mut bytes = [0; 16];
-        bytes.copy_from_slice(&dg.as_slice()[0..16]);
+        bytes[0] = Self::KIND_SHA256;
+        bytes[1..16].copy_from_slice(&dg.as_slice()[0..15]);
         NodeId { bytes }
     }
     pub fn snowflake() -> NodeId {
@@ -204,7 +205,7 @@ impl Default for Node {
 }
 
 impl Node {
-    const RAFT_RANDOM_DURATION_RANGE: std::ops::Range<u64> = 200..700;
+    const RAFT_RANDOM_DURATION_RANGE: std::ops::Range<u64> = 200..1200;
     pub fn new(cluster_info: NodeInfo) -> Self {
         let timeout = crate::util::random_duration_ms(Self::RAFT_RANDOM_DURATION_RANGE);
         let (timeout_reporter, timeout_receiver) = flume::bounded(1);

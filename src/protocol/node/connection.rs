@@ -284,7 +284,7 @@ impl N2NConnectionInstance {
                                             .is_some_and(|(_, term)| term >= request_vote.term),
                                         RaftRole::Candidate(_) => {
                                             request_vote.index >= self_state.index
-                                                && request_vote.term >= self_state.term
+                                                && request_vote.term > self_state.term
                                         }
                                     };
                                     if vote_this {
@@ -299,6 +299,11 @@ impl N2NConnectionInstance {
                                     }
                                 }
                                 N2NPayloadKind::Vote => {
+                                    let cluster_size = node.cluster_size();
+                                    if cluster_size <= 1 {
+                                        continue;
+                                    }
+                                    // 1->0 2->1 3->1 4->2 5->2 ... n->n mod 2
                                     let vote =
                                         Vote::decode_from_bytes(packet.payload).map_err(|e| {
                                             N2NConnectionError::new(
