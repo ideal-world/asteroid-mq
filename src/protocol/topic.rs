@@ -33,8 +33,7 @@ use crate::{
 use super::{
     codec::CodecType,
     endpoint::{
-        EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint, LocalEndpointRef,
-        Message, MessageId, MessageStateUpdate, MessageStatusKind, MessageTargetKind,
+        DelegateMessage, EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint, LocalEndpointRef, Message, MessageId, MessageStateUpdate, MessageStatusKind, MessageTargetKind
     },
     interest::{Interest, InterestMap, Subject},
     node::{
@@ -52,6 +51,20 @@ impl TopicCode {
     }
     pub const fn const_new(code: &'static str) -> Self {
         Self(Bytes::from_static(code.as_bytes()))
+    }
+}
+
+impl Borrow<str> for TopicCode {
+    fn borrow(&self) -> &str {
+        unsafe { std::str::from_utf8_unchecked(&self.0) }
+    }
+}
+
+
+
+impl Borrow<[u8]> for TopicCode {
+    fn borrow(&self) -> &[u8] {
+        &self.0
     }
 }
 
@@ -74,11 +87,7 @@ impl CodecType for TopicCode {
     }
 }
 
-impl Borrow<str> for TopicCode {
-    fn borrow(&self) -> &str {
-        todo!()
-    }
-}
+
 
 #[derive(Debug, Clone)]
 pub struct Topic {
@@ -86,6 +95,18 @@ pub struct Topic {
     pub(crate) inner: Arc<TopicInner>,
 }
 impl Topic {
+    pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, crate::Error> {
+        let handle = self.wait_ack(message.id());
+        self
+            .node
+            .commit_log(LogEntry::delegate_message(DelegateMessage {
+                topic: self.code().clone(),
+                message,
+            }))
+            .await
+            .map_err(crate::Error::contextual("send message"))?;
+        Ok(handle)
+    }
     pub fn node(&self) -> Node {
         self.node.clone()
     }
@@ -102,6 +123,7 @@ impl TopicInner {
     pub fn code(&self) -> &TopicCode {
         &self.config.code
     }
+
     pub(crate) fn get_ep_sync(&self) -> Vec<EpInfo> {
         let ep_interest_map = self.ep_interest_map.read().unwrap();
         let ep_latest_active = self.ep_latest_active.read().unwrap();
@@ -326,7 +348,7 @@ impl Topic {
                 let waiting_size = queue.len();
                 if waiting_size >= size {
                     match overflow_config.policy {
-                        config::OverflowPolicy::RejectNew => {
+                        config::TopicOverflowPolicy::RejectNew => {
                             if let Some(report) =
                                 queue.waiting.get_mut().unwrap().remove(&message.id())
                             {
@@ -336,7 +358,7 @@ impl Topic {
                             }
                             return;
                         }
-                        config::OverflowPolicy::DropOld => {
+                        config::TopicOverflowPolicy::DropOld => {
                             let old = queue.pop().expect("queue at least one element");
                             if let Some(report) =
                                 queue.waiting.get_mut().unwrap().remove(&old.message.id())
@@ -565,7 +587,7 @@ impl Node {
     pub fn remove_topic<Q>(&self, code: &Q)
     where
         TopicCode: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         if let Some(topic) = self.topics.write().unwrap().remove(code) {
             let mut queue = topic.queue.write().unwrap();
@@ -587,7 +609,7 @@ impl Node {
     pub fn get_topic<Q>(&self, code: &Q) -> Option<Topic>
     where
         TopicCode: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.topics
             .read()

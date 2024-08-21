@@ -3,7 +3,7 @@ use std::{
     fmt::{Display, Formatter},
 };
 
-use crate::protocol::topic::durable_message::DurabilityError;
+use crate::protocol::topic::{durable_message::DurabilityError, wait_ack::WaitAckError};
 
 #[derive(Debug)]
 pub struct Error {
@@ -16,6 +16,8 @@ impl Display for Error {
         write!(f, "{}: {:?}", self.context, self.kind)
     }
 }
+
+impl std::error::Error for Error {}
 
 impl Error {
     pub const fn contextual<T: Into<ErrorKind>>(
@@ -36,6 +38,18 @@ impl Error {
         Self {
             context: context.into(),
             kind: ErrorKind::Custom("unknown error".into()),
+        }
+    }
+    pub fn custom(context: impl Into<Cow<'static, str>>, error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            context: context.into(),
+            kind: ErrorKind::Custom(Box::new(error)),
+        }
+    }
+    pub fn contextual_custom<E: std::error::Error + Send + Sync + 'static>(context: impl Into<Cow<'static, str>>) -> impl FnOnce(E) -> Self {
+        move |error| Self {
+            context: context.into(),
+            kind: ErrorKind::Custom(Box::new(error)),
         }
     }
 }
@@ -66,7 +80,8 @@ error_kind! {
         Durability: DurabilityError,
         Raft: crate::protocol::node::raft::RaftCommitError,
         Offline,
-        Custom: Box<dyn std::error::Error + Send + Sync>,
-        Io: std::io::Error
+        Io: std::io::Error,
+        Ack: WaitAckError,
+        Custom: Box<dyn std::error::Error + Send + Sync>
     }
 }

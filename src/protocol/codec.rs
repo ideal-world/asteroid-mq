@@ -1,3 +1,4 @@
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::{borrow::Cow, mem::size_of};
@@ -30,7 +31,7 @@ macro_rules! impl_codec {
     };
     (enum $ImplTy: ident { $($Variant:ident = $val: literal),* $(,)? }) => {
         impl $crate::protocol::codec::CodecType for $ImplTy {
-            fn decode(bytes: bytes::Bytes) -> Result<(Self, bytes::Bytes), $crate::protocol::codec::DecodeError> {
+            fn decode(bytes: bytes::Bytes) -> std::result::Result<(Self, bytes::Bytes), $crate::protocol::codec::DecodeError> {
                 let (val, bytes) = u8::decode(bytes)?;
                 let val = match val {
                     $($val => <$ImplTy>::$Variant,)*
@@ -47,7 +48,7 @@ macro_rules! impl_codec {
     };
     (struct $ImplTy: ident ($ProxyTy: ty)) => {
         impl $crate::protocol::codec::CodecType for $ImplTy {
-            fn decode(bytes: bytes::Bytes) -> Result<(Self, bytes::Bytes), $crate::protocol::codec::DecodeError> {
+            fn decode(bytes: bytes::Bytes) -> std::result::Result<(Self, bytes::Bytes), $crate::protocol::codec::DecodeError> {
                 let (inner, bytes) = <$ProxyTy>::decode(bytes)?;
                 Ok(($ImplTy(inner), bytes))
             }
@@ -76,6 +77,12 @@ impl DecodeError {
     }
 }
 
+impl std::error::Error for DecodeError {}
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{parsing_type}: {context}", parsing_type = self.parsing_type, context = self.context)
+    }
+}
 pub trait CodecType: Sized {
     fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError>;
     fn encode(&self, buf: &mut BytesMut);

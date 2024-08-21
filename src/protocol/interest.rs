@@ -24,6 +24,9 @@ impl Subject {
     pub fn new<B: Into<Bytes>>(bytes: B) -> Self {
         Self(bytes.into())
     }
+    pub const fn const_new(bytes: &'static [u8]) -> Self {
+        Self(Bytes::from_static(bytes))
+    }
     pub fn segments(&self) -> SubjectSegments<'_> {
         SubjectSegments {
             inner: self.0.as_ref(),

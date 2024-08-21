@@ -12,6 +12,7 @@
         "Uninit"
     ],
     "rust-analyzer.cargo.features": [
-        "cluster-k8s"
+        "cluster-k8s",
+        "json"
     ]
 }

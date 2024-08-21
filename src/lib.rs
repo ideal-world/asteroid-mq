@@ -1,17 +1,26 @@
 pub mod error;
+pub mod event_handler;
 pub mod protocol;
-pub mod handler;
 pub(crate) mod util;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub use bytes;
 pub use error::Error;
-
+pub type Result<T> = std::result::Result<T, Error>;
 pub mod prelude {
     pub use crate::error::Error;
+    pub use crate::event_handler::{Event, EventAttribute, EventCodec, HandleEventLoop, Handler};
+    pub use crate::protocol::codec::{CodecType, DecodeError};
+    pub use crate::protocol::endpoint::{MessageAckExpectKind, MessageId};
     pub use crate::protocol::interest::{Interest, Subject};
     pub use crate::protocol::node::{Node, NodeId, NodeInfo};
-    pub use crate::protocol::topic::{Topic, TopicCode};
+    pub use crate::protocol::topic::{
+        config::{TopicOverflowPolicy, TopicConfig, TopicDurabilityConfig, TopicOverflowConfig},
+        durable_message::{
+            Durability, DurabilityError, DurabilityService, DurableMessage, MessageDurabilityConfig,
+        },
+        Topic, TopicCode,
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

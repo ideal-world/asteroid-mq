@@ -82,33 +82,11 @@ impl LocalEndpoint {
             inner: Arc::downgrade(&self.inner),
         }
     }
-    pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, crate::Error> {
-        if let Some(topic) = self.topic() {
-            if topic.node.is_edge() {
-                todo!("send to edge")
-            } else {
-                let handle = topic.wait_ack(message.id());
-                topic
-                    .node
-                    .commit_log(LogEntry::delegate_message(DelegateMessage {
-                        topic: self.topic_code.clone(),
-                        message,
-                    }))
-                    .await
-                    .map_err(crate::Error::contextual("send message"))?;
-                Ok(handle)
-            }
-        } else {
-            Err(crate::Error::new(
-                "topic not found",
-                crate::error::ErrorKind::Offline,
-            ))
-        }
-    }
-    pub async fn ack_processed(&self, message: &Message) -> Result<(), crate::Error> {
+
+    pub async fn ack_processed(&self, header: &MessageHeader) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
             topic
-                .single_ack(message.ack_processed(self.topic_code.clone(), self.address))
+                .single_ack(header.ack_processed(self.topic_code.clone(), self.address))
                 .await
         } else {
             Err(crate::Error::new(
@@ -117,10 +95,10 @@ impl LocalEndpoint {
             ))
         }
     }
-    pub async fn ack_received(&self, message: &Message) -> Result<(), crate::Error> {
+    pub async fn ack_received(&self, header: &MessageHeader) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
             topic
-                .single_ack(message.ack_received(self.topic_code.clone(), self.address))
+                .single_ack(header.ack_received(self.topic_code.clone(), self.address))
                 .await
         } else {
             Err(crate::Error::new(
@@ -129,10 +107,10 @@ impl LocalEndpoint {
             ))
         }
     }
-    pub async fn ack_failed(&self, message: &Message) -> Result<(), crate::Error> {
+    pub async fn ack_failed(&self, header: &MessageHeader) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
             topic
-                .single_ack(message.ack_failed(self.topic_code.clone(), self.address))
+                .single_ack(header.ack_failed(self.topic_code.clone(), self.address))
                 .await
         } else {
             Err(crate::Error::new(
@@ -173,7 +151,8 @@ impl LocalEndpoint {
     }
 }
 
-impl Message {
+
+impl MessageHeader {
     #[inline(always)]
     pub fn ack(
         &self,
@@ -182,7 +161,7 @@ impl Message {
         kind: MessageStatusKind,
     ) -> MessageAck {
         MessageAck {
-            ack_to: self.id(),
+            ack_to: self.message_id,
             kind,
             from,
             topic_code,

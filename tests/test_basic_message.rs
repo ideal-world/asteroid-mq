@@ -17,7 +17,7 @@ use asteroid_mq::protocol::{
     interest::{Interest, Subject},
     node::{connection::tokio_tcp::TokioTcp, Node},
     topic::{
-        config::{OverflowPolicy, TopicConfig, TopicOverflowConfig},
+        config::{TopicOverflowPolicy, TopicConfig, TopicOverflowConfig},
         TopicCode,
     },
 };
@@ -38,7 +38,7 @@ async fn test_nodes() {
             code: TopicCode::const_new("events"),
             blocking: false,
             overflow_config: Some(TopicOverflowConfig {
-                policy: OverflowPolicy::RejectNew,
+                policy: TopicOverflowPolicy::RejectNew,
                 size: NonZeroU32::new(500).unwrap(),
             }),
         }
@@ -67,7 +67,7 @@ async fn test_nodes() {
         loop {
             let message = node_server_user.next_message().await;
             tracing::info!(?message, "recv message in server node");
-            node_server_user.ack_processed(&message).await.unwrap();
+            node_server_user.ack_processed(&message.header).await.unwrap();
         }
     });
 
@@ -94,14 +94,13 @@ async fn test_nodes() {
         loop {
             let message = node_client_sender.next_message().await;
             tracing::info!(?message, "recv message");
-            node_client_sender.ack_processed(&message).await.unwrap();
+            node_client_sender.ack_processed(&message.header).await.unwrap();
         }
     });
-    let ep = event_topic.create_endpoint(None).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let mut handles = vec![];
     for no in 0..10 {
-        let ack_handle = ep
+        let ack_handle = event_topic
             .send_message(Message::new(
                 MessageHeader::builder([Subject::new("events/hello-world")])
                     .ack_kind(MessageAckExpectKind::Processed)
@@ -120,7 +119,7 @@ async fn test_nodes() {
 
     let mut handles = vec![];
     for no in 0..10 {
-        let ack_handle = ep
+        let ack_handle = event_topic
             .send_message(Message::new(
                 MessageHeader::builder([Subject::new("events/hello-world")])
                     .ack_kind(MessageAckExpectKind::Sent)
@@ -139,7 +138,7 @@ async fn test_nodes() {
 
     let mut handles = vec![];
     for no in 0..10 {
-        let ack_handle = ep
+        let ack_handle = event_topic
             .send_message(Message::new(
                 MessageHeader::builder([Subject::new("events/hello-world")])
                     .ack_kind(MessageAckExpectKind::Received)
