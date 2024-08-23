@@ -54,7 +54,9 @@ impl Node {
                             deleted.insert(*key);
                         }
                     }
-                    tracing::info!(?added, ?deleted, "cluster update");
+                    if !(added.is_empty() || deleted.is_empty()) {
+                        tracing::info!(?added, ?deleted, "cluster update");
+                    }
                     for delete in deleted {
                         if let Some(_peer_addr) = lock.remove(&delete) {
                             node.remove_connection(delete)

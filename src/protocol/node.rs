@@ -378,8 +378,10 @@ impl Node {
                 drop(raft_state);
             }
             tracing::debug!(?log_append, "log append");
-            self.send_packet(log_append, leader)
-                .expect("should send log append");
+            if self.send_packet(log_append, leader).is_err() {
+                let mut raft_state = self.raft_state_unwrap().write().unwrap();
+                raft_state.report_commit_error(trace_id, RaftCommitError::connection_error("follower commit"))
+            }
             Ok(commit_handle)
         } else {
             unreachable!("should be ready");

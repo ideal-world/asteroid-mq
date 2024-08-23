@@ -278,7 +278,10 @@ impl N2NConnectionInstance {
                                     tracing::trace!(?request_vote, "received request vote");
                                     let mut self_state = node.raft_state_unwrap().write().unwrap();
                                     let vote_this = match &mut self_state.role {
-                                        RaftRole::Leader(_) => false,
+                                        RaftRole::Leader(_) => {
+                                            request_vote.term > self_state.term
+                                                && request_vote.index >= self_state.index
+                                        }
                                         RaftRole::Follower(_) => !self_state
                                             .voted_for
                                             .is_some_and(|(_, term)| term >= request_vote.term),
@@ -295,6 +298,15 @@ impl N2NConnectionInstance {
                                         if result.is_ok() {
                                             self_state.voted_for =
                                                 Some((peer_id, request_vote.term));
+                                            let timeout_reporter =
+                                                self_state.timeout_reporter.clone();
+                                            self_state.set_role(RaftRole::Follower(
+                                                FollowerState::from_new_leader(
+                                                    peer_id,
+                                                    HB_DURATION * 2,
+                                                    timeout_reporter,
+                                                ),
+                                            ))
                                         }
                                     }
                                 }

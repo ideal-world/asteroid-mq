@@ -262,6 +262,13 @@ pub struct RaftCommitError {
 }
 
 impl RaftCommitError {
+    pub fn connection_error(context: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            kind: RaftCommitErrorKind::ProcessFailed,
+            reason: None,
+            context: context.into(),
+        }
+    }
     pub fn process_failed(context: impl Into<Cow<'static, str>>) -> Self {
         Self {
             kind: RaftCommitErrorKind::ProcessFailed,
@@ -287,6 +294,7 @@ impl std::fmt::Debug for RaftCommitError {
 pub enum RaftCommitErrorKind {
     MissingReporter = 0,
     ProcessFailed = 1,
+    ConnectionError = 2,
 }
 
 pin_project_lite::pin_project! {
@@ -324,6 +332,11 @@ impl RaftState {
     pub fn resolve_commit_hook(&mut self, trace_id: RaftTraceId, index: RaftLogIndex) {
         if let Some(tx) = self.commit_hooks.remove(&trace_id) {
             let _ = tx.send(Ok(index));
+        }
+    }
+    pub fn report_commit_error(&mut self, trace_id: RaftTraceId, error: RaftCommitError) {
+        if let Some(tx) = self.commit_hooks.remove(&trace_id) {
+            let _ = tx.send(Err(error));
         }
     }
     pub fn commit(&mut self, indexed: IndexedLog, node: &Node) {

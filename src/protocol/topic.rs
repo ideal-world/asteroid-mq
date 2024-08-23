@@ -54,14 +54,6 @@ impl TopicCode {
     }
 }
 
-impl Borrow<str> for TopicCode {
-    fn borrow(&self) -> &str {
-        unsafe { std::str::from_utf8_unchecked(&self.0) }
-    }
-}
-
-
-
 impl Borrow<[u8]> for TopicCode {
     fn borrow(&self) -> &[u8] {
         &self.0

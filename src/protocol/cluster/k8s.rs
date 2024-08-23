@@ -1,11 +1,6 @@
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    sync::OnceLock,
-};
+use std::{borrow::Cow, collections::HashMap, net::SocketAddr, sync::OnceLock};
 
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{Endpoints, Pod, Service};
 
 use crate::protocol::node::{Node, NodeId, NodeInfo};
 
@@ -14,7 +9,7 @@ use crate::protocol::node::{Node, NodeId, NodeInfo};
 /// You may get the uid from the pod metadata through environment variables or other ways.
 pub struct K8sClusterProvider {
     pub namespace: Cow<'static, str>,
-    pub param: ListParams,
+    pub service: Cow<'static, str>,
     pub client: kube::Client,
     next_update: tokio::time::Instant,
     pub poll_interval: std::time::Duration,
@@ -34,18 +29,13 @@ fn namespace_from_file() -> &'static str {
 }
 
 impl K8sClusterProvider {
-    pub async fn new(label: impl Into<String>, port: u16) -> Self {
+    pub async fn new(service: impl Into<Cow<'static, str>>, port: u16) -> Self {
         let client = kube::Client::try_default()
             .await
             .expect("failed to create k8s client, is this program running in a k8s pod?");
-
-        let param = ListParams {
-            label_selector: Some(label.into()),
-            ..Default::default()
-        };
         K8sClusterProvider {
             namespace: namespace_from_file().into(),
-            param,
+            service: service.into(),
             client,
             next_update: tokio::time::Instant::now(),
             poll_interval: std::time::Duration::from_secs(1),
@@ -73,27 +63,68 @@ impl NodeId {
     }
 }
 
-use kube::{api::ListParams, Api};
+use kube::Api;
 
 use super::TcpClusterProvider;
 impl TcpClusterProvider for K8sClusterProvider {
     async fn next_update(&mut self) -> super::TcpClusterInfo {
         tokio::time::sleep_until(self.next_update).await;
         self.next_update += self.poll_interval;
-        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &self.namespace);
-        let pod_list = pods.list(&self.param).await.unwrap();
+        let service_api: Api<Service> = Api::namespaced(self.client.clone(), &self.namespace);
+        let service = service_api
+            .get(&self.service)
+            .await
+            .expect("service not found");
+        let port_mapped = service
+            .spec
+            .expect("service are expected to have a spec")
+            .ports
+            .expect("service are expected to have a port")
+            .iter()
+            .find(|p| {
+                p.target_port.as_ref().is_some_and(|target| match target {
+                    k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(target_port) => {
+                        *target_port == self.port as i32
+                    }
+                    k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::String(
+                        target_port,
+                    ) => target_port.parse::<u16>() == Ok(self.port),
+                })
+            })
+            .map(|p| p.port)
+            .expect("we should find one") as u16;
+        let endpoint_api: Api<Endpoints> = Api::namespaced(self.client.clone(), &self.namespace);
+        let ep_list: Endpoints = endpoint_api
+            .get(&self.service)
+            .await
+            .expect("endpoints not found");
+        let socket_addr_list = ep_list
+            .subsets
+            .as_ref()
+            .expect("should have subsets")
+            .iter()
+            .flat_map(|subset| {
+                subset.addresses.as_ref().map(|addresses| {
+                    addresses.iter().map(|address| {
+                        let addr: SocketAddr = format!("{}:{}", address.ip, port_mapped)
+                            .parse()
+                            .expect("should be valid socket addr");
+                        let uid = address
+                            .target_ref
+                            .as_ref()
+                            .expect("should have target ref")
+                            .uid
+                            .as_ref()
+                            .expect("should have uid");
+                        let node_id = NodeId::sha256(uid.as_bytes());
+                        (addr, node_id)
+                    })
+                })
+            })
+            .flatten();
         let mut nodes = HashMap::new();
-        for pod in pod_list.items {
-            let node_id = NodeId::from_pod(&pod);
-            let addr = format!(
-                "{}:{}",
-                pod.status
-                    .expect("pod are expected to have a status")
-                    .host_ip
-                    .expect("pod are expected to have a pod_ip"),
-                self.port
-            );
-            nodes.insert(node_id, addr.parse().unwrap());
+        for (addr, node_id) in socket_addr_list {
+            nodes.insert(node_id, addr);
         }
 
         super::TcpClusterInfo {
