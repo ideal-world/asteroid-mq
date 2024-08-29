@@ -53,7 +53,7 @@ async fn test_nodes() {
                     let node = node_server.clone();
                     tokio::spawn(async move {
                         let conn = TokioTcp::new(stream);
-                        node.create_connection(conn).await.unwrap();
+                        node.create_cluster_connection(conn).await.unwrap();
                     });
                 }
             });
@@ -80,7 +80,7 @@ async fn test_nodes() {
         .unwrap();
 
     node_client
-        .create_connection(TokioTcp::new(stream_client))
+        .create_cluster_connection(TokioTcp::new(stream_client))
         .await
         .unwrap();
 

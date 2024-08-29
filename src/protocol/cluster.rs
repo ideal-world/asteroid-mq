@@ -59,7 +59,7 @@ impl Node {
                     }
                     for delete in deleted {
                         if let Some(_peer_addr) = lock.remove(&delete) {
-                            node.remove_connection(delete)
+                            node.remove_cluster_connection(delete)
                         }
                     }
                     for (peer_id, peer_addr) in added {
@@ -72,7 +72,7 @@ impl Node {
                                     crate::protocol::node::connection::tokio_tcp::TokioTcp::new(
                                         stream,
                                     );
-                                match node.create_connection(conn).await {
+                                match node.create_cluster_connection(conn).await {
                                     Ok(peer_id) => {
                                         connection_state.write().await.insert(peer_id, peer_addr);
                                         tracing::info!(
@@ -82,7 +82,7 @@ impl Node {
                                         );
                                     }
                                     Err(e) => {
-                                        if let connection::N2NConnectionErrorKind::Existed = e.kind
+                                        if let connection::NodeConnectionErrorKind::Existed = e.kind
                                         {
                                             tracing::debug!(
                                                 ?peer_id,
@@ -115,13 +115,13 @@ impl Node {
                             let conn =
                                 crate::protocol::node::connection::tokio_tcp::TokioTcp::new(stream);
                             let mut lock = connection_state.write().await;
-                            match node.create_connection(conn).await {
+                            match node.create_cluster_connection(conn).await {
                                 Ok(peer_id) => {
                                     lock.insert(peer_id, peer);
                                     tracing::info!(?peer, "new connection");
                                 }
                                 Err(e) => {
-                                    if let connection::N2NConnectionErrorKind::Existed = e.kind {
+                                    if let connection::NodeConnectionErrorKind::Existed = e.kind {
                                         tracing::debug!(?peer, "connection existed");
                                     } else {
                                         warn!(?e, "failed to create connection");

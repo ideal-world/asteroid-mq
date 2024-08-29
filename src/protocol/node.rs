@@ -1,7 +1,7 @@
 pub mod connection;
 pub mod event;
 pub mod raft;
-
+pub mod edge;
 use std::{
     collections::HashMap,
     ops::Deref,
@@ -14,10 +14,11 @@ use super::{
     topic::{TopicCode, TopicInner, TopicSnapshot},
 };
 use connection::{
-    ConnectionConfig, N2NConnection, N2NConnectionError, N2NConnectionInstance, N2NConnectionRef,
+    NodeConnectionError, ClusterConnectionInstance, ClusterConnectionRef, ConnectionConfig, EdgeConnectionInstance, EdgeConnectionRef, NodeConnection
 };
 use crossbeam::sync::ShardedLock;
-use event::{EventKind, N2NAuth, N2NUnreachableEvent, N2nEvent, N2nPacket, NodeKind, NodeTrace};
+use edge::EdgePayload;
+use event::{EventKind, NodeAuth, N2NUnreachableEvent, N2nEvent, N2nPacket, NodeKind, NodeTrace};
 use raft::{
     CommitHandle, FollowerState, LogEntry, RaftCommitError, RaftLogIndex, RaftRole, RaftState,
 };
@@ -44,8 +45,8 @@ impl std::fmt::Debug for NodeId {
             .field(&crate::util::dashed(&[
                 crate::util::hex(&self.bytes[0..1]),
                 crate::util::hex(&self.bytes[1..9]),
-                crate::util::hex(&self.bytes[9..13]),
-                crate::util::hex(&self.bytes[13..16]),
+                crate::util::hex(&self.bytes[9..10]),
+                crate::util::hex(&self.bytes[10..16]),
             ]))
             .finish()
     }
@@ -62,17 +63,17 @@ impl NodeId {
         NodeId { bytes }
     }
     pub fn snowflake() -> NodeId {
-        static INSTANCE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        static INSTANCE_ID: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
         let dg = crate::util::executor_digest();
         let mut bytes = [0; 16];
         bytes[0] = Self::KIND_SNOWFLAKE;
         bytes[1..9].copy_from_slice(&dg.to_be_bytes());
-        bytes[9..13].copy_from_slice(
+        bytes[9..10].copy_from_slice(
             &INSTANCE_ID
                 .fetch_add(1, sync::atomic::Ordering::SeqCst)
                 .to_be_bytes(),
         );
-        bytes[13..16].copy_from_slice(&(crate::util::timestamp_sec() as u32).to_be_bytes()[0..3]);
+        bytes[10..16].copy_from_slice(&(crate::util::timestamp_sec()).to_be_bytes()[2..8]);
         NodeId { bytes }
     }
 }
@@ -122,8 +123,9 @@ pub struct NodeInner {
     raft_state: Option<RwLock<RaftState>>,
     pub(crate) topics: ShardedLock<HashMap<TopicCode, Arc<TopicInner>>>,
     n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
-    connections: ShardedLock<HashMap<NodeId, Arc<N2NConnectionInstance>>>,
-    auth: RwLock<N2NAuth>,
+    peer_connections: ShardedLock<HashMap<NodeId, Arc<ClusterConnectionInstance>>>,
+    edge_connections: ShardedLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
+    auth: RwLock<NodeAuth>,
 }
 
 pub struct NodeSnapshot {
@@ -162,45 +164,7 @@ impl Deref for Node {
 
 impl Default for Node {
     fn default() -> Self {
-        let timeout = crate::util::random_duration_ms(Self::RAFT_RANDOM_DURATION_RANGE);
-        let (timeout_reporter, timeout_receiver) = flume::bounded(1);
-
-        let this = Self {
-            inner: Arc::new_cyclic(|this| NodeInner {
-                cluster_size: AtomicUsize::new(0),
-                info: NodeInfo::default(),
-                topics: Default::default(),
-                n2n_routing_table: ShardedLock::new(HashMap::new()),
-                connections: ShardedLock::new(HashMap::new()),
-                auth: Default::default(),
-                raft_state: Some(RwLock::new(RaftState {
-                    term: Default::default(),
-                    timeout_reporter: timeout_reporter.clone(),
-                    role: RaftRole::Follower(FollowerState::new(timeout, timeout_reporter)),
-                    index: Default::default(),
-                    voted_for: None,
-                    node_ref: NodeRef {
-                        inner: this.clone(),
-                    },
-                    pending_logs: Default::default(),
-                    commit_hooks: Default::default(),
-                })),
-            }),
-        };
-        let node_ref = this.node_ref();
-        tokio::spawn(async move {
-            while let Ok(()) = timeout_receiver.recv_async().await {
-                let Some(node) = node_ref.upgrade() else {
-                    break;
-                };
-                let req = node.raft_state_unwrap().write().unwrap().term_timeout();
-                tracing::debug!(?req, "raft term timeout");
-                if let Some(req) = req {
-                    node.cluster_wise_broadcast_packet(N2nPacket::raft_request_vote(req));
-                }
-            }
-        });
-        this
+        Self::new(NodeInfo::default())
     }
 }
 
@@ -215,7 +179,8 @@ impl Node {
                 info: cluster_info,
                 topics: Default::default(),
                 n2n_routing_table: ShardedLock::new(HashMap::new()),
-                connections: ShardedLock::new(HashMap::new()),
+                peer_connections: ShardedLock::new(HashMap::new()),
+                edge_connections: ShardedLock::new(HashMap::new()),
                 auth: Default::default(),
                 raft_state: Some(RwLock::new(RaftState {
                     term: Default::default(),
@@ -320,18 +285,34 @@ impl Node {
             .collect::<Vec<_>>();
         EndpointSync { entries }
     }
-    pub async fn create_connection<C: N2NConnection>(
+    pub async fn create_cluster_connection<C: NodeConnection>(
         &self,
         conn: C,
-    ) -> Result<NodeId, N2NConnectionError> {
+    ) -> Result<NodeId, NodeConnectionError> {
         let config = ConnectionConfig {
             attached_node: self.node_ref(),
             auth: self.auth.read().unwrap().clone(),
         };
-        let conn_inst = N2NConnectionInstance::init(config, conn).await?;
+        let conn_inst = ClusterConnectionInstance::init(config, conn).await?;
         let peer = conn_inst.peer_info.id;
         {
-            let mut wg = self.connections.write().unwrap();
+            let mut wg = self.peer_connections.write().unwrap();
+            wg.insert(peer, Arc::new(conn_inst));
+        }
+        Ok(peer)
+    }
+    pub async fn create_edge_connection<C: NodeConnection>(
+        &self,
+        conn: C,
+    ) -> Result<NodeId, NodeConnectionError> {
+        let config = ConnectionConfig {
+            attached_node: self.node_ref(),
+            auth: self.auth.read().unwrap().clone(),
+        };
+        let conn_inst = EdgeConnectionInstance::init(config, conn).await?;
+        let peer = conn_inst.peer_info.id;
+        {
+            let mut wg = self.edge_connections.write().unwrap();
             wg.insert(peer, Arc::new(conn_inst));
         }
         Ok(peer)
@@ -502,10 +483,10 @@ impl Node {
         // TODO: implement this for edge nodes
     }
     pub(crate) fn known_nodes(&self) -> Vec<NodeId> {
-        self.connections.read().unwrap().keys().cloned().collect()
+        self.peer_connections.read().unwrap().keys().cloned().collect()
     }
     pub(crate) fn known_peer_cluster(&self) -> Vec<NodeId> {
-        self.connections
+        self.peer_connections
             .read()
             .unwrap()
             .iter()
@@ -515,8 +496,8 @@ impl Node {
             .map(|(id, _)| *id)
             .collect()
     }
-    pub(crate) fn get_connection(&self, to: NodeId) -> Option<N2NConnectionRef> {
-        let connections = self.connections.read().unwrap();
+    pub fn get_cluster_connection(&self, to: NodeId) -> Option<ClusterConnectionRef> {
+        let connections = self.peer_connections.read().unwrap();
         let conn = connections.get(&to)?;
         if conn.is_alive() {
             Some(conn.get_connection_ref())
@@ -524,9 +505,20 @@ impl Node {
             None
         }
     }
-
-    pub(crate) fn remove_connection(&self, to: NodeId) {
-        self.connections.write().unwrap().remove(&to);
+    pub fn get_edge_connection(&self, to: NodeId) -> Option<EdgeConnectionRef> {
+        let connections = self.edge_connections.read().unwrap();
+        let conn = connections.get(&to)?;
+        if conn.is_alive() {
+            Some(conn.get_connection_ref())
+        } else {
+            None
+        }
+    }
+    pub fn remove_cluster_connection(&self, to: NodeId) {
+        self.peer_connections.write().unwrap().remove(&to);
+    }
+    pub fn remove_edge_connection(&self, to: NodeId) {
+        self.edge_connections.write().unwrap().remove(&to);
     }
     pub(crate) fn cluster_wise_broadcast_packet(&self, packet: N2nPacket) {
         let known_peer_cluster = self.known_peer_cluster();
@@ -537,7 +529,7 @@ impl Node {
     }
     #[instrument(skip(self, packet), fields(node=?self.id(), ?to))]
     pub(crate) fn send_packet(&self, packet: N2nPacket, to: NodeId) -> Result<(), N2nPacket> {
-        let Some(conn) = self.get_connection(to) else {
+        let Some(conn) = self.get_cluster_connection(to) else {
             tracing::error!("failed to send packet no connection to {to:?}");
             return Err(packet);
         };
@@ -640,6 +632,11 @@ impl Node {
     pub(crate) fn get_next_jump(&self, to: NodeId) -> Option<NodeId> {
         let routing_table = self.n2n_routing_table.read().unwrap();
         routing_table.get(&to).map(|info| info.next_jump)
+    }
+
+    pub(crate) async fn handle_edge_request(&self, from: NodeId, edge_request: edge::EdgeRequest) -> Result<edge::EdgeResponse, edge::EdgeError> {
+        // let EdgePayload { kind, data } = edge_request.payload;
+        todo!()
     }
 }
 

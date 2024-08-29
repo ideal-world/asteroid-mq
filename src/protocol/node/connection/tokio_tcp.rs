@@ -9,7 +9,7 @@ use crate::protocol::node::{
     N2nPacket,
 };
 
-use super::{N2NConnection, N2NConnectionError, N2NConnectionErrorKind};
+use super::{NodeConnection, NodeConnectionError, NodeConnectionErrorKind};
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReadState {
     ExpectingHeader,
@@ -65,7 +65,7 @@ impl TokioTcp {
 }
 
 impl Sink<N2nPacket> for TokioTcp {
-    type Error = N2NConnectionError;
+    type Error = NodeConnectionError;
 
     fn poll_ready(
         self: std::pin::Pin<&mut Self>,
@@ -74,7 +74,7 @@ impl Sink<N2nPacket> for TokioTcp {
         let this = self.project();
         let inner = this.inner;
         inner.poll_write_ready(cx).map_err(|e| {
-            N2NConnectionError::new(N2NConnectionErrorKind::Io(e), "failed to poll ready")
+            NodeConnectionError::new(NodeConnectionErrorKind::Io(e), "failed to poll ready")
         })
     }
 
@@ -104,8 +104,8 @@ impl Sink<N2nPacket> for TokioTcp {
                         .as_mut()
                         .poll_write(cx, &this.write_header_buf[(*this.write_index)..]))
                     .map_err(|e| {
-                        N2NConnectionError::new(
-                            N2NConnectionErrorKind::Io(e),
+                        NodeConnectionError::new(
+                            NodeConnectionErrorKind::Io(e),
                             "failed to write header",
                         )
                     })?;
@@ -120,8 +120,8 @@ impl Sink<N2nPacket> for TokioTcp {
                         .as_mut()
                         .poll_write(cx, &this.write_payload_buf[(*this.write_index)..]))
                     .map_err(|e| {
-                        N2NConnectionError::new(
-                            N2NConnectionErrorKind::Io(e),
+                        NodeConnectionError::new(
+                            NodeConnectionErrorKind::Io(e),
                             "failed to write payload",
                         )
                     })?;
@@ -144,13 +144,13 @@ impl Sink<N2nPacket> for TokioTcp {
         let this = self.project();
         let inner = this.inner;
         inner.poll_shutdown(cx).map_err(|e| {
-            N2NConnectionError::new(N2NConnectionErrorKind::Io(e), "failed to shutdown")
+            NodeConnectionError::new(NodeConnectionErrorKind::Io(e), "failed to shutdown")
         })
     }
 }
 
 impl Stream for TokioTcp {
-    type Item = Result<N2nPacket, N2NConnectionError>;
+    type Item = Result<N2nPacket, NodeConnectionError>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -163,8 +163,8 @@ impl Stream for TokioTcp {
                 ReadState::ExpectingHeader => {
                     let mut buffer = ReadBuf::new(&mut this.read_header_buf[(*this.read_index)..]);
                     let poll_read_result = inner.as_mut().poll_read(cx, &mut buffer).map_err(|e| {
-                        N2NConnectionError::new(
-                            N2NConnectionErrorKind::Io(e),
+                        NodeConnectionError::new(
+                            NodeConnectionErrorKind::Io(e),
                             "failed to read header",
                         )
                     });
@@ -212,8 +212,8 @@ impl Stream for TokioTcp {
                     }
                     let mut buffer = ReadBuf::new(&mut this.read_payload_buf[(*this.read_index)..]);
                     ready!(inner.as_mut().poll_read(cx, &mut buffer)).map_err(|e| {
-                        N2NConnectionError::new(
-                            N2NConnectionErrorKind::Io(e),
+                        NodeConnectionError::new(
+                            NodeConnectionErrorKind::Io(e),
                             "failed to read payload",
                         )
                     })?;
@@ -234,4 +234,4 @@ impl Stream for TokioTcp {
     }
 }
 
-impl N2NConnection for TokioTcp {}
+impl NodeConnection for TokioTcp {}

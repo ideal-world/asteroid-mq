@@ -3,7 +3,7 @@ mod message;
 
 use super::{
     node::{raft::LogEntry, Node, NodeRef},
-    topic::{wait_ack::WaitAckHandle, Topic, TopicCode, TopicRef},
+    topic::{Topic, TopicCode, TopicRef},
 };
 pub use event::*;
 pub use message::*;
@@ -150,7 +150,6 @@ impl LocalEndpoint {
         }
     }
 }
-
 
 impl MessageHeader {
     #[inline(always)]

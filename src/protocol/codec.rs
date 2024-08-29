@@ -396,6 +396,17 @@ impl CodecType for String {
     }
 }
 
+impl CodecType for Cow<'_, str> {
+    fn decode(bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
+        let (s, bytes) = String::decode(bytes)?;
+        Ok((Cow::Owned(s), bytes))
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        self.to_string().encode(buf)
+    }
+}
+
 impl<A, B> CodecType for (A, B)
 where
     A: CodecType,

@@ -1,8 +1,9 @@
-use crate::{impl_codec, protocol::codec::CodecType};
+use crate::{impl_codec, prelude::DecodeError, protocol::codec::CodecType};
 use bytes::{Bytes, BytesMut};
 use std::mem::size_of;
 
 use super::{
+    edge::EdgeResponse,
     raft::{
         Heartbeat, LogAck, LogAppend, LogCommit, LogReplicate, RaftSnapshot, RequestVote, Vote,
     },
@@ -121,6 +122,8 @@ impl_codec!(
     }
 );
 
+
+
 impl N2nPacket {
     pub fn kind(&self) -> N2NPayloadKind {
         self.header.kind
@@ -128,7 +131,16 @@ impl N2nPacket {
     pub fn id(&self) -> N2nPacketId {
         self.header.id
     }
-
+    pub fn to_binary(&self) -> Bytes {
+        let mut buf = BytesMut::with_capacity(size_of::<N2nPacketHeader>() + self.header.payload_size as usize);
+        self.header.encode(&mut buf);
+        buf.extend_from_slice(self.payload.as_ref());
+        buf.freeze()
+    }
+    pub fn from_binary(data: Bytes) -> Result<Self, DecodeError> {
+        let (header, payload) = N2nPacketHeader::decode(data)?;
+        Ok(Self { header, payload })
+    }
     pub fn auth(evt: N2nAuth) -> Self {
         let mut payload_buf = BytesMut::with_capacity(size_of::<N2nAuth>());
         evt.encode(&mut payload_buf);
@@ -268,6 +280,18 @@ impl N2nPacket {
             payload: payload_buf.into(),
         }
     }
+
+    pub fn edge_response(resp: EdgeResponse) -> Self {
+        let payload = resp.encode_to_bytes();
+        Self {
+            header: N2nPacketHeader {
+                id: N2nPacketId::new_snowflake(),
+                kind: N2NPayloadKind::EdgeResponse,
+                payload_size: payload.len() as u32,
+            },
+            payload,
+        }
+    }
 }
 
 #[repr(u8)]
@@ -284,6 +308,9 @@ pub enum N2NPayloadKind {
     LogCommit = 0x23,
     Snapshot = 0x24,
     RequestSnapshot = 0x25,
+    EdgeRequest = 0x30,
+    EdgeResponse = 0x31,
+    EdgeMessage = 0x32,
     Unreachable = 0x80,
     Unknown = 0xf0,
 }
@@ -301,6 +328,9 @@ impl_codec!(
         LogCommit = 0x23,
         Snapshot = 0x24,
         RequestSnapshot = 0x25,
+        EdgeRequest = 0x30,
+        EdgeResponse = 0x31,
+        EdgeMessage = 0x32,
         Unreachable = 0x80,
         Unknown = 0xf0,
     }
@@ -319,6 +349,9 @@ impl From<u8> for N2NPayloadKind {
             0x22 => N2NPayloadKind::LogAck,
             0x23 => N2NPayloadKind::LogCommit,
             0x24 => N2NPayloadKind::Snapshot,
+            0x25 => N2NPayloadKind::RequestSnapshot,
+            0x30 => N2NPayloadKind::EdgeRequest,
+            0x31 => N2NPayloadKind::EdgeResponse,
             0x80 => N2NPayloadKind::Unreachable,
 
             _ => N2NPayloadKind::Unknown,
@@ -329,12 +362,12 @@ impl From<u8> for N2NPayloadKind {
 #[derive(Debug, Clone)]
 pub struct N2nAuth {
     pub info: NodeInfo,
-    pub auth: N2NAuth,
+    pub auth: NodeAuth,
 }
 impl_codec!(
     struct N2nAuth {
         info: NodeInfo,
-        auth: N2NAuth,
+        auth: NodeAuth,
     }
 );
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -413,12 +446,9 @@ pub enum N2NEvent {
     Unreachable(N2NUnreachableEvent),
 }
 #[derive(Debug, Clone, Default)]
-pub struct N2NAuth {
-    pub cluster_id: Bytes,
+pub struct NodeAuth {
 }
 
 impl_codec!(
-    struct N2NAuth {
-        cluster_id: Bytes,
-    }
+    struct NodeAuth {}
 );

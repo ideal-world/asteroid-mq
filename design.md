@@ -77,3 +77,17 @@ ack: Processed
 ```
 
 
+## Edge Node Connections
+
+### Edge 2 Cluster
+SendMessage
+CreateEdgeEndpoint
+DeleteEdgeEndpoint
+
+### Cluster 2 Edge
+PushMessage
+MessageAck
+SendResult
+
+
+
