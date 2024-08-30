@@ -6,9 +6,9 @@ use std::{
     time::Instant,
 };
 
-use crate::protocol::endpoint::{
+use crate::{impl_codec, protocol::endpoint::{
     EndpointAddr, Message, MessageAckExpectKind, MessageId, MessageStatusKind,
-};
+}};
 
 #[derive(Debug)]
 pub struct WaitAck {
@@ -22,10 +22,26 @@ pub struct WaitAckError {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
     pub exception: Option<WaitAckErrorException>,
 }
+
+impl_codec!(
+    struct WaitAckError {
+        status: HashMap<EndpointAddr, MessageStatusKind>,
+        exception: Option<WaitAckErrorException>,
+    }
+);
+
 #[derive(Debug)]
 pub struct WaitAckSuccess {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
+
+impl_codec!(
+    struct WaitAckSuccess {
+        status: HashMap<EndpointAddr, MessageStatusKind>,
+    }
+);
+
+
 impl WaitAckError {
     pub fn exception(exception: WaitAckErrorException) -> Self {
         Self {
@@ -34,12 +50,22 @@ impl WaitAckError {
         }
     }
 }
-#[derive(Debug)]
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy)]
 pub enum WaitAckErrorException {
-    MessageDropped,
-    Overflow,
-    NoAvailableTarget,
+    MessageDropped = 0,
+    Overflow = 1,
+    NoAvailableTarget = 2,
 }
+
+impl_codec!(
+    enum WaitAckErrorException {
+        MessageDropped = 0,
+        Overflow = 1,
+        NoAvailableTarget = 2,
+    }
+);
 
 pub enum AckWaitErrorKind {
     Timeout,

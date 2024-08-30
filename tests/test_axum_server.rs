@@ -153,6 +153,22 @@ async fn test_websocket_server() {
     let node =
         asteroid_mq::prelude::Node::new(NodeInfo::new(NodeId::snowflake(), NodeKind::Cluster));
     node.set_cluster_size(1);
+    let topic = node.new_topic(asteroid_mq::protocol::topic::config::TopicConfig {
+        code: asteroid_mq::protocol::topic::TopicCode::const_new("test"),
+        blocking: false,
+        overflow_config: None,
+    }).await.unwrap();
+    let receiver_endpoint = topic
+        .create_endpoint(vec![asteroid_mq::protocol::interest::Interest::new("*")])
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        loop {
+            let message = receiver_endpoint.next_message().await;
+            tracing::info!(?message, "recv message in server node");
+            receiver_endpoint.ack_processed(&message.header).await.unwrap();
+        }
+    });
     use axum::serve;
     let tcp_listener = tokio::net::TcpListener::bind("localhost:8080")
         .await

@@ -1,8 +1,14 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use bytes::Bytes;
 
-use crate::{impl_codec, prelude::CodecType};
+use crate::{
+    impl_codec,
+    prelude::{
+        CodecType, MessageAckExpectKind, MessageDurabilityConfig, MessageId, Subject, TopicCode,
+    },
+    protocol::endpoint::{Message, MessageHeader, MessageTargetKind},
+};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -107,12 +113,65 @@ impl EdgeError {
 #[derive(Debug, Clone, Copy)]
 pub enum EdgeErrorKind {
     Decode = 0x00,
-    Internal = 0x01,
+    TopicNotFound = 0x02,
+    Internal = 0xf0,
 }
 
 impl_codec!(
     enum EdgeErrorKind {
         Decode = 0x00,
-        Internal = 0x01,
+        TopicNotFound = 0x02,
+        Internal = 0xf0,
     }
 );
+
+pub struct EdgeMessageHeader {
+    pub ack_kind: MessageAckExpectKind,
+    pub target_kind: MessageTargetKind,
+    pub durability: Option<MessageDurabilityConfig>,
+    pub subjects: Vec<Subject>,
+    pub topic: TopicCode,
+}
+
+impl_codec!(
+    struct EdgeMessageHeader {
+        ack_kind: MessageAckExpectKind,
+        target_kind: MessageTargetKind,
+        durability: Option<MessageDurabilityConfig>,
+        subjects: Vec<Subject>,
+        topic: TopicCode,
+    }
+);
+
+impl EdgeMessageHeader {
+    pub fn into_message_header(self) -> (MessageHeader, TopicCode) {
+        (
+            MessageHeader {
+                message_id: MessageId::new_snowflake(),
+                ack_kind: self.ack_kind,
+                target_kind: self.target_kind,
+                durability: self.durability,
+                subjects: self.subjects.into(),
+            },
+            self.topic,
+        )
+    }
+}
+
+pub struct EdgeMessage {
+    pub header: EdgeMessageHeader,
+    pub payload: Bytes,
+}
+
+impl_codec!(
+    struct EdgeMessage {
+        header: EdgeMessageHeader,
+        payload: Bytes,
+    }
+);
+impl EdgeMessage {
+    pub fn into_message(self) -> (Message, TopicCode) {
+        let (header, topic) = self.header.into_message_header();
+        (Message::new(header, self.payload), topic)
+    }
+}

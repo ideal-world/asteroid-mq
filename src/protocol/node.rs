@@ -1,7 +1,7 @@
 pub mod connection;
+pub mod edge;
 pub mod event;
 pub mod raft;
-pub mod edge;
 use std::{
     collections::HashMap,
     ops::Deref,
@@ -13,12 +13,15 @@ use super::{
     endpoint::{EndpointInterest, SetState},
     topic::{TopicCode, TopicInner, TopicSnapshot},
 };
+use bytes::Bytes;
 use connection::{
-    NodeConnectionError, ClusterConnectionInstance, ClusterConnectionRef, ConnectionConfig, EdgeConnectionInstance, EdgeConnectionRef, NodeConnection
+    ClusterConnectionInstance, ClusterConnectionRef, ConnectionConfig, EdgeConnectionInstance,
+    EdgeConnectionRef, NodeConnection, NodeConnectionError,
 };
 use crossbeam::sync::ShardedLock;
-use edge::EdgePayload;
-use event::{EventKind, NodeAuth, N2NUnreachableEvent, N2nEvent, N2nPacket, NodeKind, NodeTrace};
+use edge::{EdgeError, EdgeErrorKind, EdgeMessage, EdgePayload};
+use event::{EventKind, N2NUnreachableEvent, N2nEvent, N2nPacket, NodeAuth, NodeKind, NodeTrace};
+use futures_util::TryFutureExt;
 use raft::{
     CommitHandle, FollowerState, LogEntry, RaftCommitError, RaftLogIndex, RaftRole, RaftState,
 };
@@ -361,7 +364,10 @@ impl Node {
             tracing::debug!(?log_append, "log append");
             if self.send_packet(log_append, leader).is_err() {
                 let mut raft_state = self.raft_state_unwrap().write().unwrap();
-                raft_state.report_commit_error(trace_id, RaftCommitError::connection_error("follower commit"))
+                raft_state.report_commit_error(
+                    trace_id,
+                    RaftCommitError::connection_error("follower commit"),
+                )
             }
             Ok(commit_handle)
         } else {
@@ -483,7 +489,12 @@ impl Node {
         // TODO: implement this for edge nodes
     }
     pub(crate) fn known_nodes(&self) -> Vec<NodeId> {
-        self.peer_connections.read().unwrap().keys().cloned().collect()
+        self.peer_connections
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
     }
     pub(crate) fn known_peer_cluster(&self) -> Vec<NodeId> {
         self.peer_connections
@@ -634,9 +645,56 @@ impl Node {
         routing_table.get(&to).map(|info| info.next_jump)
     }
 
-    pub(crate) async fn handle_edge_request(&self, from: NodeId, edge_request: edge::EdgeRequest) -> Result<edge::EdgeResponse, edge::EdgeError> {
-        // let EdgePayload { kind, data } = edge_request.payload;
-        todo!()
+    pub(crate) async fn handle_edge_request(
+        &self,
+        from: NodeId,
+        edge_request: edge::EdgeRequest,
+    ) -> Result<Bytes, edge::EdgeError> {
+        match edge_request.kind {
+            edge::EdgeRequestKind::SendMessage => {
+                let message = EdgeMessage::decode_from_bytes(edge_request.data).map_err(|e| {
+                    EdgeError::with_message(
+                        "decode EdgeMessage",
+                        e.to_string(),
+                        EdgeErrorKind::Decode,
+                    )
+                })?;
+                let (message, topic_code) = message.into_message();
+                let Some(topic) = self.get_topic(&topic_code) else {
+                    return Err(EdgeError::new(
+                        format!("topic ${topic_code} not found"),
+                        EdgeErrorKind::TopicNotFound,
+                    ));
+                };
+                let handle = topic.send_message(message).map_err(|e| {
+                    EdgeError::with_message(
+                        "send message",
+                        e.to_string(),
+                        EdgeErrorKind::Internal,
+                    )
+                }).await?;
+                let response = handle.await;
+                Ok(response.encode_to_bytes())
+            }
+            edge::EdgeRequestKind::CreateEndpoint => {
+                Err(EdgeError::new(
+                    "create endpoint not supported",
+                    EdgeErrorKind::Internal,
+                ))
+            },
+            edge::EdgeRequestKind::DeleteEndpoint => {
+                Err(EdgeError::new(
+                    "create endpoint not supported",
+                    EdgeErrorKind::Internal,
+                ))
+            },
+            edge::EdgeRequestKind::Ack => {
+                Err(EdgeError::new(
+                    "create endpoint not supported",
+                    EdgeErrorKind::Internal,
+                ))
+            },
+        }
     }
 }
 
