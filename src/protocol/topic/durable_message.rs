@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::{config::TopicConfig, TopicCode};
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DurableMessage {
     pub message: Message,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,

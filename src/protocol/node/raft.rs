@@ -2,10 +2,16 @@ use std::{
     borrow::Cow,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
+    io::Cursor,
     time::{Duration, Instant},
 };
 const ELECTION_TIMEOUT: Duration = Duration::from_secs(1);
 use bytes::Bytes;
+pub mod log_storage;
+pub mod state_machine;
+pub mod network;
+pub mod connection;
+use openraft::storage::RaftLogStorage;
 
 use crate::{
     impl_codec,
@@ -17,9 +23,24 @@ use crate::{
 };
 
 use super::{
-    event::{EventKind, N2nPacket},
+    event::{EventKind, N2nPacket, RaftData, RaftResponse},
     Node, NodeId, NodeRef, NodeSnapshot,
 };
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Copy)]
+pub struct TypeConfig {}
+
+impl openraft::RaftTypeConfig for TypeConfig {
+    type D = RaftData;
+    type R = RaftResponse;
+    type NodeId = NodeId;
+    type Node = openraft::BasicNode;
+    type Entry = openraft::Entry<TypeConfig>;
+    type SnapshotData = std::io::Cursor<Vec<u8>>;
+    type AsyncRuntime = openraft::TokioRuntime;
+    type Responder = openraft::raft::responder::OneshotResponder<Self>;
+}
+
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]

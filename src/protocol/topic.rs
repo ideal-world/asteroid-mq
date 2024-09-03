@@ -448,6 +448,7 @@ pub struct TopicInner {
     pub(crate) queue: RwLock<MessageQueue>,
     pub(crate) durability_service: Option<DurabilityService>,
 }
+#[derive(Debug, Clone)]
 
 pub struct TopicSnapshot {
     pub ep_routing_table: HashMap<EndpointAddr, NodeId>,

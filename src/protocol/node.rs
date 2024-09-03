@@ -25,6 +25,7 @@ use futures_util::TryFutureExt;
 use raft::{
     CommitHandle, FollowerState, LogEntry, RaftCommitError, RaftLogIndex, RaftRole, RaftState,
 };
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
@@ -37,7 +38,8 @@ use crate::{
 
 use super::endpoint::{CastMessage, DelegateMessage, EndpointOffline, EndpointSync, MessageAck};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct NodeId {
     pub bytes: [u8; 16],
 }
@@ -52,6 +54,19 @@ impl std::fmt::Debug for NodeId {
                 crate::util::hex(&self.bytes[10..16]),
             ]))
             .finish()
+    }
+}
+
+impl std::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}-{}-{}-{}",
+            crate::util::hex(&self.bytes[0..1]),
+            crate::util::hex(&self.bytes[1..9]),
+            crate::util::hex(&self.bytes[9..10]),
+            crate::util::hex(&self.bytes[10..16]),
+        )
     }
 }
 
@@ -130,7 +145,7 @@ pub struct NodeInner {
     edge_connections: ShardedLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
     auth: RwLock<NodeAuth>,
 }
-
+#[derive(Debug, Clone)]
 pub struct NodeSnapshot {
     topics: HashMap<TopicCode, TopicSnapshot>,
     routing: HashMap<NodeId, N2nRoutingInfo>,

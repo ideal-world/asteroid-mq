@@ -42,6 +42,15 @@ impl<'a> std::fmt::Debug for Hex<'a> {
     }
 }
 
+impl<'a> std::fmt::Display for Hex<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for byte in self.0 {
+            write!(f, "{:02x}", byte)?;
+        }
+        Ok(())
+    }
+}
+
 pub fn dashed<I: std::fmt::Debug>(arr: &impl AsRef<[I]>) -> Dashed<'_, I> {
     Dashed(arr.as_ref())
 }

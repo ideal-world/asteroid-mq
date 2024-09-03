@@ -1,5 +1,6 @@
 use crate::{impl_codec, prelude::DecodeError, protocol::codec::CodecType};
 use bytes::{Bytes, BytesMut};
+use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 
 use super::{
@@ -370,7 +371,7 @@ impl_codec!(
         auth: NodeAuth,
     }
 );
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum EventKind {
     /// Hold Message: edge node ask cluster node to hold a message.
@@ -409,6 +410,16 @@ impl_codec!(
         EpSync = 0x22,
     }
 );
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RaftData {
+    kind: EventKind,
+    payload: Bytes,
+}
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RaftResponse {
+    pub result: Result<(), ()>
+}
 
 #[derive(Debug, Clone)]
 pub struct N2nEvent {

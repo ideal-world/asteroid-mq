@@ -1,15 +1,18 @@
 use std::{collections::HashMap, future::Future, time::Duration};
 
-use asteroid_mq::protocol::{
-    cluster::{TcpClusterInfo, TcpClusterProvider},
-    node::{Node, NodeId, NodeInfo},
+use asteroid_mq::{
+    prelude::TopicCode,
+    protocol::{
+        cluster::{TcpClusterInfo, TcpClusterProvider},
+        node::{Node, NodeId, NodeInfo},
+    },
 };
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_raft() {
     // let console_layer = console_subscriber::spawn();
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::DEBUG)
         .init();
 
     #[derive(Debug, Clone)]
@@ -65,6 +68,8 @@ async fn test_raft() {
             tracing::info!("node {:?} is follower", node.id());
         }
     }
-
+    for node in nodes.iter() {
+        node.new_topic(TopicCode::const_new("test")).await.unwrap();
+    }
     tokio::time::sleep(Duration::from_secs(10)).await;
 }
