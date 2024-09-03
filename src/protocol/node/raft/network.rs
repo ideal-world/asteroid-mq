@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, io::Write, sync::Arc, task::Waker
 use openraft::RaftNetwork;
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{tcp::OwnedWriteHalf, TcpStream},
     sync::{
         oneshot::{Receiver, Sender},
@@ -17,9 +17,9 @@ use super::TypeConfig;
 
 pub struct TcpNetWorkInner {
     write: OwnedWriteHalf,
-    read_task: tokio::task::JoinHandle<()>,
+    read_task: tokio::task::JoinHandle<std::io::Result<()>>,
     seq_id: u64,
-    wait_poll: Arc<Mutex<HashMap<u64, Receiver<RecvPacket>>>>,
+    wait_poll: Arc<Mutex<HashMap<u64, Sender<Vec<u8>>>>>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[repr(u8)]
@@ -27,12 +27,23 @@ pub enum PacketKind {
     Request = 0,
     Response = 1,
 }
+
+impl From<u8> for PacketKind {
+    fn from(v: u8) -> Self {
+        match v {
+            0 => PacketKind::Request,
+            _ => PacketKind::Response,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Packet {
     pub kind: PacketKind,
     pub seq_id: u64,
     pub data: Vec<u8>,
 }
+
 #[derive(Debug, Deserialize)]
 pub struct RecvPacket {
     seq_id: u64,
@@ -41,19 +52,29 @@ pub struct RecvPacket {
 
 impl TcpNetWorkInner {
     pub fn new(stream: TcpStream) -> Self {
-        let (read, write) = stream.into_split();
-        let wait_poll = Arc::new(Mutex::new(HashMap::new()));
+        let (mut read, write) = stream.into_split();
+        let wait_poll = Arc::new(Mutex::new(HashMap::<u64, Sender<Vec<u8>>>::new()));
         let wait_poll_clone = wait_poll.clone();
         let read_task = tokio::spawn(async move {
-            let mut reader = tokio::io::BufReader::new(read);
             loop {
-                let packet: Packet = bincode::deserialize_from(&mut reader).unwrap();
-                let receiver = wait_poll_clone.lock().await.remove(&packet.seq_id).unwrap();
-                receiver.send(RecvPacket {
-                    seq_id: packet.seq_id,
-                    data: packet.data,
-                });
+                let kind = read.read_u8().await?.into();
+                let seq_id = read.read_u64().await?;
+                let len = read.read_u64().await? as usize;
+                let mut data = vec![0; len];
+                read.read_exact(&mut data).await?;
+                match kind {
+                    PacketKind::Request => {
+                        todo!("handle request")
+                    }
+                    PacketKind::Response => {
+                        let sender = wait_poll_clone.lock().await.remove(&seq_id);
+                        if let Some(sender) = sender {
+                            sender.send(data).unwrap();
+                        }
+                    }
+                }
             }
+            Ok(())
         });
         Self {
             write,
@@ -65,7 +86,7 @@ impl TcpNetWorkInner {
     pub async fn write_request<T: Serialize>(
         &mut self,
         req: &T,
-    ) -> std::io::Result<Sender<RecvPacket>> {
+    ) -> std::io::Result<Receiver<Vec<u8>>> {
         let bytes = bincode::serialize(req).unwrap();
         let seq_id = self.seq_id;
         self.seq_id = self.seq_id.wrapping_add(1);
@@ -75,7 +96,7 @@ impl TcpNetWorkInner {
             data: bytes,
         };
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        self.wait_poll.lock().await.insert(seq_id, receiver);
+        self.wait_poll.lock().await.insert(seq_id, sender);
         self.write
             .write_all(&bincode::serialize(&packet).unwrap())
             .await
@@ -85,8 +106,12 @@ impl TcpNetWorkInner {
                     pool.lock().await.remove(&seq_id);
                 });
             })?;
-        Ok(sender)
+        Ok(receiver)
     }
+}
+
+pub struct TcpNetwork {
+    inner: Mutex<Arc<TcpNetWorkInner>>,
 }
 
 impl RaftNetwork<TypeConfig> for TcpNetWorkInner {
@@ -102,6 +127,9 @@ impl RaftNetwork<TypeConfig> for TcpNetWorkInner {
             openraft::error::RaftError<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
         >,
     > {
+        let receiver = self.write_request(&rpc).await.map_err(|e| {
+            openraft::error::RPCError::Network(openraft::error::NetworkError::new(&e))
+        })?;
         // self.connection.outbound.send_async(item);
         unimplemented!()
     }
