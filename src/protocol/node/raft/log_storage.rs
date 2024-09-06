@@ -6,8 +6,16 @@ use std::ops::RangeBounds;
 use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
-pub struct LogStorage<C: RaftTypeConfig> {
+pub struct LogStorage<C: RaftTypeConfig = TypeConfig> {
     inner: Arc<tokio::sync::Mutex<LogStorageInner<C>>>,
+}
+
+impl Default for LogStorage<TypeConfig> {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(tokio::sync::Mutex::new(LogStorageInner::default())),
+        }
+    }
 }
 #[derive(Debug, Default)]
 pub struct LogStorageInner<C: RaftTypeConfig> {

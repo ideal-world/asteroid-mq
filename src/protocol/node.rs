@@ -43,6 +43,13 @@ use super::endpoint::{CastMessage, DelegateMessage, EndpointOffline, EndpointSyn
 pub struct NodeId {
     pub bytes: [u8; 16],
 }
+impl From<u64> for NodeId {
+    fn from(id: u64) -> Self {
+        let mut bytes = [0; 16];
+        bytes[1..9].copy_from_slice(&id.to_be_bytes());
+        NodeId { bytes }
+    }
+}
 
 impl std::fmt::Debug for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -98,7 +105,9 @@ impl NodeId {
 
 impl Default for NodeId {
     fn default() -> Self {
-        Self::snowflake()
+        Self {
+            bytes: [0; 16],
+        }
     }
 }
 #[derive(Debug, Clone)]

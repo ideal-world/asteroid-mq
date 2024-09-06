@@ -109,7 +109,11 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         ),
         StorageError<<TypeConfig as RaftTypeConfig>::NodeId>,
     > {
-        unimplemented!()
+        let state_machine = self.state_machine.read().await;
+        Ok((
+            state_machine.last_applied_log,
+            state_machine.last_membership.clone(),
+        ))
     }
 
     async fn apply<I>(
@@ -171,7 +175,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
     }
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
-        unimplemented!()
+        self.clone()
     }
 
     async fn install_snapshot(
@@ -183,7 +187,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         snapshot: Box<<TypeConfig as RaftTypeConfig>::SnapshotData>,
     ) -> Result<(), StorageError<<TypeConfig as RaftTypeConfig>::NodeId>> {
         tracing::info!(
-            { snapshot_size = snapshot.get_ref().len() },
+            { snapshot_size = snapshot.get_ref().len(), meta= ?meta },
             "decoding snapshot for installation"
         );
 
@@ -201,7 +205,9 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
                     io::Error::other(e),
                 )
             })?;
-        let state_machine = self.state_machine.write().await;
+        let mut state_machine = self.state_machine.write().await;
+        state_machine.last_membership = new_snapshot.meta.last_membership.clone();
+        state_machine.last_applied_log = new_snapshot.meta.last_log_id;
         state_machine.node.apply_snapshot(snapshot_to_apply);
 
         // Lock the current snapshot before releasing the lock on the state machine, to avoid a race

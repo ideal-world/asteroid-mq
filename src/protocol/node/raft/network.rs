@@ -1,137 +1,147 @@
-use std::{cell::RefCell, collections::HashMap, io::Write, sync::Arc, task::Waker};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    io::Write,
+    sync::{atomic::AtomicBool, Arc},
+    task::Waker,
+};
 
-use openraft::RaftNetwork;
+use openraft::{
+    error::{InstallSnapshotError, RPCError, RaftError, RemoteError, Unreachable},
+    raft::{
+        AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest,
+        InstallSnapshotResponse, VoteRequest, VoteResponse,
+    },
+    BasicNode, Raft, RaftNetwork,
+};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{tcp::OwnedWriteHalf, TcpStream},
     sync::{
         oneshot::{Receiver, Sender},
-        Mutex,
+        Mutex, OnceCell, RwLock,
     },
 };
 
 use crate::{prelude::NodeId, protocol::node::connection::ClusterConnectionRef};
 
-use super::TypeConfig;
-
-pub struct TcpNetWorkInner {
-    write: OwnedWriteHalf,
-    read_task: tokio::task::JoinHandle<std::io::Result<()>>,
-    seq_id: u64,
-    wait_poll: Arc<Mutex<HashMap<u64, Sender<Vec<u8>>>>>,
-}
-#[derive(Debug, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum PacketKind {
-    Request = 0,
-    Response = 1,
-}
-
-impl From<u8> for PacketKind {
-    fn from(v: u8) -> Self {
-        match v {
-            0 => PacketKind::Request,
-            _ => PacketKind::Response,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Packet {
-    pub kind: PacketKind,
-    pub seq_id: u64,
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RecvPacket {
-    seq_id: u64,
-    data: Vec<u8>,
-}
-
-impl TcpNetWorkInner {
-    pub fn new(stream: TcpStream) -> Self {
-        let (mut read, write) = stream.into_split();
-        let wait_poll = Arc::new(Mutex::new(HashMap::<u64, Sender<Vec<u8>>>::new()));
-        let wait_poll_clone = wait_poll.clone();
-        let read_task = tokio::spawn(async move {
-            loop {
-                let kind = read.read_u8().await?.into();
-                let seq_id = read.read_u64().await?;
-                let len = read.read_u64().await? as usize;
-                let mut data = vec![0; len];
-                read.read_exact(&mut data).await?;
-                match kind {
-                    PacketKind::Request => {
-                        todo!("handle request")
-                    }
-                    PacketKind::Response => {
-                        let sender = wait_poll_clone.lock().await.remove(&seq_id);
-                        if let Some(sender) = sender {
-                            sender.send(data).unwrap();
-                        }
-                    }
-                }
-            }
-            Ok(())
-        });
-        Self {
-            write,
-            read_task,
-            seq_id: 0,
-            wait_poll,
-        }
-    }
-    pub async fn write_request<T: Serialize>(
-        &mut self,
-        req: &T,
-    ) -> std::io::Result<Receiver<Vec<u8>>> {
-        let bytes = bincode::serialize(req).unwrap();
-        let seq_id = self.seq_id;
-        self.seq_id = self.seq_id.wrapping_add(1);
-        let packet = Packet {
-            kind: PacketKind::Request,
-            seq_id,
-            data: bytes,
-        };
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        self.wait_poll.lock().await.insert(seq_id, sender);
-        self.write
-            .write_all(&bincode::serialize(&packet).unwrap())
-            .await
-            .inspect_err(|_| {
-                let pool = self.wait_poll.clone();
-                tokio::spawn(async move {
-                    pool.lock().await.remove(&seq_id);
-                });
-            })?;
-        Ok(receiver)
-    }
-}
+use super::{
+    network_factory::{RaftNodeInfo, RaftTcpConnection, RaftTcpConnectionMap, TcpNetworkService},
+    TypeConfig,
+};
 
 pub struct TcpNetwork {
-    inner: Mutex<Arc<TcpNetWorkInner>>,
+    peer: RaftNodeInfo,
+    source: TcpNetworkService,
 }
 
-impl RaftNetwork<TypeConfig> for TcpNetWorkInner {
+pub struct TcpNetworkConnected {
+    packet_tx: flume::Sender<Packet>,
+    write_task: tokio::task::JoinHandle<std::io::Result<()>>,
+    read_task: tokio::task::JoinHandle<std::io::Result<()>>,
+    wait_poll: Arc<Mutex<HashMap<u64, Sender<Response>>>>,
+}
+
+impl Drop for TcpNetworkConnected {
+    fn drop(&mut self) {
+        self.read_task.abort();
+        self.write_task.abort();
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) enum Request {
+    Vote(VoteRequest<NodeId>),
+    AppendEntries(AppendEntriesRequest<TypeConfig>),
+    InstallSnapshot(InstallSnapshotRequest<TypeConfig>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) enum Response {
+    Vote(Result<VoteResponse<NodeId>, RaftError<NodeId>>),
+    AppendEntries(Result<AppendEntriesResponse<NodeId>, RaftError<NodeId>>),
+    InstallSnapshot(
+        Result<InstallSnapshotResponse<NodeId>, RaftError<NodeId, InstallSnapshotError>>,
+    ),
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) enum Payload {
+    Request(Request),
+    Response(Response),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct Packet {
+    pub seq_id: u64,
+    pub payload: Payload,
+}
+
+#[derive(Debug)]
+pub struct ConnectionNotEstablished;
+impl std::fmt::Display for ConnectionNotEstablished {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "connection not established")
+    }
+}
+impl std::error::Error for ConnectionNotEstablished {}
+
+impl TcpNetwork {
+    pub fn new(peer: RaftNodeInfo, source: TcpNetworkService) -> Self {
+        Self { peer, source }
+    }
+    async fn create_connection(&self) -> Result<(), Unreachable> {
+        let stream = TcpStream::connect(self.peer.node.addr.clone())
+            .await
+            .map_err(|e| Unreachable::new(&e))?;
+        let connections = self.source.connections.clone();
+        let connection = RaftTcpConnection::from_tokio_tcp_stream(stream, self.source.clone())
+            .await
+            .map_err(|e| Unreachable::new(&e))?;
+        let mut connections = connections.write().await;
+        connections.insert(self.peer.id, Arc::new(connection));
+        Ok(())
+    }
+    async fn send_request(&mut self, req: Request) -> Result<Receiver<Response>, Unreachable> {
+        let connections = self.source.connections.read().await;
+        let connection = connections.get(&self.peer.id);
+        if connection.is_none() || connection.is_some_and(|c| !c.is_alive()) {
+            drop(connections);
+            self.create_connection().await?;
+        }
+        let connection = self
+            .source
+            .connections
+            .read()
+            .await
+            .get(&self.peer.id)
+            .ok_or_else(|| Unreachable::new(&ConnectionNotEstablished))?
+            .clone();
+        connection.send_request(req).await
+    }
+}
+
+impl RaftNetwork<TypeConfig> for TcpNetwork {
     async fn vote(
         &mut self,
-        rpc: openraft::raft::VoteRequest<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
+        rpc: VoteRequest<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
         option: openraft::network::RPCOption,
     ) -> Result<
-        openraft::raft::VoteResponse<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
-        openraft::error::RPCError<
+        VoteResponse<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
+        RPCError<
             <TypeConfig as openraft::RaftTypeConfig>::NodeId,
             <TypeConfig as openraft::RaftTypeConfig>::Node,
-            openraft::error::RaftError<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
+            RaftError<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
         >,
     > {
-        let receiver = self.write_request(&rpc).await.map_err(|e| {
+        let receiver = self.send_request(Request::Vote(rpc)).await?;
+        let response = receiver.await.map_err(|e| {
             openraft::error::RPCError::Network(openraft::error::NetworkError::new(&e))
         })?;
-        // self.connection.outbound.send_async(item);
-        unimplemented!()
+        let Response::Vote(vote) = response else {
+            unreachable!("wrong implementation: expect vote response")
+        };
+        vote.map_err(|e| RPCError::RemoteError(RemoteError::new(self.peer.id, e)))
     }
     async fn append_entries(
         &mut self,
@@ -145,12 +155,19 @@ impl RaftNetwork<TypeConfig> for TcpNetWorkInner {
             openraft::error::RaftError<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
         >,
     > {
-        unimplemented!()
+        let receiver = self.send_request(Request::AppendEntries(rpc)).await?;
+        let response = receiver.await.map_err(|e| {
+            openraft::error::RPCError::Network(openraft::error::NetworkError::new(&e))
+        })?;
+        let Response::AppendEntries(append_entries) = response else {
+            unreachable!("wrong implementation: expect vote response")
+        };
+        append_entries.map_err(|e| RPCError::RemoteError(RemoteError::new(self.peer.id, e)))
     }
     async fn install_snapshot(
         &mut self,
-        _rpc: openraft::raft::InstallSnapshotRequest<TypeConfig>,
-        _option: openraft::network::RPCOption,
+        rpc: openraft::raft::InstallSnapshotRequest<TypeConfig>,
+        option: openraft::network::RPCOption,
     ) -> Result<
         openraft::raft::InstallSnapshotResponse<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
         openraft::error::RPCError<
@@ -162,6 +179,13 @@ impl RaftNetwork<TypeConfig> for TcpNetWorkInner {
             >,
         >,
     > {
-        unimplemented!()
+        let receiver = self.send_request(Request::InstallSnapshot(rpc)).await?;
+        let response = receiver.await.map_err(|e| {
+            openraft::error::RPCError::Network(openraft::error::NetworkError::new(&e))
+        })?;
+        let Response::InstallSnapshot(install_snapshot) = response else {
+            unreachable!("wrong implementation: expect vote response")
+        };
+        install_snapshot.map_err(|e| RPCError::RemoteError(RemoteError::new(self.peer.id, e)))
     }
 }

@@ -11,6 +11,8 @@ pub mod log_storage;
 pub mod state_machine;
 pub mod network;
 pub mod connection;
+pub mod raft_node;
+pub mod network_factory;
 use openraft::storage::RaftLogStorage;
 
 use crate::{
@@ -410,7 +412,6 @@ impl RaftState {
         }
     }
     pub fn set_role(&mut self, role: RaftRole) {
-        tracing::info!("set role: {:?}", role);
         self.role = role;
     }
 }
