@@ -72,7 +72,7 @@ where
         Ok(())
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Timed<T> {
     pub time: DateTime<Utc>,
     pub data: T,

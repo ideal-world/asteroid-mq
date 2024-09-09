@@ -24,7 +24,7 @@ use tokio::{
     },
 };
 
-use crate::{prelude::NodeId, protocol::node::connection::ClusterConnectionRef};
+use crate::prelude::NodeId;
 
 use super::{
     network_factory::{RaftNodeInfo, RaftTcpConnection, RaftTcpConnectionMap, TcpNetworkService},

@@ -9,10 +9,11 @@ use crate::{
     },
 };
 use bytes::{BufMut, Bytes};
+use serde::{Deserialize, Serialize};
 
 use super::EndpointAddr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MessageStatusKind {
     Sending = 0xfe,
     Unsent = 0xff,
@@ -22,7 +23,7 @@ pub enum MessageStatusKind {
     Failed = 0x80,
     Unreachable = 0x81,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum MessageAckExpectKind {
     #[default]
     Sent = 0x00,
@@ -73,8 +74,8 @@ impl MessageStatusKind {
         self.is_failed() || self.is_reached(condition)
     }
 }
-#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[repr(transparent)]
 pub struct MessageId {
     pub bytes: [u8; 16],
 }
@@ -123,7 +124,7 @@ impl MessageId {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub header: MessageHeader,
     pub payload: Bytes,
@@ -156,7 +157,7 @@ impl Message {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageHeader {
     pub message_id: MessageId,
     pub ack_kind: MessageAckExpectKind,
@@ -225,7 +226,8 @@ impl_codec! {
         subjects: Arc<[Subject]>,
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct MessageAck {
     pub ack_to: MessageId,
     pub topic_code: TopicCode,
@@ -242,7 +244,7 @@ impl_codec! {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum MessageTargetKind {
     Durable = 0,

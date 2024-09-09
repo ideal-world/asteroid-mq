@@ -12,7 +12,7 @@ use bytes::Bytes;
 use futures_util::{Sink, Stream};
 
 use asteroid_mq::{
-    prelude::{Node, NodeId, NodeInfo},
+    prelude::{Node, NodeId, NodeConfig},
     protocol::node::event::{N2nPacket, NodeKind},
 };
 
@@ -151,7 +151,7 @@ async fn test_websocket_server() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let node =
-        asteroid_mq::prelude::Node::new(NodeInfo::new(NodeId::snowflake(), NodeKind::Cluster));
+        asteroid_mq::prelude::Node::init(NodeConfig::new(NodeId::snowflake(), NodeKind::Cluster));
     node.set_cluster_size(1);
     let topic = node.new_topic(asteroid_mq::protocol::topic::config::TopicConfig {
         code: asteroid_mq::protocol::topic::TopicCode::const_new("test"),

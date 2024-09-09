@@ -1,4 +1,3 @@
-pub mod cluster;
 pub mod codec;
 pub mod endpoint;
 pub mod interest;

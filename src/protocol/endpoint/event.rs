@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     impl_codec,
     protocol::{interest::Interest, node::NodeId, topic::TopicCode},
@@ -8,7 +10,7 @@ use crate::{
 
 use super::{EndpointAddr, Message, MessageId, MessageStatusKind};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegateMessage {
     pub topic: TopicCode,
     pub message: Message,
@@ -32,7 +34,8 @@ impl_codec!(
     }
 );
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+
 
 pub struct EndpointOnline {
     pub topic_code: TopicCode,
@@ -49,7 +52,8 @@ impl_codec!(
         interests: Vec<Interest>,
     }
 );
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct EndpointOffline {
     pub topic_code: TopicCode,
     pub endpoint: EndpointAddr,
@@ -64,7 +68,7 @@ impl_codec!(
     }
 );
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EndpointInterest {
     pub topic_code: TopicCode,
     pub endpoint: EndpointAddr,
@@ -79,7 +83,7 @@ impl_codec!(
     }
 );
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageStateUpdate {
     pub message_id: MessageId,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
@@ -104,7 +108,7 @@ impl MessageStateUpdate {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetState {
     pub topic: TopicCode,
     pub update: MessageStateUpdate,

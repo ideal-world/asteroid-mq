@@ -5,15 +5,14 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use openraft::{raft::AppendEntriesRequest, Raft};
 
 use crate::{
     protocol::{
         endpoint::{
             EndpointAddr, Message, MessageAck, MessageId, MessageStateUpdate, MessageStatusKind,
             SetState,
-        },
-        node::raft::LogEntry,
-        topic::wait_ack::WaitAckSuccess,
+        }, node::raft::{proposal::Proposal, TypeConfig}, topic::wait_ack::WaitAckSuccess
     },
     util::Timed,
 };
@@ -23,7 +22,7 @@ use super::{
     wait_ack::{WaitAck, WaitAckError, WaitAckHandle},
     Topic,
 };
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct HoldMessage {
     pub message: Message,
     pub wait_ack: WaitAck,
@@ -74,16 +73,9 @@ impl HoldMessage {
                 topic: context.topic.code().clone(),
                 update,
             };
-            let topic = context.topic.clone();
+            let raft = context.raft.clone();
             tokio::task::spawn(async move {
-                match topic.node.commit_log(LogEntry::set_state(set_state)).await {
-                    Ok(_) => {
-                        //
-                    }
-                    Err(e) => {
-                        tracing::error!(?e, "failed to commit log");
-                    }
-                }
+                let resp = raft.client_write(Proposal::SetState(set_state)).await;
             });
         }
     }
@@ -131,21 +123,20 @@ impl HoldMessage {
 }
 pub(crate) struct MessagePollContext<'t> {
     pub(crate) topic: &'t Topic,
+    pub raft: Raft<TypeConfig>
 }
 
 pub enum MessageContainer {
     Durable(),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct MessageQueue {
     pub(crate) blocking: bool,
     pub(crate) hold_messages: HashMap<MessageId, HoldMessage>,
     pub(crate) time_id: BTreeSet<Timed<MessageId>>,
     pub(crate) id_time: HashMap<MessageId, DateTime<Utc>>,
-    pub(crate) resolved: RwLock<HashSet<MessageId>>,
-    pub(crate) waiting:
-        RwLock<HashMap<MessageId, flume::Sender<Result<WaitAckSuccess, WaitAckError>>>>,
+    pub(crate) resolved: HashSet<MessageId>,
     pub(crate) size: usize,
 }
 
@@ -154,7 +145,7 @@ impl MessageQueue {
         self.hold_messages.clear();
         self.time_id.clear();
         self.id_time.clear();
-        self.resolved.write().unwrap().clear();
+        self.resolved.clear();
         self.size = 0;
     }
     pub(crate) fn new(blocking: bool, capacity: usize) -> Self {
@@ -162,10 +153,9 @@ impl MessageQueue {
             blocking,
             hold_messages: HashMap::with_capacity(capacity),
             time_id: BTreeSet::new(),
-            resolved: RwLock::new(HashSet::with_capacity(capacity)),
+            resolved: HashSet::with_capacity(capacity),
             id_time: HashMap::with_capacity(capacity),
             size: 0,
-            waiting: RwLock::default(),
         }
     }
     pub(crate) fn push(&mut self, message: HoldMessage) {
@@ -176,10 +166,18 @@ impl MessageQueue {
         self.id_time.insert(message_id, time);
         self.size += 1;
     }
+    pub(crate) fn push_with_time(&mut self, message: HoldMessage) {
+        let message_id = message.message.header.message_id;
+        let time = Utc::now();
+        self.hold_messages.insert(message_id, message);
+        self.time_id.insert(Timed::new(time, message_id));
+        self.id_time.insert(message_id, time);
+        self.size += 1;
+    }
     pub(crate) fn pop(&mut self) -> Option<HoldMessage> {
         if let Some(timed) = self.time_id.pop_first() {
             self.id_time.remove(&timed.data);
-            self.resolved.write().unwrap().remove(&timed.data);
+            self.resolved.remove(&timed.data);
             self.size -= 1;
             self.hold_messages.remove(&timed.data)
         } else {
@@ -362,21 +360,7 @@ impl MessageQueue {
 }
 
 impl Topic {
-    pub(crate) fn update_and_flush(&self, update: MessageStateUpdate) {
-        let poll_result = {
-            let rg = self.queue.read().unwrap();
-            for (from, status) in update.status {
-                rg.update_ack(&update.message_id, from, status)
-            }
-            rg.poll_message(update.message_id, &MessagePollContext { topic: self })
-        };
-        if let Some(Poll::Ready(())) = poll_result {
-            self.queue
-                .write()
-                .unwrap()
-                .flush(&MessagePollContext { topic: self });
-        }
-    }
+    
     pub(crate) async fn single_ack(&self, ack: MessageAck) -> Result<(), crate::Error> {
         self.node
             .commit_log(LogEntry::set_state(SetState {

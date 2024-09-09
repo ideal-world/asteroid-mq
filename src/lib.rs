@@ -13,7 +13,7 @@ pub mod prelude {
     pub use crate::protocol::codec::{CodecType, DecodeError};
     pub use crate::protocol::endpoint::{MessageAckExpectKind, MessageId};
     pub use crate::protocol::interest::{Interest, Subject};
-    pub use crate::protocol::node::{Node, NodeId, NodeInfo};
+    pub use crate::protocol::node::{Node, NodeId, NodeConfig};
     pub use crate::protocol::topic::{
         config::{TopicOverflowPolicy, TopicConfig, TopicDurabilityConfig, TopicOverflowConfig},
         durable_message::{

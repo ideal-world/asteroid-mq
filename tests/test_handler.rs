@@ -1,6 +1,6 @@
 use asteroid_mq::event_handler::json::Json;
 use asteroid_mq::event_handler::EventAttribute;
-use asteroid_mq::prelude::{Interest, MessageAckExpectKind, Node, NodeInfo, Subject, TopicCode};
+use asteroid_mq::prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, Subject, TopicCode};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelloWorld {
@@ -29,7 +29,7 @@ async fn hello_world_handler(Json(hello_world): Json<HelloWorld>) -> asteroid_mq
 
 #[tokio::test]
 async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
-    let node = Node::new(NodeInfo::new_cluster());
+    let node = Node::init(NodeConfig::new_cluster());
     node.set_cluster_size(1);
     let topic = node.get_or_init_topic(TopicCode::const_new("test"));
     let _evt_loop_handle = topic

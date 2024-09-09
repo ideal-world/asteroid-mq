@@ -14,6 +14,7 @@ use std::{
     hash::Hash,
     ops::Deref,
     sync::{Arc, RwLock, Weak},
+    task::Poll,
 };
 
 use bytes::Bytes;
@@ -21,6 +22,7 @@ use config::TopicConfig;
 use crossbeam::sync::ShardedLock;
 use durable_message::{DurabilityService, DurableMessage, LoadTopic, UnloadTopic};
 use hold_message::{HoldMessage, MessagePollContext, MessageQueue};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException, WaitAckHandle};
 
@@ -33,7 +35,9 @@ use crate::{
 use super::{
     codec::CodecType,
     endpoint::{
-        DelegateMessage, EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint, LocalEndpointRef, Message, MessageId, MessageStateUpdate, MessageStatusKind, MessageTargetKind
+        DelegateMessage, EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint,
+        LocalEndpointRef, Message, MessageId, MessageStateUpdate, MessageStatusKind,
+        MessageTargetKind,
     },
     interest::{Interest, InterestMap, Subject},
     node::{
@@ -41,7 +45,8 @@ use super::{
         Node, NodeId,
     },
 };
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 
 /// code are expect to be a valid utf8 string
 pub struct TopicCode(Bytes);
@@ -79,18 +84,15 @@ impl CodecType for TopicCode {
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub struct Topic {
     pub node: Node,
-    pub(crate) inner: Arc<TopicInner>,
+    pub(crate) inner: Arc<TopicData>,
 }
 impl Topic {
     pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, crate::Error> {
         let handle = self.wait_ack(message.id());
-        self
-            .node
+        self.node
             .commit_log(LogEntry::delegate_message(DelegateMessage {
                 topic: self.code().clone(),
                 message,
@@ -104,23 +106,23 @@ impl Topic {
     }
 }
 impl Deref for Topic {
-    type Target = TopicInner;
+    type Target = TopicData;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl TopicInner {
+impl TopicData {
     pub fn code(&self) -> &TopicCode {
         &self.config.code
     }
 
     pub(crate) fn get_ep_sync(&self) -> Vec<EpInfo> {
-        let ep_interest_map = self.ep_interest_map.read().unwrap();
-        let ep_latest_active = self.ep_latest_active.read().unwrap();
+        let ep_interest_map = self.ep_interest_map;
+        let ep_latest_active = self.ep_latest_active;
         let mut eps = Vec::new();
-        for (ep, host) in self.ep_routing_table.read().unwrap().iter() {
+        for (ep, host) in self.ep_routing_table.iter() {
             if let Some(latest_active) = ep_latest_active.get(ep) {
                 eps.push(EpInfo {
                     addr: *ep,
@@ -136,9 +138,9 @@ impl TopicInner {
         eps
     }
     pub(crate) fn load_ep_sync(&self, infos: Vec<EpInfo>) {
-        let mut active_wg = self.ep_latest_active.write().unwrap();
-        let mut routing_wg = self.ep_routing_table.write().unwrap();
-        let mut interest_wg = self.ep_interest_map.write().unwrap();
+        let mut active_wg = self.ep_latest_active;
+        let mut routing_wg = self.ep_routing_table;
+        let mut interest_wg = self.ep_interest_map;
         for ep in infos {
             if let Some(existed_record) = active_wg.get(&ep.addr) {
                 if *existed_record > ep.latest_active {
@@ -158,14 +160,14 @@ impl TopicInner {
         subjects: impl Iterator<Item = &'i Subject>,
     ) -> HashSet<EndpointAddr> {
         let mut ep_collect = HashSet::new();
-        let rg = self.ep_interest_map.read().unwrap();
+        let rg = self.ep_interest_map;
         for subject in subjects {
             ep_collect.extend(rg.find(subject));
         }
         ep_collect
     }
     pub(crate) fn get_local_ep(&self, ep: &EndpointAddr) -> Option<LocalEndpointRef> {
-        self.local_endpoints.read().unwrap().get(ep).cloned()
+        self.local_endpoints.get(ep).cloned()
     }
     pub(crate) fn push_message_to_local_ep(
         &self,
@@ -184,7 +186,7 @@ impl TopicInner {
         &self,
         ep_list: impl Iterator<Item = EndpointAddr>,
     ) -> HashMap<NodeId, Vec<EndpointAddr>> {
-        let rg_routing = self.ep_routing_table.read().unwrap();
+        let rg_routing = self.ep_routing_table;
         let mut resolve_map = <HashMap<NodeId, Vec<EndpointAddr>>>::new();
         for ep in ep_list {
             if let Some(node) = rg_routing.get(&ep) {
@@ -196,7 +198,7 @@ impl TopicInner {
 }
 impl Topic {
     pub fn wait_ack(&self, message_id: MessageId) -> WaitAckHandle {
-        let queue = self.queue.read().unwrap();
+        let queue = self.queue;
         queue.wait_ack(message_id)
     }
     pub fn reference(&self) -> TopicRef {
@@ -207,7 +209,7 @@ impl Topic {
     }
 
     pub async fn create_endpoint(
-        &self,
+        &mut self,
         interests: impl IntoIterator<Item = Interest>,
     ) -> Result<LocalEndpoint, crate::Error> {
         let channel = flume::unbounded();
@@ -233,19 +235,16 @@ impl Topic {
             }))
             .await
             .map_err(crate::Error::contextual("create endpoint"))?;
-        self.local_endpoints
-            .write()
-            .unwrap()
-            .insert(ep.address, ep.reference());
+        self.local_endpoints.insert(ep.address, ep.reference());
         Ok(ep)
     }
     pub fn delete_endpoint(&self, addr: EndpointAddr) {
         {
-            let mut local_endpoints = self.local_endpoints.write().unwrap();
+            let mut local_endpoints = self.local_endpoints;
 
-            let mut ep_interest_map = self.ep_interest_map.write().unwrap();
-            let mut ep_routing_table = self.ep_routing_table.write().unwrap();
-            let mut ep_latest_active = self.ep_latest_active.write().unwrap();
+            let mut ep_interest_map = self.ep_interest_map;
+            let mut ep_routing_table = self.ep_routing_table;
+            let mut ep_latest_active = self.ep_latest_active;
             ep_interest_map.delete(&addr);
             ep_routing_table.remove(&addr);
             ep_latest_active.remove(&addr);
@@ -314,8 +313,8 @@ impl Topic {
                     .collect::<Vec<_>>();
                 hash_ring.sort_by_key(|x| x.0);
                 if hash_ring.is_empty() {
-                    let queue = self.queue.read().unwrap();
-                    if let Some(report) = queue.waiting.write().unwrap().remove(&message.id()) {
+                    let queue = self.queue;
+                    if let Some(report) = queue.waiting.remove(&message.id()) {
                         let _ = report.send(Err(WaitAckError::exception(
                             WaitAckErrorException::NoAvailableTarget,
                         )));
@@ -333,7 +332,7 @@ impl Topic {
             wait_ack: WaitAck::new(message.ack_kind(), ep_collect.clone()),
         };
         {
-            let mut queue = self.queue.write().unwrap();
+            let mut queue = self.queue;
             // put in queue
             if let Some(overflow_config) = &self.config.overflow_config {
                 let size = u32::from(overflow_config.size) as usize;
@@ -369,32 +368,32 @@ impl Topic {
         tracing::debug!(?ep_collect, "hold new message");
     }
 
-    pub(crate) fn ep_online(&self, ep_online: EndpointOnline) {
+    pub(crate) fn ep_online(&self, endpoint: EndpointAddr, interests: Vec<Interest>, host: NodeId) {
         let mut message_need_poll = HashSet::new();
         {
-            let mut routing_wg = self.ep_routing_table.write().unwrap();
-            let mut interest_wg = self.ep_interest_map.write().unwrap();
-            let mut active_wg = self.ep_latest_active.write().unwrap();
+            let mut routing_wg = self.ep_routing_table;
+            let mut interest_wg = self.ep_interest_map;
+            let mut active_wg = self.ep_latest_active;
 
-            active_wg.insert(ep_online.endpoint, TimestampSec::now());
-            routing_wg.insert(ep_online.endpoint, ep_online.host);
-            for interest in &ep_online.interests {
-                interest_wg.insert(interest.clone(), ep_online.endpoint);
+            active_wg.insert(endpoint, TimestampSec::now());
+            routing_wg.insert(endpoint, host);
+            for interest in &interests {
+                interest_wg.insert(interest.clone(), endpoint);
             }
-            let queue = self.queue.read().unwrap();
+            let queue = self.queue;
             for (id, message) in &queue.hold_messages {
                 if message.message.header.target_kind == MessageTargetKind::Durable {
-                    let mut status = message.wait_ack.status.write().unwrap();
+                    let mut status = message.wait_ack.status;
 
-                    if !status.contains_key(&ep_online.endpoint)
+                    if !status.contains_key(&endpoint)
                         && message
                             .message
                             .header
                             .subjects
                             .iter()
-                            .any(|s| interest_wg.find(s).contains(&ep_online.endpoint))
+                            .any(|s| interest_wg.find(s).contains(&endpoint))
                     {
-                        status.insert(ep_online.endpoint, MessageStatusKind::Unsent);
+                        status.insert(endpoint, MessageStatusKind::Unsent);
                         message_need_poll.insert(*id);
                     }
                 }
@@ -406,16 +405,16 @@ impl Topic {
     }
 
     pub(crate) fn ep_offline(&self, ep: &EndpointAddr) {
-        let mut routing_wg = self.ep_routing_table.write().unwrap();
-        let mut interest_wg = self.ep_interest_map.write().unwrap();
-        let mut active_wg = self.ep_latest_active.write().unwrap();
+        let mut routing_wg = self.ep_routing_table;
+        let mut interest_wg = self.ep_interest_map;
+        let mut active_wg = self.ep_latest_active;
         active_wg.remove(ep);
         routing_wg.remove(ep);
         interest_wg.delete(ep);
     }
 
     pub(crate) fn update_ep_interest(&self, ep: &EndpointAddr, interests: Vec<Interest>) {
-        let mut interest_wg = self.ep_interest_map.write().unwrap();
+        let mut interest_wg = self.ep_interest_map;
         interest_wg.delete(ep);
         for interest in interests {
             interest_wg.insert(interest, *ep);
@@ -426,7 +425,7 @@ impl Topic {
 #[derive(Debug, Default, Clone)]
 pub struct TopicRef {
     node: Node,
-    inner: Weak<TopicInner>,
+    inner: Weak<TopicData>,
 }
 
 impl TopicRef {
@@ -438,67 +437,160 @@ impl TopicRef {
     }
 }
 
-#[derive(Debug)]
-pub struct TopicInner {
+#[derive(Debug, Clone)]
+pub struct TopicData {
     pub(crate) config: TopicConfig,
-    pub(crate) local_endpoints: ShardedLock<HashMap<EndpointAddr, LocalEndpointRef>>,
-    pub(crate) ep_routing_table: ShardedLock<HashMap<EndpointAddr, NodeId>>,
-    pub(crate) ep_interest_map: ShardedLock<InterestMap<EndpointAddr>>,
-    pub(crate) ep_latest_active: ShardedLock<HashMap<EndpointAddr, TimestampSec>>,
-    pub(crate) queue: RwLock<MessageQueue>,
-    pub(crate) durability_service: Option<DurabilityService>,
+    pub(crate) ep_routing_table: HashMap<EndpointAddr, NodeId>,
+    pub(crate) ep_interest_map: InterestMap<EndpointAddr>,
+    pub(crate) ep_latest_active: HashMap<EndpointAddr, TimestampSec>,
+    pub(crate) queue: MessageQueue,
 }
+
+impl TopicData {
+    pub(crate) fn from_snapshot(snapshot: TopicSnapshot) -> Self {
+        let TopicSnapshot {
+            config,
+            ep_routing_table,
+            ep_interest_map,
+            ep_latest_active,
+            mut queue,
+        } = snapshot;
+        let mut topic = TopicData::new(config);
+        queue.sort_by_key(|m|m.time);
+        for message in queue {
+            topic.queue.push(HoldMessage::from_durable(message));
+        }
+        Self {
+            config,
+            ep_routing_table,
+            ep_interest_map: InterestMap::from_raw(ep_interest_map),
+            ep_latest_active,
+            queue: MessageQueue::new(queue),
+        }
+    }
+    pub(crate) fn update_and_flush(&mut self, update: MessageStateUpdate) {
+        let poll_result = {
+            for (from, status) in update.status {
+                self.queue.update_ack(&update.message_id, from, status)
+            }
+            self.queue
+                .poll_message(update.message_id, &MessagePollContext { topic: self })
+        };
+        if let Some(Poll::Ready(())) = poll_result {
+            self.queue.flush(&MessagePollContext { topic: self });
+        }
+    }
+    pub fn hold_new_message(&mut self, message: Message) {
+        let ep_collect = match message.header.target_kind {
+            MessageTargetKind::Durable | MessageTargetKind::Online => {
+                self.collect_addr_by_subjects(message.header.subjects.iter())
+                // just accept all
+            }
+            MessageTargetKind::Available => {
+                unimplemented!("available kind is not supported");
+                // unsupported
+            }
+            MessageTargetKind::Push => {
+                let message_hash = crate::util::hash64(&message.id());
+                let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
+
+                let mut hash_ring = ep_collect
+                    .iter()
+                    .map(|ep| (crate::util::hash64(ep), *ep))
+                    .collect::<Vec<_>>();
+                hash_ring.sort_by_key(|x| x.0);
+                if hash_ring.is_empty() {
+                    let queue = self.queue;
+                    if let Some(report) = queue.waiting.remove(&message.id()) {
+                        let _ = report.send(Err(WaitAckError::exception(
+                            WaitAckErrorException::NoAvailableTarget,
+                        )));
+                    }
+                    return;
+                } else {
+                    let ep = hash_ring[(message_hash as usize) % (hash_ring.len())].1;
+                    tracing::debug!(?ep, "select ep");
+                    HashSet::from([ep])
+                }
+            }
+        };
+        let hold_message = HoldMessage {
+            message: message.clone(),
+            wait_ack: WaitAck::new(message.ack_kind(), ep_collect.clone()),
+        };
+        {
+            let mut queue = self.queue;
+            // put in queue
+            if let Some(overflow_config) = &self.config.overflow_config {
+                let size = u32::from(overflow_config.size) as usize;
+                let waiting_size = queue.len();
+                if waiting_size >= size {
+                    match overflow_config.policy {
+                        config::TopicOverflowPolicy::RejectNew => {
+                            if let Some(report) = queue.waiting.remove(&message.id()) {
+                                let _ = report.send(Err(WaitAckError::exception(
+                                    WaitAckErrorException::Overflow,
+                                )));
+                            }
+                            return;
+                        }
+                        config::TopicOverflowPolicy::DropOld => {
+                            let old = queue.pop().expect("queue at least one element");
+                            if let Some(report) = queue.waiting.remove(&old.message.id()) {
+                                let _ = report.send(Err(WaitAckError::exception(
+                                    WaitAckErrorException::Overflow,
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+            queue.push(hold_message);
+        }
+        self.update_and_flush(MessageStateUpdate::new_empty(message.id()));
+        tracing::debug!(?ep_collect, "hold new message");
+    }
+}
+
 #[derive(Debug, Clone)]
 
 pub struct TopicSnapshot {
+    pub config: TopicConfig,
     pub ep_routing_table: HashMap<EndpointAddr, NodeId>,
     pub ep_interest_map: HashMap<EndpointAddr, HashSet<Interest>>,
     pub ep_latest_active: HashMap<EndpointAddr, TimestampSec>,
     pub queue: Vec<DurableMessage>,
 }
 
-impl_codec!(
-    struct TopicSnapshot {
-        ep_routing_table: HashMap<EndpointAddr, NodeId>,
-        ep_interest_map: HashMap<EndpointAddr, HashSet<Interest>>,
-        ep_latest_active: HashMap<EndpointAddr, TimestampSec>,
-        queue: Vec<DurableMessage>,
-    }
-);
+
 impl Topic {
-    pub(crate) fn apply_snapshot(&self, snapshot: TopicSnapshot) {
+    pub(crate) fn apply_snapshot(&mut self, snapshot: TopicSnapshot) {
         {
-            let mut ep_routing_table = self.ep_routing_table.write().unwrap();
-            let mut ep_interest_map = self.ep_interest_map.write().unwrap();
-            let mut ep_latest_active = self.ep_latest_active.write().unwrap();
-            let mut queue = self.queue.write().unwrap();
-            *ep_routing_table = snapshot.ep_routing_table;
-            *ep_interest_map = InterestMap::from_raw(snapshot.ep_interest_map);
-            *ep_latest_active = snapshot.ep_latest_active;
-            let context = MessagePollContext { topic: self };
-            queue.clear();
+            self.ep_routing_table = snapshot.ep_routing_table;
+            self.ep_interest_map = InterestMap::from_raw(snapshot.ep_interest_map);
+            self.ep_latest_active = snapshot.ep_latest_active;
+            self.queue.clear();
             for message in snapshot.queue {
-                queue.push(HoldMessage::from_durable(message));
+                self.queue.push(HoldMessage::from_durable(message));
             }
-            queue.poll_all(&context);
-            queue.flush(&context);
+            self.queue.poll_all(&context);
+            self.queue.flush(&context);
         }
     }
 }
-impl TopicInner {
+impl TopicData {
     pub(crate) fn snapshot(&self) -> TopicSnapshot {
-        let ep_routing_table = self.ep_routing_table.read().unwrap().clone();
-        let ep_interest_map = self.ep_interest_map.read().unwrap().raw.clone();
-        let ep_latest_active = self.ep_latest_active.read().unwrap().clone();
+        let ep_routing_table = self.ep_routing_table.clone();
+        let ep_interest_map = self.ep_interest_map.raw.clone();
+        let ep_latest_active = self.ep_latest_active.clone();
         let queue = self
             .queue
-            .read()
-            .unwrap()
             .hold_messages
             .values()
             .map(|m| m.as_durable())
             .collect();
         TopicSnapshot {
+            config: self.config.clone(),
             ep_routing_table,
             ep_interest_map,
             ep_latest_active,
@@ -521,25 +613,12 @@ impl TopicInner {
             ep_routing_table: Default::default(),
             ep_interest_map: Default::default(),
             ep_latest_active: Default::default(),
-            queue: RwLock::new(messages),
-            durability_service: None,
+            queue: messages,
         }
     }
 }
 
 impl Node {
-    // return: is leader
-    pub async fn wait_raft_cluster_ready(&self) -> bool {
-        loop {
-            {
-                let state = self.raft_state_unwrap().read().unwrap();
-                if state.role.is_ready() {
-                    break state.role.is_leader();
-                }
-            };
-            tokio::task::yield_now().await;
-        }
-    }
     pub async fn new_topic<C: Into<TopicConfig>>(&self, config: C) -> Result<Topic, crate::Error> {
         self.load_topic(LoadTopic::from_config(config)).await
     }
@@ -569,21 +648,14 @@ impl Node {
                 .expect("cancel topic");
         }
     }
-    pub(crate) fn apply_load_topic<C: Into<TopicConfig>>(&self, config: C) -> Topic {
-        let topic = Arc::new(TopicInner::new(config));
-        self.topics
-            .write()
-            .unwrap()
-            .insert(topic.config.code.clone(), topic.clone());
-        self.wrap_topic(topic)
-    }
+
     pub fn remove_topic<Q>(&self, code: &Q)
     where
         TopicCode: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(topic) = self.topics.write().unwrap().remove(code) {
-            let mut queue = topic.queue.write().unwrap();
+        if let Some(topic) = self.topics.remove(code) {
+            let mut queue = topic.queue;
             let waitings = queue.waiting.get_mut().unwrap();
             for (_, report) in waitings.drain() {
                 let _ = report.send(Err(WaitAckError::exception(
@@ -593,7 +665,7 @@ impl Node {
             queue.clear();
         }
     }
-    pub(crate) fn wrap_topic(&self, topic_inner: Arc<TopicInner>) -> Topic {
+    pub(crate) fn wrap_topic(&self, topic_inner: Arc<TopicData>) -> Topic {
         Topic {
             node: self.clone(),
             inner: topic_inner.clone(),
@@ -609,20 +681,5 @@ impl Node {
             .unwrap()
             .get(code)
             .map(|t| self.wrap_topic(t.clone()))
-    }
-    pub fn get_or_init_topic(&self, code: TopicCode) -> Topic {
-        let topic = self.topics.read().unwrap().get(&code).cloned();
-        match topic {
-            Some(topic) => self.wrap_topic(topic),
-            None => {
-                let inner = Arc::new(TopicInner::new(code.clone()));
-                let topic = Topic {
-                    node: self.clone(),
-                    inner: inner.clone(),
-                };
-                self.topics.write().unwrap().insert(code, inner);
-                topic
-            }
-        }
     }
 }

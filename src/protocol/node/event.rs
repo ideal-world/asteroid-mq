@@ -5,10 +5,7 @@ use std::mem::size_of;
 
 use super::{
     edge::EdgeResponse,
-    raft::{
-        Heartbeat, LogAck, LogAppend, LogCommit, LogReplicate, RaftSnapshot, RequestVote, Vote,
-    },
-    NodeId, NodeInfo,
+    NodeId, NodeConfig,
 };
 
 #[derive(Debug, Clone)]
@@ -154,39 +151,6 @@ impl N2nPacket {
             payload: payload_buf.into(),
         }
     }
-    pub fn raft_request_vote(vote: RequestVote) -> Self {
-        let payload = vote.encode_to_bytes();
-        Self {
-            header: N2nPacketHeader {
-                id: N2nPacketId::new_snowflake(),
-                kind: N2NPayloadKind::RequestVote,
-                payload_size: payload.len() as u32,
-            },
-            payload,
-        }
-    }
-    pub fn raft_vote(vote: Vote) -> Self {
-        let payload = vote.encode_to_bytes();
-        Self {
-            header: N2nPacketHeader {
-                id: N2nPacketId::new_snowflake(),
-                kind: N2NPayloadKind::Vote,
-                payload_size: payload.len() as u32,
-            },
-            payload,
-        }
-    }
-    pub fn raft_snapshot(snapshot: RaftSnapshot) -> Self {
-        let payload = snapshot.encode_to_bytes();
-        Self {
-            header: N2nPacketHeader {
-                id: N2nPacketId::new_snowflake(),
-                kind: N2NPayloadKind::Snapshot,
-                payload_size: payload.len() as u32,
-            },
-            payload,
-        }
-    }
     pub fn request_snapshot() -> Self {
         Self {
             header: N2nPacketHeader {
@@ -198,64 +162,6 @@ impl N2nPacket {
         }
     }
 
-    pub fn raft_heartbeat(hb: Heartbeat) -> Self {
-        let payload = hb.encode_to_bytes();
-        Self {
-            header: N2nPacketHeader {
-                id: N2nPacketId::new_snowflake(),
-                kind: N2NPayloadKind::Heartbeat,
-                payload_size: payload.len() as u32,
-            },
-            payload: hb.encode_to_bytes(),
-        }
-    }
-
-    pub fn log_replicate(log: LogReplicate) -> Self {
-        let payload = log.encode_to_bytes();
-        Self {
-            header: N2nPacketHeader {
-                id: N2nPacketId::new_snowflake(),
-                kind: N2NPayloadKind::LogReplicate,
-                payload_size: payload.len() as u32,
-            },
-            payload,
-        }
-    }
-
-    pub fn log_ack(log: LogAck) -> Self {
-        let payload = log.encode_to_bytes();
-        Self {
-            header: N2nPacketHeader {
-                id: N2nPacketId::new_snowflake(),
-                kind: N2NPayloadKind::LogAck,
-                payload_size: payload.len() as u32,
-            },
-            payload,
-        }
-    }
-    pub fn log_commit(commit: LogCommit) -> Self {
-        let payload = commit.encode_to_bytes();
-        Self {
-            header: N2nPacketHeader {
-                id: N2nPacketId::new_snowflake(),
-                kind: N2NPayloadKind::LogCommit,
-                payload_size: payload.len() as u32,
-            },
-            payload,
-        }
-    }
-
-    pub fn log_append(log: LogAppend) -> Self {
-        let payload = log.encode_to_bytes();
-        Self {
-            header: N2nPacketHeader {
-                id: N2nPacketId::new_snowflake(),
-                kind: N2NPayloadKind::LogAppend,
-                payload_size: payload.len() as u32,
-            },
-            payload,
-        }
-    }
 
     pub fn event(evt: N2nEvent) -> Self {
         let payload = evt.encode_to_bytes();
@@ -362,12 +268,12 @@ impl From<u8> for N2NPayloadKind {
 
 #[derive(Debug, Clone)]
 pub struct N2nAuth {
-    pub info: NodeInfo,
+    pub info: NodeConfig,
     pub auth: NodeAuth,
 }
 impl_codec!(
     struct N2nAuth {
-        info: NodeInfo,
+        info: NodeConfig,
         auth: NodeAuth,
     }
 );
@@ -413,9 +319,10 @@ impl_codec!(
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RaftData {
-    kind: EventKind,
-    payload: Bytes,
+    
 }
+
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RaftResponse {
     pub result: Result<(), ()>

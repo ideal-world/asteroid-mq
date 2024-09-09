@@ -78,7 +78,6 @@ macro_rules! error_kind {
 error_kind! {
     pub enum ErrorKind {
         Durability: DurabilityError,
-        Raft: crate::protocol::node::raft::RaftCommitError,
         Offline,
         Io: std::io::Error,
         Ack: WaitAckError,

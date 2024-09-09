@@ -11,19 +11,23 @@ use std::{
 use super::{
     codec::CodecType,
     endpoint::{EndpointInterest, SetState},
-    topic::{TopicCode, TopicInner, TopicSnapshot},
+    topic::{TopicCode, TopicData, TopicSnapshot},
 };
 use bytes::Bytes;
 use connection::{
-    ClusterConnectionInstance, ClusterConnectionRef, ConnectionConfig, EdgeConnectionInstance,
-    EdgeConnectionRef, NodeConnection, NodeConnectionError,
+    ConnectionConfig, EdgeConnectionInstance, EdgeConnectionRef, NodeConnection,
+    NodeConnectionError,
 };
 use crossbeam::sync::ShardedLock;
 use edge::{EdgeError, EdgeErrorKind, EdgeMessage, EdgePayload};
 use event::{EventKind, N2NUnreachableEvent, N2nEvent, N2nPacket, NodeAuth, NodeKind, NodeTrace};
 use futures_util::TryFutureExt;
+use openraft::{BasicNode, Raft};
 use raft::{
-    CommitHandle, FollowerState, LogEntry, RaftCommitError, RaftLogIndex, RaftRole, RaftState,
+    log_storage::LogStorage,
+    network_factory::{RaftNodeInfo, TcpNetworkService},
+    state_machine::StateMachineStore,
+    MaybeLoadingRaft, TypeConfig,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -105,55 +109,101 @@ impl NodeId {
 
 impl Default for NodeId {
     fn default() -> Self {
-        Self {
-            bytes: [0; 16],
-        }
+        Self { bytes: [0; 16] }
     }
 }
 #[derive(Debug, Clone)]
-pub struct NodeInfo {
+pub struct NodeConfig {
     pub id: NodeId,
-    pub kind: NodeKind,
 }
 
-impl NodeInfo {
-    pub fn new(id: NodeId, kind: NodeKind) -> Self {
-        Self { id, kind }
-    }
-    pub fn new_cluster_by_id(id: NodeId) -> Self {
-        Self::new(id, NodeKind::Cluster)
-    }
-    pub fn new_cluster() -> Self {
-        Self::new(NodeId::snowflake(), NodeKind::Cluster)
-    }
+#[derive(Debug, Clone, Default)]
+pub struct NodeData {
+    pub(crate) topics: HashMap<TopicCode, TopicData>,
+    routing: HashMap<NodeId, N2nRoutingInfo>,
 }
 
-impl_codec!(
-    struct NodeInfo {
-        id: NodeId,
-        kind: NodeKind,
+impl NodeData {
+    pub(crate) fn snapshot(&self) -> NodeSnapshot {
+        let topics = self.topics.iter().map(|(code, topic)| {
+            let snapshot = topic.snapshot();
+            (code.clone(), snapshot)
+        }).collect();
+        let routing = self.routing.clone();
+        NodeSnapshot { topics, routing }
     }
-);
-impl Default for NodeInfo {
-    fn default() -> Self {
-        Self {
-            id: NodeId::snowflake(),
-            kind: NodeKind::Cluster,
+    pub(crate) fn apply_delegate_message(
+        &mut self,
+        DelegateMessage { topic, message }: DelegateMessage,
+    ) {
+        if let Some(topic) = self.topics.get_mut(&topic) {
+            topic.hold_new_message(message);
+        } else {
+            todo!()
         }
     }
+    pub(crate) fn apply_snapshot(&mut self, snapshot: NodeSnapshot) {
+        self.topics = snapshot.topics.into_iter().map(|(key, value)| {
+            (key, TopicData::from_snapshot(value))
+        }).collect();
+        self.routing = snapshot.routing
+    }
+    pub(crate) fn apply_load_topic(&mut self, LoadTopic { config, mut queue }: LoadTopic) {
+        queue.sort_by_key(|m| m.time);
+        let topic = TopicData::new(config);
+        self.topics
+            .insert(topic.config.code.clone(), topic);
+        let topic = self.topics.get_mut(&config.code).expect("just inserted");
+        topic.apply_snapshot(TopicSnapshot {
+            
+            ep_routing_table: Default::default(),
+            ep_interest_map: Default::default(),
+            ep_latest_active: Default::default(),
+            queue,
+        });
+    }
+    pub(crate) fn apply_set_state(&mut self, SetState { topic, update }: SetState) {
+        let topic = self.get_topic(topic);
+        topic.update_and_flush(update);
+    }
+    pub(crate) fn apply_unload_topic(&self, UnloadTopic { code }: UnloadTopic) {
+        self.remove_topic(&code);
+    }
+    pub(crate) fn apply_ep_online(
+        &mut self,
+        EndpointOnline {
+            topic_code,
+            endpoint,
+            interests,
+            host,
+        }: EndpointOnline,
+    ) {
+        self.get_topic(topic_code)
+            .ep_online(endpoint, interests, host);
+    }
+    pub(crate) fn apply_ep_offline(
+        &mut self,
+        EndpointOffline {
+            topic_code,
+            endpoint,
+            host: _,
+        }: EndpointOffline,
+    ) {
+        self.get_topic(topic_code).ep_offline(&endpoint);
+    }
+    pub(crate) fn apply_ep_interest(
+        &mut self,
+        EndpointInterest {
+            topic_code,
+            endpoint,
+            interests,
+        }: EndpointInterest,
+    ) {
+        self.get_topic(topic_code)
+            .update_ep_interest(&endpoint, interests);
+    }
 }
 
-#[derive(Debug)]
-pub struct NodeInner {
-    info: NodeInfo,
-    cluster_size: AtomicUsize,
-    raft_state: Option<RwLock<RaftState>>,
-    pub(crate) topics: ShardedLock<HashMap<TopicCode, Arc<TopicInner>>>,
-    n2n_routing_table: ShardedLock<HashMap<NodeId, N2nRoutingInfo>>,
-    peer_connections: ShardedLock<HashMap<NodeId, Arc<ClusterConnectionInstance>>>,
-    edge_connections: ShardedLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
-    auth: RwLock<NodeAuth>,
-}
 #[derive(Debug, Clone)]
 pub struct NodeSnapshot {
     topics: HashMap<TopicCode, TopicSnapshot>,
@@ -168,7 +218,7 @@ impl_codec!(
 );
 #[derive(Debug, Clone)]
 pub struct NodeRef {
-    inner: std::sync::Weak<NodeInner>,
+    inner: std::sync::Weak<NodeData>,
 }
 
 impl NodeRef {
@@ -179,11 +229,11 @@ impl NodeRef {
 
 #[derive(Debug, Clone)]
 pub struct Node {
-    pub(crate) inner: Arc<NodeInner>,
+    pub(crate) inner: Arc<NodeData>,
 }
 
 impl Deref for Node {
-    type Target = NodeInner;
+    type Target = NodeData;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
@@ -191,56 +241,32 @@ impl Deref for Node {
 
 impl Default for Node {
     fn default() -> Self {
-        Self::new(NodeInfo::default())
+        Self::init(NodeConfig::default())
     }
 }
 
 impl Node {
     const RAFT_RANDOM_DURATION_RANGE: std::ops::Range<u64> = 200..1200;
-    pub fn new(cluster_info: NodeInfo) -> Self {
+    pub async fn init(config: NodeConfig) -> Self {
+        let id = config.id;
         let timeout = crate::util::random_duration_ms(Self::RAFT_RANDOM_DURATION_RANGE);
-        let (timeout_reporter, timeout_receiver) = flume::bounded(1);
+
         let this = Self {
-            inner: Arc::new_cyclic(|this| NodeInner {
-                cluster_size: AtomicUsize::new(0),
-                info: cluster_info,
+            inner: Arc::new_cyclic(|this| NodeData {
+                config,
                 topics: Default::default(),
-                n2n_routing_table: ShardedLock::new(HashMap::new()),
-                peer_connections: ShardedLock::new(HashMap::new()),
+                routing: ShardedLock::new(HashMap::new()),
                 edge_connections: ShardedLock::new(HashMap::new()),
                 auth: Default::default(),
-                raft_state: Some(RwLock::new(RaftState {
-                    term: Default::default(),
-                    timeout_reporter: timeout_reporter.clone(),
-                    role: RaftRole::Follower(FollowerState::new(timeout, timeout_reporter)),
-                    index: Default::default(),
-                    voted_for: None,
-                    node_ref: NodeRef {
-                        inner: this.clone(),
-                    },
-                    pending_logs: Default::default(),
-                    commit_hooks: Default::default(),
-                })),
             }),
         };
         let node_ref = this.node_ref();
-        tokio::spawn(async move {
-            while let Ok(()) = timeout_receiver.recv_async().await {
-                let Some(node) = node_ref.upgrade() else {
-                    break;
-                };
-                let req = node.raft_state_unwrap().write().unwrap().term_timeout();
-                tracing::debug!(?req, "raft term timeout");
-                if let Some(req) = req {
-                    node.cluster_wise_broadcast_packet(N2nPacket::raft_request_vote(req));
-                }
-            }
-        });
+
         this
     }
     pub(crate) fn snapshot(&self) -> NodeSnapshot {
-        let topics = self.topics.read().unwrap();
-        let routing = self.n2n_routing_table.read().unwrap();
+        let topics = self.topics;
+        let routing = self.routing;
         NodeSnapshot {
             topics: topics
                 .iter()
@@ -250,35 +276,19 @@ impl Node {
         }
     }
     pub(crate) fn apply_snapshot(&self, snapshot: NodeSnapshot) {
-        let mut routing = self.n2n_routing_table.write().unwrap();
+        let mut routing = self.routing.write().unwrap();
         for (code, topic_snapshot) in snapshot.topics {
-            let topic = self.get_or_init_topic(code);
+            let topic = self.get_topic(code);
             topic.apply_snapshot(topic_snapshot);
         }
         for (node, info) in snapshot.routing {
             routing.insert(node, info);
         }
     }
-    pub(crate) fn raft_state_unwrap(&self) -> &RwLock<RaftState> {
-        self.raft_state.as_ref().unwrap()
-    }
-    pub fn cluster_size(&self) -> u64 {
-        self.cluster_size.load(sync::atomic::Ordering::SeqCst) as u64
-    }
-    pub fn set_cluster_size(&self, size: u64) {
-        self.cluster_size
-            .store(size as usize, sync::atomic::Ordering::SeqCst);
-    }
     pub fn node_ref(&self) -> NodeRef {
         NodeRef {
             inner: Arc::downgrade(&self.inner),
         }
-    }
-    pub fn is_edge(&self) -> bool {
-        matches!(self.info.kind, NodeKind::Edge)
-    }
-    pub fn is_cluster(&self) -> bool {
-        matches!(self.info.kind, NodeKind::Cluster)
     }
     pub(crate) fn new_trace(&self) -> NodeTrace {
         NodeTrace {
@@ -312,22 +322,7 @@ impl Node {
             .collect::<Vec<_>>();
         EndpointSync { entries }
     }
-    pub async fn create_cluster_connection<C: NodeConnection>(
-        &self,
-        conn: C,
-    ) -> Result<NodeId, NodeConnectionError> {
-        let config = ConnectionConfig {
-            attached_node: self.node_ref(),
-            auth: self.auth.read().unwrap().clone(),
-        };
-        let conn_inst = ClusterConnectionInstance::init(config, conn).await?;
-        let peer = conn_inst.peer_info.id;
-        {
-            let mut wg = self.peer_connections.write().unwrap();
-            wg.insert(peer, Arc::new(conn_inst));
-        }
-        Ok(peer)
-    }
+
     pub async fn create_edge_connection<C: NodeConnection>(
         &self,
         conn: C,
@@ -345,200 +340,16 @@ impl Node {
         Ok(peer)
     }
     pub fn id(&self) -> NodeId {
-        self.info.id
+        self.config.id
     }
     #[inline(always)]
     pub fn is(&self, id: NodeId) -> bool {
         self.id() == id
     }
-    fn commit_log_cluster_wise(&self, log: LogEntry) -> Result<CommitHandle, LogEntry> {
-        let mut raft_state = self.raft_state_unwrap().write().unwrap();
-        if !raft_state.role.is_ready() {
-            return Err(log);
-        }
-        if raft_state.role.is_leader() {
-            let index = raft_state.index.inc();
-            let term = raft_state.term;
-            let log_replicate = log.create_replicate(index, term);
-            let indexed_log = log_replicate.clone().indexed();
-            raft_state.pending_logs.push_log(indexed_log.clone());
-            let RaftRole::Leader(ref mut ls) = raft_state.role else {
-                unreachable!("should be leader");
-            };
-            ls.ack_map.insert(index, 0);
-            let commit_hook = raft_state.add_commit_handle(log_replicate.trace_id);
-            {
-                drop(raft_state);
-            }
-            tracing::debug!(?log_replicate, "log replicate");
-            self.cluster_wise_broadcast_packet(N2nPacket::log_replicate(log_replicate));
-            Ok(commit_hook)
-        } else if raft_state.role.is_follower() {
-            let log_append = log.create_append(raft_state.term);
-            let trace_id = log_append.trace_id;
-            let log_append = N2nPacket::log_append(log_append);
-            let RaftRole::Follower(ref fs) = raft_state.role else {
-                unreachable!("should be follower");
-            };
-            let leader = fs.leader.expect("should have leader");
-            let commit_handle = raft_state.add_commit_handle(trace_id);
-            {
-                drop(raft_state);
-            }
-            tracing::debug!(?log_append, "log append");
-            if self.send_packet(log_append, leader).is_err() {
-                let mut raft_state = self.raft_state_unwrap().write().unwrap();
-                raft_state.report_commit_error(
-                    trace_id,
-                    RaftCommitError::connection_error("follower commit"),
-                )
-            }
-            Ok(commit_handle)
-        } else {
-            unreachable!("should be ready");
-        }
-    }
-    pub(crate) async fn commit_log(
-        &self,
-        mut log: LogEntry,
-    ) -> Result<RaftLogIndex, RaftCommitError> {
-        tracing::debug!(?log, "commit log");
-        if self.cluster_size() == 1 {
-            let index = {
-                let mut raft_state = self.raft_state_unwrap().write().unwrap();
-                raft_state.index.inc()
-            };
-            self.apply_log(log);
-            Ok(index)
-        } else {
-            loop {
-                match self.commit_log_cluster_wise(log) {
-                    Ok(hook) => {
-                        return hook.await;
-                    }
-                    Err(prev_log) => {
-                        tokio::task::yield_now().await;
-                        log = prev_log;
-                    }
-                }
-            }
-        }
-    }
-    pub(crate) fn apply_log(&self, log: LogEntry) {
-        match log.kind {
-            event::EventKind::DelegateMessage => {
-                let Ok((evt, _)) = DelegateMessage::decode(log.payload).inspect_err(|e| {
-                    tracing::error!("failed to decode delegate message: {e:?}");
-                }) else {
-                    return;
-                };
-                tracing::info!(message=?evt.message, "hold message");
-                self.get_or_init_topic(evt.topic)
-                    .hold_new_message(evt.message);
-            }
-            event::EventKind::LoadTopic => {
-                let Ok((mut evt, _)) = LoadTopic::decode(log.payload) else {
-                    return;
-                };
-                tracing::debug!(config = ?evt.config, "load topic");
-                let topic = self.apply_load_topic(evt.config);
-                evt.queue.sort_by_key(|m| m.time);
-                topic.apply_snapshot(TopicSnapshot {
-                    ep_routing_table: Default::default(),
-                    ep_interest_map: Default::default(),
-                    ep_latest_active: Default::default(),
-                    queue: evt.queue,
-                });
-            }
-            event::EventKind::UnloadTopic => {
-                let Ok((evt, _)) = UnloadTopic::decode(log.payload) else {
-                    return;
-                };
-                tracing::debug!(code=?evt.code, "unload topic");
-                self.remove_topic(&evt.code);
-            }
-            event::EventKind::EpOnline => {
-                let Ok((evt, _)) = EndpointOnline::decode(log.payload) else {
-                    return;
-                };
-                tracing::info!("ep {ep:?} online", ep = evt.endpoint);
-                let topic = self.get_or_init_topic(evt.topic_code.clone());
-                topic.ep_online(evt);
-            }
-            event::EventKind::EpOffline => {
-                let Ok((evt, _)) = EndpointOffline::decode(log.payload) else {
-                    return;
-                };
-                self.get_or_init_topic(evt.topic_code.clone())
-                    .ep_offline(&evt.endpoint);
-            }
-            event::EventKind::EpInterest => {
-                let Ok(evt) = EndpointInterest::decode_from_bytes(log.payload) else {
-                    return;
-                };
-                self.get_or_init_topic(evt.topic_code.clone())
-                    .update_ep_interest(&evt.endpoint, evt.interests);
-            }
-            event::EventKind::EpSync => {
-                let Ok((evt, _)) = EndpointSync::decode(log.payload) else {
-                    return;
-                };
-                self.handle_ep_sync(evt);
-            }
-            event::EventKind::SetState => {
-                let Ok((evt, _)) = SetState::decode(log.payload) else {
-                    return;
-                };
-                tracing::debug!(topic=?evt.topic, update=?evt.update, "set message state");
-                let topic = self.get_or_init_topic(evt.topic);
-                topic.update_and_flush(evt.update)
-            }
-            _ => {
-                tracing::warn!(?log, "unhandled log");
-            }
-        }
-    }
-    #[instrument(skip_all, fields(node = ?self.id()))]
-    pub(crate) async fn handle_message(&self, message_evt: N2nEvent) {
-        tracing::trace!(?message_evt, "node recv new message");
-        self.record_routing_info(&message_evt.trace);
-        if message_evt.to == self.id() {
-            self.handle_message_as_destination(message_evt).await;
-        } else {
-            self.forward_message(message_evt);
-        }
-    }
+
     #[instrument(skip_all, fields(node = ?self.id()))]
     pub(crate) async fn handle_message_as_destination(&self, _message_evt: N2nEvent) {
         // TODO: implement this for edge nodes
-    }
-    pub(crate) fn known_nodes(&self) -> Vec<NodeId> {
-        self.peer_connections
-            .read()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect()
-    }
-    pub(crate) fn known_peer_cluster(&self) -> Vec<NodeId> {
-        self.peer_connections
-            .read()
-            .unwrap()
-            .iter()
-            .filter(|(id, instance)| {
-                instance.peer_info.kind == NodeKind::Cluster && (**id != self.id())
-            })
-            .map(|(id, _)| *id)
-            .collect()
-    }
-    pub fn get_cluster_connection(&self, to: NodeId) -> Option<ClusterConnectionRef> {
-        let connections = self.peer_connections.read().unwrap();
-        let conn = connections.get(&to)?;
-        if conn.is_alive() {
-            Some(conn.get_connection_ref())
-        } else {
-            None
-        }
     }
     pub fn get_edge_connection(&self, to: NodeId) -> Option<EdgeConnectionRef> {
         let connections = self.edge_connections.read().unwrap();
@@ -549,56 +360,13 @@ impl Node {
             None
         }
     }
-    pub fn remove_cluster_connection(&self, to: NodeId) {
-        self.peer_connections.write().unwrap().remove(&to);
-    }
     pub fn remove_edge_connection(&self, to: NodeId) {
         self.edge_connections.write().unwrap().remove(&to);
-    }
-    pub(crate) fn cluster_wise_broadcast_packet(&self, packet: N2nPacket) {
-        let known_peer_cluster = self.known_peer_cluster();
-        tracing::trace!(header = ?packet.header, peers=?known_peer_cluster, "cluster wise broadcast");
-        for peer in known_peer_cluster {
-            let _ = self.send_packet(packet.clone(), peer);
-        }
-    }
-    #[instrument(skip(self, packet), fields(node=?self.id(), ?to))]
-    pub(crate) fn send_packet(&self, packet: N2nPacket, to: NodeId) -> Result<(), N2nPacket> {
-        let Some(conn) = self.get_cluster_connection(to) else {
-            tracing::error!("failed to send packet no connection to {to:?}");
-            return Err(packet);
-        };
-        tracing::trace!(header = ?packet.header,"having connection, prepared to send packet");
-        if let Err(e) = conn.outbound.send(packet) {
-            tracing::error!("failed to send packet: connection closed");
-            return Err(e.0);
-        }
-        Ok(())
-    }
-    pub(crate) fn report_unreachable(&self, raw: N2nEvent) {
-        let source = raw.trace.source();
-        let prev_node = raw.trace.prev_node();
-        let unreachable_target = raw.to;
-        let unreachable_event = N2NUnreachableEvent {
-            to: source,
-            trace: NodeTrace {
-                source: self.id(),
-                hops: Vec::new(),
-            },
-            unreachable_target,
-        };
-        let packet = N2nPacket::unreachable(unreachable_event);
-        if let Err(packet) = self.send_packet(packet, prev_node) {
-            tracing::warn!(
-                id = ?packet.id(),
-                "trying to report unreachable but previous node lost connection"
-            );
-        }
     }
 
     pub(crate) fn record_routing_info(&self, trace: &NodeTrace) {
         let prev_node = trace.prev_node();
-        let rg = self.n2n_routing_table.read().unwrap();
+        let rg = self.routing.read().unwrap();
         let mut update = Vec::new();
         for (hop, node) in trace.trace_back().enumerate().skip(1) {
             if let Some(routing) = rg.get(node) {
@@ -622,22 +390,10 @@ impl Node {
             }
         }
         if !update.is_empty() {
-            let mut wg = self.n2n_routing_table.write().unwrap();
+            let mut wg = self.routing.write().unwrap();
             for (node, info) in update {
                 wg.insert(node, info);
             }
-        }
-    }
-
-    pub(crate) fn forward_message(&self, mut message_evt: N2nEvent) {
-        let Some(next_jump) = self.get_next_jump(message_evt.to) else {
-            self.report_unreachable(message_evt);
-            return;
-        };
-        message_evt.trace.hops.push(self.id());
-        if let Err(packet) = self.send_packet(N2nPacket::event(message_evt), next_jump) {
-            let raw_event = N2nEvent::decode(packet.payload).expect("should be valid").0;
-            self.report_unreachable(raw_event);
         }
     }
 
@@ -645,7 +401,7 @@ impl Node {
         let source = unreachable_evt.to;
         let prev_node = unreachable_evt.trace.prev_node();
         let unreachable_target = unreachable_evt.unreachable_target;
-        let mut routing_table = self.n2n_routing_table.write().unwrap();
+        let mut routing_table = self.routing.write().unwrap();
         if let Some(routing) = routing_table.get(&unreachable_target) {
             if routing.next_jump == source {
                 routing_table.remove(&unreachable_target);
@@ -660,12 +416,12 @@ impl Node {
     pub(crate) fn handle_ep_sync(&self, sync_evt: EndpointSync) {
         tracing::debug!(?sync_evt, "handle ep sync event");
         for (code, infos) in sync_evt.entries {
-            let topic = self.get_or_init_topic(code);
+            let topic = self.get_topic(code);
             topic.load_ep_sync(infos);
         }
     }
     pub(crate) fn get_next_jump(&self, to: NodeId) -> Option<NodeId> {
-        let routing_table = self.n2n_routing_table.read().unwrap();
+        let routing_table = self.routing.read().unwrap();
         routing_table.get(&to).map(|info| info.next_jump)
     }
 
@@ -690,34 +446,31 @@ impl Node {
                         EdgeErrorKind::TopicNotFound,
                     ));
                 };
-                let handle = topic.send_message(message).map_err(|e| {
-                    EdgeError::with_message(
-                        "send message",
-                        e.to_string(),
-                        EdgeErrorKind::Internal,
-                    )
-                }).await?;
+                let handle = topic
+                    .send_message(message)
+                    .map_err(|e| {
+                        EdgeError::with_message(
+                            "send message",
+                            e.to_string(),
+                            EdgeErrorKind::Internal,
+                        )
+                    })
+                    .await?;
                 let response = handle.await;
                 Ok(response.encode_to_bytes())
             }
-            edge::EdgeRequestKind::CreateEndpoint => {
-                Err(EdgeError::new(
-                    "create endpoint not supported",
-                    EdgeErrorKind::Internal,
-                ))
-            },
-            edge::EdgeRequestKind::DeleteEndpoint => {
-                Err(EdgeError::new(
-                    "create endpoint not supported",
-                    EdgeErrorKind::Internal,
-                ))
-            },
-            edge::EdgeRequestKind::Ack => {
-                Err(EdgeError::new(
-                    "create endpoint not supported",
-                    EdgeErrorKind::Internal,
-                ))
-            },
+            edge::EdgeRequestKind::CreateEndpoint => Err(EdgeError::new(
+                "create endpoint not supported",
+                EdgeErrorKind::Internal,
+            )),
+            edge::EdgeRequestKind::DeleteEndpoint => Err(EdgeError::new(
+                "create endpoint not supported",
+                EdgeErrorKind::Internal,
+            )),
+            edge::EdgeRequestKind::Ack => Err(EdgeError::new(
+                "create endpoint not supported",
+                EdgeErrorKind::Internal,
+            )),
         }
     }
 }
@@ -736,6 +489,6 @@ impl_codec!(
 );
 
 pub struct Connection {
-    pub attached_node: sync::Weak<NodeInner>,
-    pub peer_info: NodeInfo,
+    pub attached_node: sync::Weak<NodeData>,
+    pub peer_info: NodeConfig,
 }

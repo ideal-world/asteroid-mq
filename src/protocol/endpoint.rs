@@ -7,6 +7,7 @@ use super::{
 };
 pub use event::*;
 pub use message::*;
+use serde::{Deserialize, Serialize};
 use std::{
     ops::Deref,
     sync::{Arc, Weak},
@@ -180,7 +181,8 @@ impl MessageHeader {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct EndpointAddr {
     pub bytes: [u8; 16],
 }

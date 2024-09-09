@@ -1,6 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, future::Future, sync::Arc};
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     impl_codec,
@@ -8,7 +9,7 @@ use crate::{
 };
 
 use super::{config::TopicConfig, TopicCode};
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurableMessage {
     pub message: Message,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
@@ -23,8 +24,7 @@ impl_codec!(
     }
 );
 
-#[derive(Debug)]
-
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadTopic {
     pub config: TopicConfig,
     pub queue: Vec<DurableMessage>,
@@ -45,8 +45,8 @@ impl_codec!(
         queue: Vec<DurableMessage>,
     }
 );
+#[derive(Debug, Clone, Serialize, Deserialize)]
 
-#[derive(Debug)]
 pub struct UnloadTopic {
     pub code: TopicCode,
 }
@@ -81,7 +81,7 @@ impl DurableMessageQuery {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageDurabilityConfig {
     // we should have a expire time
     pub expire: DateTime<Utc>,

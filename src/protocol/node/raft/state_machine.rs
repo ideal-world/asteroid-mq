@@ -1,3 +1,6 @@
+pub mod node;
+pub mod topic;
+
 use std::{
     collections::{BTreeMap, HashMap},
     io::{self, Cursor},
@@ -9,6 +12,7 @@ use std::{
 
 use bytes::Bytes;
 use crossbeam::sync::ShardedLock;
+use node::NodeData;
 use openraft::{
     storage::RaftStateMachine, BasicNode, DefensiveError, EntryPayload, LogId, RaftSnapshotBuilder,
     RaftTypeConfig, Snapshot, SnapshotMeta, StorageError, StoredMembership, Violation,
@@ -21,7 +25,7 @@ use crate::{
     protocol::node::{event::RaftResponse, NodeSnapshot},
 };
 
-use super::TypeConfig;
+use super::{MaybeLoadingRaft, TypeConfig};
 #[derive(Debug)]
 pub struct StoredSnapshot {
     pub meta: SnapshotMeta<NodeId, BasicNode>,
@@ -29,18 +33,18 @@ pub struct StoredSnapshot {
     /// The data of the state machine at the time of this snapshot.
     pub data: Bytes,
 }
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StateMachineData<C: RaftTypeConfig> {
     pub last_applied_log: Option<LogId<C::NodeId>>,
 
     pub last_membership: StoredMembership<C::NodeId, C::Node>,
 
-    pub node: Node,
+    pub node: NodeData,
 }
 
 /// Defines a state machine for the Raft cluster. This state machine represents a copy of the
 /// data for this node. Additionally, it is responsible for storing the last snapshot of the data.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StateMachineStore {
     /// The Raft state machine.
     pub state_machine: RwLock<StateMachineData<TypeConfig>>,
@@ -54,6 +58,18 @@ pub struct StateMachineStore {
 
     /// The last received snapshot.
     current_snapshot: RwLock<Option<StoredSnapshot>>,
+    raft: MaybeLoadingRaft,
+}
+
+impl StateMachineStore {
+    pub fn new(raft: MaybeLoadingRaft) -> Self {
+        Self {
+            state_machine: RwLock::new(StateMachineData::default()),
+            snapshot_idx: AtomicU64::new(0),
+            current_snapshot: RwLock::new(None),
+            raft,
+        }
+    }
 }
 impl RaftSnapshotBuilder<TypeConfig> for Arc<StateMachineStore> {
     #[tracing::instrument(level = "trace", skip(self))]
@@ -137,8 +153,37 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
 
             match entry.payload {
                 EntryPayload::Blank => res.push(RaftResponse { result: Ok(()) }),
-                EntryPayload::Normal(ref req) => {
-                    todo!("Handle normal entry");
+                EntryPayload::Normal(ref proposal) => {
+                    let raft = self.raft.get().await;
+                    match proposal {
+                        crate::protocol::node::raft::proposal::Proposal::DelegateMessage(
+                            delegate_message,
+                        ) => {
+                            sm.node.apply_delegate_message(delegate_message.clone());
+                        }
+                        crate::protocol::node::raft::proposal::Proposal::SetState(set_state) => {
+                            sm.node.apply_set_state(set_state.clone());
+                        }
+                        crate::protocol::node::raft::proposal::Proposal::LoadTopic(load_topic) => {
+                            sm.node.apply_load_topic(load_topic.clone());
+                        }
+                        crate::protocol::node::raft::proposal::Proposal::UnloadTopic(
+                            unload_topic,
+                        ) => {
+                            sm.node.apply_unload_topic(unload_topic.clone());
+                        }
+                        crate::protocol::node::raft::proposal::Proposal::EpOnline(ep_online) => {
+                            sm.node.apply_ep_online(ep_online.clone());
+                        }
+                        crate::protocol::node::raft::proposal::Proposal::EpOffline(ep_offline) => {
+                            sm.node.apply_ep_offline(ep_offline.clone());
+                        }
+                        crate::protocol::node::raft::proposal::Proposal::EpInterest(
+                            ep_interest,
+                        ) => {
+                            sm.node.apply_ep_interest(ep_interest.clone());
+                        }
+                    }
                 }
                 EntryPayload::Membership(ref mem) => {
                     sm.last_membership = StoredMembership::new(Some(entry.log_id), mem.clone());

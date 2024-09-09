@@ -7,10 +7,11 @@ use std::{
 };
 
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 
 use crate::impl_codec;
 
-#[derive(Debug, Clone, PartialEq ,Eq, Hash)]
+#[derive(Debug, Clone, PartialEq ,Eq, Hash, Serialize, Deserialize)]
 pub struct Subject(pub(crate) Bytes);
 
 impl_codec!(
@@ -79,7 +80,8 @@ impl<'a> Iterator for SubjectSegments<'a> {
 /// # Interest
 /// ## Glob Match Interest
 /// (/)?(<path>|<*>|<**>)/*
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Interest(Bytes);
 
 impl_codec!(
@@ -123,7 +125,7 @@ pub enum OwnedInterestSegment {
     Any,
     RecursiveAny,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterestMap<T> {
     root: InterestRadixTreeNode<T>,
     pub(crate) raw: HashMap<T, HashSet<Interest>>,
@@ -138,7 +140,7 @@ impl<T> Default for InterestMap<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterestRadixTreeNode<T> {
     value: HashSet<T>,
     children: BTreeMap<Vec<u8>, InterestRadixTreeNode<T>>,
