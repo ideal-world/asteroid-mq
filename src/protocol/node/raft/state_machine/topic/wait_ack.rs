@@ -6,15 +6,19 @@ use std::{
     time::Instant,
 };
 
-use crate::{impl_codec, protocol::endpoint::{
-    EndpointAddr, Message, MessageAckExpectKind, MessageId, MessageStatusKind,
-}};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+use crate::{
+    impl_codec,
+    protocol::endpoint::{
+        EndpointAddr, Message, MessageAckExpectKind, MessageId, MessageStatusKind,
+    },
+};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaitAck {
     pub expect: MessageAckExpectKind,
-    pub status: RwLock<HashMap<EndpointAddr, MessageStatusKind>>,
-    pub timeout: Option<Instant>,
+    pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
 
 #[derive(Debug)]
@@ -40,7 +44,6 @@ impl_codec!(
         status: HashMap<EndpointAddr, MessageStatusKind>,
     }
 );
-
 
 impl WaitAckError {
     pub fn exception(exception: WaitAckErrorException) -> Self {
@@ -81,7 +84,6 @@ impl WaitAck {
         );
         Self {
             status: status.into(),
-            timeout: None,
             expect,
         }
     }
@@ -91,12 +93,22 @@ pin_project_lite::pin_project! {
     pub struct WaitAckHandle {
         pub(crate) message_id: MessageId,
         #[pin]
-        pub(crate) result: flume::r#async::RecvFut<'static, Result<WaitAckSuccess, WaitAckError>>,
+        pub(crate) result: tokio::sync::oneshot::Receiver<WaitAckResult>,
     }
 
 }
 
 impl WaitAckHandle {
+    pub fn new(id: MessageId) -> (tokio::sync::oneshot::Sender<WaitAckResult>, WaitAckHandle) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        (
+            tx,
+            WaitAckHandle {
+                message_id: id,
+                result: rx,
+            },
+        )
+    }
     pub fn message_id(&self) -> MessageId {
         self.message_id
     }
@@ -114,3 +126,5 @@ impl Future for WaitAckHandle {
             .map_err(|_| WaitAckError::exception(WaitAckErrorException::MessageDropped))?
     }
 }
+
+pub type WaitAckResult = Result<WaitAckSuccess, WaitAckError>;

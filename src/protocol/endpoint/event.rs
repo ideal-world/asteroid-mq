@@ -108,18 +108,6 @@ impl MessageStateUpdate {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetState {
-    pub topic: TopicCode,
-    pub update: MessageStateUpdate,
-}
-
-impl_codec!(
-    struct SetState {
-        topic: TopicCode,
-        update: MessageStateUpdate,
-    }
-);
 
 #[derive(Debug)]
 pub struct EndpointSync {
@@ -146,5 +134,17 @@ impl_codec!(
         host: NodeId,
         interests: Vec<Interest>,
         latest_active: TimestampSec,
+    }
+);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetState {
+    pub topic: TopicCode,
+    pub update: MessageStateUpdate,
+}
+
+impl_codec!(
+    struct SetState {
+        topic: TopicCode,
+        update: MessageStateUpdate,
     }
 );

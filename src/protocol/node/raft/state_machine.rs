@@ -22,7 +22,7 @@ use tokio::sync::RwLock;
 
 use crate::{
     prelude::{CodecType, Node, NodeId},
-    protocol::node::{event::RaftResponse, NodeSnapshot},
+    protocol::node::{event::RaftResponse, raft::proposal::ProposalContext, NodeRef},
 };
 
 use super::{MaybeLoadingRaft, TypeConfig};
@@ -31,7 +31,7 @@ pub struct StoredSnapshot {
     pub meta: SnapshotMeta<NodeId, BasicNode>,
 
     /// The data of the state machine at the time of this snapshot.
-    pub data: Bytes,
+    pub data: NodeData,
 }
 #[derive(Debug, Clone, Default)]
 pub struct StateMachineData<C: RaftTypeConfig> {
@@ -58,16 +58,16 @@ pub struct StateMachineStore {
 
     /// The last received snapshot.
     current_snapshot: RwLock<Option<StoredSnapshot>>,
-    raft: MaybeLoadingRaft,
+    node_ref: NodeRef,
 }
 
 impl StateMachineStore {
-    pub fn new(raft: MaybeLoadingRaft) -> Self {
+    pub fn new(node_ref: NodeRef) -> Self {
         Self {
             state_machine: RwLock::new(StateMachineData::default()),
             snapshot_idx: AtomicU64::new(0),
             current_snapshot: RwLock::new(None),
-            raft,
+            node_ref,
         }
     }
 }
@@ -76,7 +76,7 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<StateMachineStore> {
     async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<NodeId>> {
         // Serialize the data of the state machine.
         let state_machine = self.state_machine.read().await;
-        let snapshot = state_machine.node.snapshot();
+        let snapshot = state_machine.node.clone();
 
         let last_applied_log = state_machine.last_applied_log;
         let last_membership = state_machine.last_membership.clone();
@@ -98,15 +98,15 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<StateMachineStore> {
             last_membership,
             snapshot_id,
         };
+        let bytes = bincode::serialize(&snapshot).unwrap();
         let stored = StoredSnapshot {
             meta: meta.clone(),
-            data: snapshot.encode_to_bytes(),
+            data: snapshot,
         };
         *current_snapshot = Some(stored);
-        let bytes = snapshot.encode_to_bytes();
         Ok(Snapshot {
             meta,
-            snapshot: Box::new(Cursor::new(bytes.to_vec())),
+            snapshot: Box::new(Cursor::new(bytes)),
         })
     }
 }
@@ -154,18 +154,22 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
             match entry.payload {
                 EntryPayload::Blank => res.push(RaftResponse { result: Ok(()) }),
                 EntryPayload::Normal(ref proposal) => {
-                    let raft = self.raft.get().await;
+                    let context = ProposalContext {
+                        node_ref: self.node_ref.clone(),
+                        topic_code: None,
+                    };
                     match proposal {
                         crate::protocol::node::raft::proposal::Proposal::DelegateMessage(
                             delegate_message,
                         ) => {
-                            sm.node.apply_delegate_message(delegate_message.clone());
+                            sm.node
+                                .apply_delegate_message(delegate_message.clone(), context);
                         }
                         crate::protocol::node::raft::proposal::Proposal::SetState(set_state) => {
-                            sm.node.apply_set_state(set_state.clone());
+                            sm.node.apply_set_state(set_state.clone(), context);
                         }
                         crate::protocol::node::raft::proposal::Proposal::LoadTopic(load_topic) => {
-                            sm.node.apply_load_topic(load_topic.clone());
+                            sm.node.apply_load_topic(load_topic.clone(), context);
                         }
                         crate::protocol::node::raft::proposal::Proposal::UnloadTopic(
                             unload_topic,
@@ -173,15 +177,15 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
                             sm.node.apply_unload_topic(unload_topic.clone());
                         }
                         crate::protocol::node::raft::proposal::Proposal::EpOnline(ep_online) => {
-                            sm.node.apply_ep_online(ep_online.clone());
+                            sm.node.apply_ep_online(ep_online.clone(), context);
                         }
                         crate::protocol::node::raft::proposal::Proposal::EpOffline(ep_offline) => {
-                            sm.node.apply_ep_offline(ep_offline.clone());
+                            sm.node.apply_ep_offline(ep_offline.clone(), context);
                         }
                         crate::protocol::node::raft::proposal::Proposal::EpInterest(
                             ep_interest,
                         ) => {
-                            sm.node.apply_ep_interest(ep_interest.clone());
+                            sm.node.apply_ep_interest(ep_interest.clone(), context);
                         }
                     }
                 }
@@ -209,10 +213,10 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
     {
         match &*self.current_snapshot.read().await {
             Some(snapshot) => {
-                let data = snapshot.data.clone();
+                let bytes = bincode::serialize(&snapshot.data).unwrap();
                 Ok(Some(Snapshot {
                     meta: snapshot.meta.clone(),
-                    snapshot: Box::new(Cursor::new(data.to_vec())),
+                    snapshot: Box::new(Cursor::new(bytes)),
                 }))
             }
             None => Ok(None),
@@ -229,31 +233,30 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
             <TypeConfig as RaftTypeConfig>::NodeId,
             <TypeConfig as RaftTypeConfig>::Node,
         >,
-        snapshot: Box<<TypeConfig as RaftTypeConfig>::SnapshotData>,
+        mut snapshot: Box<<TypeConfig as RaftTypeConfig>::SnapshotData>,
     ) -> Result<(), StorageError<<TypeConfig as RaftTypeConfig>::NodeId>> {
         tracing::info!(
             { snapshot_size = snapshot.get_ref().len(), meta= ?meta },
             "decoding snapshot for installation"
         );
-
+        let new_data: NodeData = bincode::deserialize_from(&mut snapshot).map_err(|e| {
+            StorageError::from_io_error(
+                openraft::ErrorSubject::Snapshot(None),
+                openraft::ErrorVerb::Read,
+                io::Error::other(e),
+            )
+        })?;
         let new_snapshot = StoredSnapshot {
             meta: meta.clone(),
-            data: snapshot.into_inner().to_vec().into(),
+            data: new_data.clone(),
         };
 
         // Update the state machine.
-        let snapshot_to_apply = NodeSnapshot::decode_from_bytes(new_snapshot.data.clone())
-            .map_err(|e| {
-                StorageError::from_io_error(
-                    openraft::ErrorSubject::Snapshot(None),
-                    openraft::ErrorVerb::Read,
-                    io::Error::other(e),
-                )
-            })?;
+
         let mut state_machine = self.state_machine.write().await;
         state_machine.last_membership = new_snapshot.meta.last_membership.clone();
         state_machine.last_applied_log = new_snapshot.meta.last_log_id;
-        state_machine.node.apply_snapshot(snapshot_to_apply);
+        state_machine.node = new_data;
 
         // Lock the current snapshot before releasing the lock on the state machine, to avoid a race
         // condition on the written snapshot

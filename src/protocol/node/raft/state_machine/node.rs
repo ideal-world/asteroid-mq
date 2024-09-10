@@ -1,74 +1,75 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
+
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    prelude::{NodeId, TopicCode},
+    prelude::{NodeId, Topic, TopicCode},
     protocol::{
         endpoint::{DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, SetState},
-        node::{N2nRoutingInfo, NodeSnapshot},
+        node::{raft::proposal::ProposalContext, N2nRoutingInfo},
         topic::{
             durable_message::{LoadTopic, UnloadTopic},
-            TopicSnapshot,
+            TopicInner,
         },
     },
 };
 
 use super::topic::TopicData;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeData {
     pub(crate) topics: HashMap<TopicCode, TopicData>,
     routing: HashMap<NodeId, N2nRoutingInfo>,
 }
 
 impl NodeData {
-    pub(crate) fn snapshot(&self) -> NodeSnapshot {
-        let topics = self
-            .topics
-            .iter()
-            .map(|(code, topic)| {
-                let snapshot = topic.snapshot();
-                (code.clone(), snapshot)
-            })
-            .collect();
-        let routing = self.routing.clone();
-        NodeSnapshot { topics, routing }
-    }
     pub(crate) fn apply_delegate_message(
         &mut self,
         DelegateMessage { topic, message }: DelegateMessage,
+        mut ctx: ProposalContext,
     ) {
+        ctx.set_topic_code(topic.clone());
         if let Some(topic) = self.topics.get_mut(&topic) {
-            topic.hold_new_message(message);
+            topic.hold_new_message(message, &ctx);
         } else {
             todo!()
         }
     }
-    pub(crate) fn apply_snapshot(&mut self, snapshot: NodeSnapshot) {
-        self.topics = snapshot
-            .topics
-            .into_iter()
-            .map(|(key, value)| (key, TopicData::from_snapshot(value)))
-            .collect();
-        self.routing = snapshot.routing
-    }
-    pub(crate) fn apply_load_topic(&mut self, LoadTopic { config, mut queue }: LoadTopic) {
+    pub(crate) fn apply_load_topic(
+        &mut self,
+        LoadTopic { config, mut queue }: LoadTopic,
+        ctx: ProposalContext,
+    ) {
         queue.sort_by_key(|m| m.time);
-        let topic = TopicData::new(config);
-        self.topics.insert(topic.config.code.clone(), topic);
-        let topic = self.topics.get_mut(&config.code).expect("just inserted");
-        topic.apply_snapshot(TopicSnapshot {
-            ep_routing_table: Default::default(),
-            ep_interest_map: Default::default(),
-            ep_latest_active: Default::default(),
-            queue,
-        });
+        let code = config.code.clone();
+        let topic = TopicData::from_durable(config, queue);
+        self.topics.insert(code.clone(), topic);
+        if let Some(node) = ctx.node_ref.upgrade() {
+            let topic = Topic {
+                inner: Arc::new(TopicInner {
+                    code: code.clone(),
+                    node: node.clone(),
+                    ack_waiting_pool: Default::default(),
+                    local_endpoints: Default::default(),
+                }),
+            };
+            node.topics.write().unwrap().insert(code, topic);
+        }
     }
-    pub(crate) fn apply_set_state(&mut self, SetState { topic, update }: SetState) {
-        let topic = self.get_topic(topic);
-        topic.update_and_flush(update);
+    pub(crate) fn apply_set_state(
+        &mut self,
+        SetState { topic, update }: SetState,
+        mut ctx: ProposalContext,
+    ) {
+        ctx.set_topic_code(topic.clone());
+        if let Some(topic) = self.topics.get_mut(&topic) {
+            topic.update_and_flush(update, &ctx);
+        } else {
+            todo!()
+        }
     }
-    pub(crate) fn apply_unload_topic(&self, UnloadTopic { code }: UnloadTopic) {
-        self.remove_topic(&code);
+    pub(crate) fn apply_unload_topic(&mut self, UnloadTopic { code }: UnloadTopic) {
+        self.topics.remove(&code);
     }
     pub(crate) fn apply_ep_online(
         &mut self,
@@ -78,9 +79,13 @@ impl NodeData {
             interests,
             host,
         }: EndpointOnline,
+        mut ctx: ProposalContext,
     ) {
-        self.get_topic(topic_code)
-            .ep_online(endpoint, interests, host);
+        let Some(topic) = self.topics.get_mut(&topic_code) else {
+            return;
+        };
+        ctx.set_topic_code(topic_code);
+        topic.ep_online(endpoint, interests, host, &ctx);
     }
     pub(crate) fn apply_ep_offline(
         &mut self,
@@ -89,8 +94,13 @@ impl NodeData {
             endpoint,
             host: _,
         }: EndpointOffline,
+        mut ctx: ProposalContext,
     ) {
-        self.get_topic(topic_code).ep_offline(&endpoint);
+        let Some(topic) = self.topics.get_mut(&topic_code) else {
+            return;
+        };
+        ctx.set_topic_code(topic_code);
+        topic.ep_offline(&endpoint, &ctx);
     }
     pub(crate) fn apply_ep_interest(
         &mut self,
@@ -99,8 +109,13 @@ impl NodeData {
             endpoint,
             interests,
         }: EndpointInterest,
+        mut ctx: ProposalContext,
     ) {
-        self.get_topic(topic_code)
-            .update_ep_interest(&endpoint, interests);
+        let Some(topic) = self.topics.get_mut(&topic_code) else {
+            return;
+        };
+        ctx.set_topic_code(topic_code);
+        topic.update_ep_interest(&endpoint, interests, &ctx);
+        
     }
 }

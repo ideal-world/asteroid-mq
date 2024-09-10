@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::impl_codec;
 
-#[derive(Debug, Clone, PartialEq ,Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Subject(pub(crate) Bytes);
 
 impl_codec!(
@@ -294,6 +294,30 @@ where
     }
 }
 
+impl<T> Serialize for InterestMap<T>
+where
+    T: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.raw.serialize(serializer)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for InterestMap<T>
+where
+    T: Deserialize<'de> + Hash + Eq + Clone,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = HashMap::<T, HashSet<Interest>>::deserialize(deserializer)?;
+        Ok(Self::from_raw(raw))
+    }
+}
 #[test]
 fn test_interest_map() {
     let mut map = InterestMap::new();

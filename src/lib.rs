@@ -6,6 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub use bytes;
 pub use error::Error;
+use serde::{Deserialize, Serialize};
 pub type Result<T> = std::result::Result<T, Error>;
 pub mod prelude {
     pub use crate::error::Error;
@@ -15,7 +16,6 @@ pub mod prelude {
     pub use crate::protocol::interest::{Interest, Subject};
     pub use crate::protocol::node::{Node, NodeId, NodeConfig};
     pub use crate::protocol::topic::{
-        config::{TopicOverflowPolicy, TopicConfig, TopicDurabilityConfig, TopicOverflowConfig},
         durable_message::{
             Durability, DurabilityError, DurabilityService, DurableMessage, MessageDurabilityConfig,
         },
@@ -23,7 +23,7 @@ pub mod prelude {
     };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TimestampSec(u64);
 impl_codec!(
     struct TimestampSec(u64)

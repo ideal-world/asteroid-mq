@@ -1,8 +1,24 @@
-use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 
-use crate::protocol::{
-    endpoint::{DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, MessageAck, SetState},
-    topic::durable_message::{LoadTopic, UnloadTopic},
+use openraft::Raft;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{oneshot, RwLock};
+
+use crate::{
+    prelude::{MessageId, NodeId, TopicCode},
+    protocol::{
+        endpoint::{
+            DelegateMessage, EndpointAddr, EndpointInterest, EndpointOffline, EndpointOnline,
+            Message, MessageAck, SetState,
+        },
+        node::NodeRef,
+        topic::durable_message::{LoadTopic, UnloadTopic},
+    },
+};
+
+use super::{
+    state_machine::topic::wait_ack::{WaitAckError, WaitAckResult, WaitAckSuccess},
+    MaybeLoadingRaft, TypeConfig,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,4 +37,32 @@ pub enum Proposal {
     EpOffline(EndpointOffline),
     /// En Interest: set endpoint's interests.
     EpInterest(EndpointInterest),
+}
+#[derive(Debug, Clone)]
+pub struct ProposalContext {
+    pub node_ref: NodeRef,
+    pub topic_code: Option<TopicCode>,
+}
+
+impl ProposalContext {
+    pub fn set_topic_code(&mut self, code: TopicCode) {
+        self.topic_code = Some(code);
+    }   
+    pub fn resolve_ack(&self, id: MessageId, result: WaitAckResult) {
+        let Some(node) = self.node_ref.upgrade() else {
+            return;
+        };
+        let Some(ref code) = self.topic_code else {
+            return;
+        };
+        let Some(topic) = node.get_topic(code) else {
+            return;
+        };
+        tokio::spawn(async move {
+            topic.ack_waiting_pool.write().await.remove(&id).map(|tx| {
+                let _ = tx.send(result);
+            });
+        });
+    }
+    pub fn dispatch_message(&self, message: &Message, endpoint: EndpointAddr) {}
 }

@@ -1,6 +1,7 @@
 use std::{fmt::Write, hash::Hash};
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 pub fn timestamp_sec() -> u64 {
     std::time::SystemTime::now()
@@ -72,7 +73,7 @@ where
         Ok(())
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timed<T> {
     pub time: DateTime<Utc>,
     pub data: T,

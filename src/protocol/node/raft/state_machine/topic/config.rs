@@ -2,9 +2,8 @@ use std::num::NonZeroU32;
 
 use serde::{Deserialize, Serialize};
 
-use crate::impl_codec;
+use crate::{impl_codec, prelude::TopicCode};
 
-use super::TopicCode;
 
 #[derive(Debug, Clone, Default)]
 

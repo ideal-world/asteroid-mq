@@ -6,77 +6,62 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use openraft::{raft::AppendEntriesRequest, Raft};
+use serde::{Deserialize, Serialize};
 
 use crate::{
+    prelude::DurableMessage,
     protocol::{
         endpoint::{
             EndpointAddr, Message, MessageAck, MessageId, MessageStateUpdate, MessageStatusKind,
             SetState,
-        }, node::raft::{proposal::Proposal, TypeConfig}, topic::wait_ack::WaitAckSuccess
+        },
+        node::raft::{
+            proposal::{Proposal, ProposalContext},
+            state_machine::topic::wait_ack::{WaitAckError, WaitAckSuccess},
+            TypeConfig,
+        },
     },
     util::Timed,
 };
 
 use super::{
-    durable_message::DurableMessage,
-    wait_ack::{WaitAck, WaitAckError, WaitAckHandle},
-    Topic,
+    wait_ack::{WaitAck, WaitAckResult},
+    TopicData,
 };
-#[derive(Debug, Clone)]
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HoldMessage {
     pub message: Message,
     pub wait_ack: WaitAck,
 }
 
 impl HoldMessage {
-    pub(crate) fn as_durable(&self) -> DurableMessage {
-        DurableMessage {
-            message: self.message.clone(),
-            status: self.wait_ack.status.read().unwrap().clone(),
-            time: Utc::now(),
-        }
-    }
-    pub(crate) fn from_durable(durable: DurableMessage) -> Self {
-        let wait_ack = WaitAck {
-            expect: durable.message.ack_kind(),
-            status: durable.status.into(),
-            timeout: None,
-        };
-        Self {
-            message: durable.message,
-            wait_ack,
-        }
-    }
-    pub(crate) fn send_unsent(&self, context: &MessagePollContext) {
-        let status_update = {
-            let mut status = self.wait_ack.status.write().unwrap();
-            let eps = status
-                .iter()
-                .filter_map(|(ep, status)| status.is_unsent().then_some(*ep));
-            let mut status_update = HashMap::new();
-            // if the message is the first one, call send
-            for (ep, result) in context.topic.dispatch_message(&self.message, eps) {
-                // it's Ok to do so because the node hear own these endpoints
-                if result.is_ok() {
-                    status.insert(ep, MessageStatusKind::Sending);
-                    status_update.insert(ep, MessageStatusKind::Sent);
-                } else {
-                    status.insert(ep, MessageStatusKind::Sending);
-                    status_update.insert(ep, MessageStatusKind::Unreachable);
-                }
-            }
-            status_update
-        };
-        if !status_update.is_empty() {
-            let update = MessageStateUpdate::new(self.message.id(), status_update);
-            let set_state = SetState {
-                topic: context.topic.code().clone(),
-                update,
-            };
-            let raft = context.raft.clone();
-            tokio::task::spawn(async move {
-                let resp = raft.client_write(Proposal::SetState(set_state)).await;
-            });
+    // pub(crate) fn as_durable(&self) -> DurableMessage {
+    //     DurableMessage {
+    //         message: self.message.clone(),
+    //         status: self.wait_ack.status.read().unwrap().clone(),
+    //         time: Utc::now(),
+    //     }
+    // }
+    // pub(crate) fn from_durable(durable: DurableMessage) -> Self {
+    //     let wait_ack = WaitAck {
+    //         expect: durable.message.ack_kind(),
+    //         status: durable.status.into(),
+    //         timeout: None,
+    //     };
+    //     Self {
+    //         message: durable.message,
+    //         wait_ack,
+    //     }
+    // }
+    pub(crate) fn send_unsent(&self, context: &ProposalContext) {
+        let eps = self
+            .wait_ack
+            .status
+            .iter()
+            .filter_map(|(ep, status)| status.is_unsent().then_some(*ep));
+        for ep in eps {
+            context.dispatch_message(&self.message, ep)
         }
     }
     pub(crate) fn is_resolved(&self) -> bool {
@@ -90,7 +75,7 @@ impl HoldMessage {
                     return true;
                 }
                 if let Some(max_receiver) = durability_config.max_receiver {
-                    if self.wait_ack.status.read().unwrap().len() >= max_receiver as usize {
+                    if self.wait_ack.status.len() >= max_receiver as usize {
                         return true;
                     }
                 }
@@ -101,16 +86,14 @@ impl HoldMessage {
             | crate::protocol::endpoint::MessageTargetKind::Push => self
                 .wait_ack
                 .status
-                .read()
-                .unwrap()
                 .values()
                 .all(|status| status.is_resolved(self.wait_ack.expect)),
         }
     }
-    pub(crate) fn resolve(self) -> Result<WaitAckSuccess, WaitAckError> {
+    pub(crate) fn resolve(self) -> WaitAckResult {
         tracing::trace!("resolved: {self:?}");
         let wait_ack = self.wait_ack;
-        let status = wait_ack.status.into_inner().unwrap();
+        let status = wait_ack.status;
         if status.iter().any(|(_, ack)| ack.is_failed()) {
             Err(WaitAckError {
                 status,
@@ -121,16 +104,12 @@ impl HoldMessage {
         }
     }
 }
-pub(crate) struct MessagePollContext<'t> {
-    pub(crate) topic: &'t Topic,
-    pub raft: Raft<TypeConfig>
-}
 
 pub enum MessageContainer {
     Durable(),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct MessageQueue {
     pub(crate) blocking: bool,
     pub(crate) hold_messages: HashMap<MessageId, HoldMessage>,
@@ -141,6 +120,7 @@ pub(crate) struct MessageQueue {
 }
 
 impl MessageQueue {
+    pub(crate) const DEFAULT_CAPACITY: usize = 1024;
     pub(crate) fn clear(&mut self) {
         self.hold_messages.clear();
         self.time_id.clear();
@@ -166,10 +146,25 @@ impl MessageQueue {
         self.id_time.insert(message_id, time);
         self.size += 1;
     }
-    pub(crate) fn push_with_time(&mut self, message: HoldMessage) {
-        let message_id = message.message.header.message_id;
-        let time = Utc::now();
-        self.hold_messages.insert(message_id, message);
+    pub(crate) fn push_durable_message(
+        &mut self,
+        DurableMessage {
+            message,
+            status,
+            time,
+        }: DurableMessage,
+    ) {
+        let message_id = message.header.message_id;
+        self.hold_messages.insert(
+            message_id,
+            HoldMessage {
+                wait_ack: WaitAck {
+                    expect: message.header.ack_kind,
+                    status,
+                },
+                message,
+            },
+        );
         self.time_id.insert(Timed::new(time, message_id));
         self.id_time.insert(message_id, time);
         self.size += 1;
@@ -201,14 +196,13 @@ impl MessageQueue {
         }
     }
     pub(crate) fn update_ack(
-        &self,
+        &mut self,
         ack_to: &MessageId,
         from: EndpointAddr,
         kind: MessageStatusKind,
     ) {
-        if let Some(hm) = self.hold_messages.get(ack_to) {
-            let mut wg = hm.wait_ack.status.write().unwrap();
-            if let Some(status) = wg.get_mut(&from) {
+        if let Some(hm) = self.hold_messages.get_mut(ack_to) {
+            if let Some(status) = hm.wait_ack.status.get_mut(&from) {
                 // resolved message should not be updated
                 if status.is_resolved(hm.wait_ack.expect) {
                     return;
@@ -236,34 +230,34 @@ impl MessageQueue {
                     }
                 }
             }
-            wg.insert(from, kind);
+            hm.wait_ack.status.insert(from, kind);
         }
     }
-    pub(crate) fn poll_all(&self, context: &MessagePollContext<'_>) {
+    pub(crate) fn poll_all(&mut self, ctx: &ProposalContext) {
         for id in self.hold_messages.keys().copied().collect::<Vec<_>>() {
-            self.poll_message(id, context);
+            self.poll_message(id, ctx);
         }
     }
     // poll with resolved cache
     pub(crate) fn poll_message(
-        &self,
+        &mut self,
         id: MessageId,
-        context: &MessagePollContext<'_>,
+        ctx: &ProposalContext,
     ) -> Option<Poll<()>> {
-        if self.resolved.read().unwrap().contains(&id) {
+        if self.resolved.contains(&id) {
             Some(Poll::Ready(()))
         } else {
-            let resolved = self.poll_message_inner(id, context)?;
+            let resolved = self.poll_message_inner(id, ctx)?;
             if resolved.is_ready() {
-                self.resolved.write().unwrap().insert(id);
+                self.resolved.insert(id);
             }
             Some(resolved)
         }
     }
     pub(crate) fn poll_message_inner(
-        &self,
+        &mut self,
         id: MessageId,
-        context: &MessagePollContext<'_>,
+        ctx: &ProposalContext,
     ) -> Option<Poll<()>> {
         let message = self.hold_messages.get(&id)?;
         if self.blocking {
@@ -273,33 +267,11 @@ impl MessageQueue {
                 return Some(Poll::Pending);
             }
         }
-        message.send_unsent(context);
+        message.send_unsent(ctx);
 
         if message.is_resolved() {
-            // durable: archive the message
-            tracing::debug!("message resolved: {:?}", id);
-            if let Some(durability_service) = context.topic.durability_service.clone() {
-                let durable = message.as_durable();
-                tokio::spawn(async move {
-                    let result = durability_service.archive(durable).await;
-                    if let Err(e) = result {
-                        tracing::error!(?e, "failed to save durable message");
-                    }
-                });
-            }
             Some(Poll::Ready(()))
         } else {
-            // durable: save the message
-            tracing::debug!("message not resolved: {:?}", id);
-            if let Some(durability_service) = context.topic.durability_service.clone() {
-                let durable = message.as_durable();
-                tokio::spawn(async move {
-                    let result = durability_service.save(durable).await;
-                    if let Err(e) = result {
-                        tracing::error!(?e, "failed to save durable message");
-                    }
-                });
-            }
             Some(Poll::Pending)
         }
     }
@@ -307,13 +279,12 @@ impl MessageQueue {
     pub(crate) fn len(&self) -> usize {
         self.size
     }
-    pub(crate) fn swap_out_resolved(&self) -> HashSet<MessageId> {
-        let mut resolved = self.resolved.write().unwrap();
+    pub(crate) fn swap_out_resolved(&mut self) -> HashSet<MessageId> {
         let mut swap_out = HashSet::new();
-        std::mem::swap(&mut swap_out, &mut resolved);
+        std::mem::swap(&mut swap_out, &mut self.resolved);
         swap_out
     }
-    pub(crate) fn blocking_pop(&mut self, context: &MessagePollContext) -> Option<HoldMessage> {
+    pub(crate) fn blocking_pop(&mut self, context: &ProposalContext) -> Option<HoldMessage> {
         let next = self.get_front()?;
         let poll = self.poll_message(next.message.id(), context)?;
         if poll.is_ready() {
@@ -322,53 +293,21 @@ impl MessageQueue {
             None
         }
     }
-    pub(crate) fn flush(&mut self, context: &MessagePollContext) {
+    pub(crate) fn flush(&mut self, context: &ProposalContext) {
         tracing::trace!(blocking = self.blocking, "flushing");
         if self.blocking {
             while let Some(m) = self.blocking_pop(context) {
                 let id = m.message.id();
                 let result = m.resolve();
-                let wait = self.waiting.get_mut().unwrap();
-                if let Some(reporter) = wait.remove(&id) {
-                    let _ = reporter.send(result);
-                }
+                context.resolve_ack(id, result);
             }
         } else {
             for id in self.swap_out_resolved() {
                 if let Some(m) = self.remove(id) {
                     let result = m.resolve();
-                    let wait = self.waiting.get_mut().unwrap();
-                    if let Some(reporter) = wait.remove(&id) {
-                        let _ = reporter.send(result);
-                    }
+                    context.resolve_ack(id, result);
                 }
             }
         }
-    }
-    pub(crate) fn wait_ack(&self, message_id: MessageId) -> WaitAckHandle {
-        let (result_report, result_recv) = flume::bounded(1);
-        let handle = WaitAckHandle {
-            message_id,
-            result: result_recv.into_recv_async(),
-        };
-        self.waiting
-            .write()
-            .unwrap()
-            .insert(message_id, result_report);
-        handle
-    }
-}
-
-impl Topic {
-    
-    pub(crate) async fn single_ack(&self, ack: MessageAck) -> Result<(), crate::Error> {
-        self.node
-            .commit_log(LogEntry::set_state(SetState {
-                topic: self.code().clone(),
-                update: MessageStateUpdate::new(ack.ack_to, HashMap::from([(ack.from, ack.kind)])),
-            }))
-            .await
-            .map_err(crate::Error::contextual("commit single ack"))?;
-        Ok(())
     }
 }

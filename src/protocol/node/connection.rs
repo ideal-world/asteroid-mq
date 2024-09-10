@@ -104,7 +104,6 @@ impl EdgeConnectionInstance {
         };
         let info = NodeConfig {
             id: node.config.id,
-            kind: node.config.kind,
         };
         let my_auth = config.auth.clone();
         let evt = N2nPacket::auth(N2nAuth {

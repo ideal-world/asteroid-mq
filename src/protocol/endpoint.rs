@@ -2,7 +2,7 @@ mod event;
 mod message;
 
 use super::{
-    node::{raft::LogEntry, Node, NodeRef},
+    node::{raft::proposal::Proposal, Node, NodeRef},
     topic::{Topic, TopicCode, TopicRef},
 };
 pub use event::*;
@@ -42,17 +42,19 @@ impl Drop for LocalEndpointInner {
         let endpoint = self.address;
         if let Some(topic) = self.attached_topic.upgrade() {
             tokio::spawn(async move {
-                topic
-                    .node
-                    .commit_log(LogEntry::ep_offline(EndpointOffline {
-                        topic_code: topic.code().clone(),
-                        endpoint,
-                        host: topic.node.id(),
-                    }))
-                    .await
-                    .map_err(|e| {
-                        tracing::warn!("commit ep_offline failed: {:?}", e);
-                    })
+                let node = topic.node();
+                if let Some(raft) = node.raft_opt() {
+                    let _ = raft
+                        .client_write(Proposal::EpOffline(EndpointOffline {
+                            topic_code: topic.code().clone(),
+                            endpoint,
+                            host: node.id(),
+                        }))
+                        .await
+                        .map_err(|e| {
+                            tracing::warn!("commit ep_offline failed: {:?}", e);
+                        });
+                }
             });
         }
     }
@@ -133,9 +135,10 @@ impl LocalEndpoint {
     }
     pub async fn update_interest(&self, interests: Vec<Interest>) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
-            let _ = topic
-                .node
-                .commit_log(LogEntry::ep_interest(EndpointInterest {
+            let node = topic.node();
+            let raft = node.raft().await;
+            let _ = raft
+                .client_write(Proposal::EpInterest(EndpointInterest {
                     topic_code: topic.code().clone(),
                     endpoint: self.address,
                     interests,

@@ -11,7 +11,7 @@ use std::{
 use super::{
     codec::CodecType,
     endpoint::{EndpointInterest, SetState},
-    topic::{TopicCode, TopicData, TopicSnapshot},
+    topic::{Topic, TopicCode, TopicInner},
 };
 use bytes::Bytes;
 use connection::{
@@ -26,7 +26,8 @@ use openraft::{BasicNode, Raft};
 use raft::{
     log_storage::LogStorage,
     network_factory::{RaftNodeInfo, TcpNetworkService},
-    state_machine::StateMachineStore,
+    proposal::Proposal,
+    state_machine::{topic::config::TopicConfig, StateMachineStore},
     MaybeLoadingRaft, TypeConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -117,108 +118,17 @@ pub struct NodeConfig {
     pub id: NodeId,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct NodeData {
-    pub(crate) topics: HashMap<TopicCode, TopicData>,
-    routing: HashMap<NodeId, N2nRoutingInfo>,
+#[derive(Debug)]
+pub struct NodeInner {
+    raft: MaybeLoadingRaft,
+    config: NodeConfig,
+    edge_connections: RwLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
+    topics: RwLock<HashMap<TopicCode, Topic>>,
 }
 
-impl NodeData {
-    pub(crate) fn snapshot(&self) -> NodeSnapshot {
-        let topics = self.topics.iter().map(|(code, topic)| {
-            let snapshot = topic.snapshot();
-            (code.clone(), snapshot)
-        }).collect();
-        let routing = self.routing.clone();
-        NodeSnapshot { topics, routing }
-    }
-    pub(crate) fn apply_delegate_message(
-        &mut self,
-        DelegateMessage { topic, message }: DelegateMessage,
-    ) {
-        if let Some(topic) = self.topics.get_mut(&topic) {
-            topic.hold_new_message(message);
-        } else {
-            todo!()
-        }
-    }
-    pub(crate) fn apply_snapshot(&mut self, snapshot: NodeSnapshot) {
-        self.topics = snapshot.topics.into_iter().map(|(key, value)| {
-            (key, TopicData::from_snapshot(value))
-        }).collect();
-        self.routing = snapshot.routing
-    }
-    pub(crate) fn apply_load_topic(&mut self, LoadTopic { config, mut queue }: LoadTopic) {
-        queue.sort_by_key(|m| m.time);
-        let topic = TopicData::new(config);
-        self.topics
-            .insert(topic.config.code.clone(), topic);
-        let topic = self.topics.get_mut(&config.code).expect("just inserted");
-        topic.apply_snapshot(TopicSnapshot {
-            
-            ep_routing_table: Default::default(),
-            ep_interest_map: Default::default(),
-            ep_latest_active: Default::default(),
-            queue,
-        });
-    }
-    pub(crate) fn apply_set_state(&mut self, SetState { topic, update }: SetState) {
-        let topic = self.get_topic(topic);
-        topic.update_and_flush(update);
-    }
-    pub(crate) fn apply_unload_topic(&self, UnloadTopic { code }: UnloadTopic) {
-        self.remove_topic(&code);
-    }
-    pub(crate) fn apply_ep_online(
-        &mut self,
-        EndpointOnline {
-            topic_code,
-            endpoint,
-            interests,
-            host,
-        }: EndpointOnline,
-    ) {
-        self.get_topic(topic_code)
-            .ep_online(endpoint, interests, host);
-    }
-    pub(crate) fn apply_ep_offline(
-        &mut self,
-        EndpointOffline {
-            topic_code,
-            endpoint,
-            host: _,
-        }: EndpointOffline,
-    ) {
-        self.get_topic(topic_code).ep_offline(&endpoint);
-    }
-    pub(crate) fn apply_ep_interest(
-        &mut self,
-        EndpointInterest {
-            topic_code,
-            endpoint,
-            interests,
-        }: EndpointInterest,
-    ) {
-        self.get_topic(topic_code)
-            .update_ep_interest(&endpoint, interests);
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct NodeSnapshot {
-    topics: HashMap<TopicCode, TopicSnapshot>,
-    routing: HashMap<NodeId, N2nRoutingInfo>,
-}
-
-impl_codec!(
-    struct NodeSnapshot {
-        topics: HashMap<TopicCode, TopicSnapshot>,
-        routing: HashMap<NodeId, N2nRoutingInfo>,
-    }
-);
 #[derive(Debug, Clone)]
 pub struct NodeRef {
-    inner: std::sync::Weak<NodeData>,
+    inner: std::sync::Weak<NodeInner>,
 }
 
 impl NodeRef {
@@ -229,61 +139,37 @@ impl NodeRef {
 
 #[derive(Debug, Clone)]
 pub struct Node {
-    pub(crate) inner: Arc<NodeData>,
+    pub(crate) inner: Arc<NodeInner>,
 }
 
 impl Deref for Node {
-    type Target = NodeData;
+    type Target = NodeInner;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl Default for Node {
-    fn default() -> Self {
-        Self::init(NodeConfig::default())
-    }
-}
-
 impl Node {
-    const RAFT_RANDOM_DURATION_RANGE: std::ops::Range<u64> = 200..1200;
+    pub async fn raft(&self) -> Raft<TypeConfig> {
+        self.raft.get().await
+    }
+    pub fn raft_opt(&self) -> Option<Raft<TypeConfig>> {
+        self.raft.get_opt()
+    }
     pub async fn init(config: NodeConfig) -> Self {
         let id = config.id;
-        let timeout = crate::util::random_duration_ms(Self::RAFT_RANDOM_DURATION_RANGE);
 
         let this = Self {
-            inner: Arc::new_cyclic(|this| NodeData {
+            inner: Arc::new_cyclic(|this| NodeInner {
+                edge_connections: RwLock::new(HashMap::new()),
+                topics: RwLock::new(HashMap::new()),
                 config,
-                topics: Default::default(),
-                routing: ShardedLock::new(HashMap::new()),
-                edge_connections: ShardedLock::new(HashMap::new()),
-                auth: Default::default(),
+                raft: todo!(),
             }),
         };
         let node_ref = this.node_ref();
 
         this
-    }
-    pub(crate) fn snapshot(&self) -> NodeSnapshot {
-        let topics = self.topics;
-        let routing = self.routing;
-        NodeSnapshot {
-            topics: topics
-                .iter()
-                .map(|(code, topic)| (code.clone(), topic.snapshot()))
-                .collect(),
-            routing: routing.clone(),
-        }
-    }
-    pub(crate) fn apply_snapshot(&self, snapshot: NodeSnapshot) {
-        let mut routing = self.routing.write().unwrap();
-        for (code, topic_snapshot) in snapshot.topics {
-            let topic = self.get_topic(code);
-            topic.apply_snapshot(topic_snapshot);
-        }
-        for (node, info) in snapshot.routing {
-            routing.insert(node, info);
-        }
     }
     pub fn node_ref(&self) -> NodeRef {
         NodeRef {
@@ -312,16 +198,6 @@ impl Node {
             kind: EventKind::Ack,
         }
     }
-    pub(crate) fn get_ep_sync(&self) -> EndpointSync {
-        let entries = self
-            .topics
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(code, t)| (code.clone(), t.get_ep_sync()))
-            .collect::<Vec<_>>();
-        EndpointSync { entries }
-    }
 
     pub async fn create_edge_connection<C: NodeConnection>(
         &self,
@@ -329,7 +205,7 @@ impl Node {
     ) -> Result<NodeId, NodeConnectionError> {
         let config = ConnectionConfig {
             attached_node: self.node_ref(),
-            auth: self.auth.read().unwrap().clone(),
+            auth: todo!(),
         };
         let conn_inst = EdgeConnectionInstance::init(config, conn).await?;
         let peer = conn_inst.peer_info.id;
@@ -362,67 +238,6 @@ impl Node {
     }
     pub fn remove_edge_connection(&self, to: NodeId) {
         self.edge_connections.write().unwrap().remove(&to);
-    }
-
-    pub(crate) fn record_routing_info(&self, trace: &NodeTrace) {
-        let prev_node = trace.prev_node();
-        let rg = self.routing.read().unwrap();
-        let mut update = Vec::new();
-        for (hop, node) in trace.trace_back().enumerate().skip(1) {
-            if let Some(routing) = rg.get(node) {
-                if routing.hops > hop as u32 {
-                    update.push((
-                        *node,
-                        N2nRoutingInfo {
-                            next_jump: prev_node,
-                            hops: hop as u32,
-                        },
-                    ));
-                }
-            } else {
-                update.push((
-                    *node,
-                    N2nRoutingInfo {
-                        next_jump: prev_node,
-                        hops: hop as u32,
-                    },
-                ));
-            }
-        }
-        if !update.is_empty() {
-            let mut wg = self.routing.write().unwrap();
-            for (node, info) in update {
-                wg.insert(node, info);
-            }
-        }
-    }
-
-    pub(crate) fn handle_unreachable(&self, unreachable_evt: N2NUnreachableEvent) {
-        let source = unreachable_evt.to;
-        let prev_node = unreachable_evt.trace.prev_node();
-        let unreachable_target = unreachable_evt.unreachable_target;
-        let mut routing_table = self.routing.write().unwrap();
-        if let Some(routing) = routing_table.get(&unreachable_target) {
-            if routing.next_jump == source {
-                routing_table.remove(&unreachable_target);
-            }
-        }
-        if let Some(routing) = routing_table.get(&source) {
-            if routing.next_jump == prev_node {
-                routing_table.remove(&source);
-            }
-        }
-    }
-    pub(crate) fn handle_ep_sync(&self, sync_evt: EndpointSync) {
-        tracing::debug!(?sync_evt, "handle ep sync event");
-        for (code, infos) in sync_evt.entries {
-            let topic = self.get_topic(code);
-            topic.load_ep_sync(infos);
-        }
-    }
-    pub(crate) fn get_next_jump(&self, to: NodeId) -> Option<NodeId> {
-        let routing_table = self.routing.read().unwrap();
-        routing_table.get(&to).map(|info| info.next_jump)
     }
 
     pub(crate) async fn handle_edge_request(
@@ -473,9 +288,37 @@ impl Node {
             )),
         }
     }
+
+    pub fn get_topic(&self, code: &TopicCode) -> Option<Topic> {
+        let topics = self.topics.read().unwrap();
+        topics.get(code).cloned()
+    }
+    pub async fn create_new_topic<C: Into<TopicConfig>>(&self, config: C) -> crate::Result<Topic> {
+        let config: TopicConfig = config.into();
+        let code = config.code.clone();
+        let inner = TopicInner {
+            code: code.clone(),
+            local_endpoints: Default::default(),
+            ack_waiting_pool: Default::default(),
+            node: self.clone(),
+        };
+        let topic = Topic {
+            inner: Arc::new(inner),
+        };
+        let raft = self.raft().await;
+        raft.client_write(Proposal::LoadTopic(LoadTopic {
+            config,
+            queue: Default::default(),
+        }))
+        .await
+        .map_err(crate::Error::contextual("create new topic"))?;
+        let mut topics = self.topics.write().unwrap();
+        topics.insert(code.clone(), topic.clone());
+        Ok(topic)
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct N2nRoutingInfo {
     next_jump: NodeId,
     hops: u32,
@@ -489,6 +332,6 @@ impl_codec!(
 );
 
 pub struct Connection {
-    pub attached_node: sync::Weak<NodeData>,
+    pub attached_node: sync::Weak<NodeInner>,
     pub peer_info: NodeConfig,
 }

@@ -30,7 +30,7 @@ use crate::{
 
 use super::{
     event::{EventKind, N2nPacket, RaftData, RaftResponse},
-    Node, NodeId, NodeRef, NodeSnapshot,
+    Node, NodeId, NodeRef,
 };
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Copy)]
 pub struct TypeConfig {
@@ -81,5 +81,8 @@ impl MaybeLoadingRaft {
                 self.signal.notified().await;
             }
         }
+    }
+    pub fn get_opt(&self) -> Option<Raft<TypeConfig>> {
+        self.loading.get().cloned()
     }
 }

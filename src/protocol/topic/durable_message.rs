@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     impl_codec,
-    protocol::endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind},
+    protocol::{endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind}, node::raft::state_machine::topic::config::TopicConfig},
 };
 
-use super::{config::TopicConfig, TopicCode};
+use super::{TopicCode};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurableMessage {
     pub message: Message,
