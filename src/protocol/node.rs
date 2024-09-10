@@ -160,11 +160,17 @@ impl Node {
         let id = config.id;
 
         let this = Self {
-            inner: Arc::new_cyclic(|this| NodeInner {
-                edge_connections: RwLock::new(HashMap::new()),
-                topics: RwLock::new(HashMap::new()),
-                config,
-                raft: todo!(),
+            inner: Arc::new_cyclic(|this| {
+                let node_ref = NodeRef {
+                    inner: this.clone(),
+                };
+                todo!("init raft");
+                NodeInner {
+                    edge_connections: RwLock::new(HashMap::new()),
+                    topics: RwLock::new(HashMap::new()),
+                    config,
+                    raft: todo!(),
+                }
             }),
         };
         let node_ref = this.node_ref();
