@@ -268,12 +268,12 @@ impl From<u8> for N2NPayloadKind {
 
 #[derive(Debug, Clone)]
 pub struct N2nAuth {
-    pub info: NodeConfig,
+    pub id: NodeId,
     pub auth: NodeAuth,
 }
 impl_codec!(
     struct N2nAuth {
-        info: NodeConfig,
+        id: NodeId,
         auth: NodeAuth,
     }
 );

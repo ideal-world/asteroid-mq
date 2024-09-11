@@ -26,14 +26,19 @@ use crate::{impl_codec, protocol::endpoint::LocalEndpointInner, TimestampSec};
 use super::{
     codec::CodecType,
     endpoint::{
-        DelegateMessage, EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint, LocalEndpointRef, Message, MessageAck, MessageId, MessageStateUpdate, MessageStatusKind, MessageTargetKind, SetState
+        DelegateMessage, EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint,
+        LocalEndpointRef, Message, MessageAck, MessageId, MessageStateUpdate, MessageStatusKind,
+        MessageTargetKind, SetState,
     },
     interest::{Interest, InterestMap, Subject},
     node::{
         event::{EventKind, N2nEvent, N2nPacket},
         raft::{
             proposal::Proposal,
-            state_machine::topic::{config::TopicConfig, wait_ack::{WaitAckHandle, WaitAckResult}},
+            state_machine::topic::{
+                config::TopicConfig,
+                wait_ack::{WaitAckHandle, WaitAckResult},
+            },
             MaybeLoadingRaft,
         },
         Node, NodeId, NodeRef,
@@ -93,7 +98,8 @@ impl TopicRef {
 pub struct TopicInner {
     pub(crate) code: TopicCode,
     pub(crate) node: Node,
-    pub(crate) ack_waiting_pool: Arc<tokio::sync::RwLock<HashMap<MessageId, oneshot::Sender<WaitAckResult>>>>,
+    pub(crate) ack_waiting_pool:
+        Arc<tokio::sync::RwLock<HashMap<MessageId, oneshot::Sender<WaitAckResult>>>>,
     pub(crate) local_endpoints: Arc<ShardedLock<HashMap<EndpointAddr, LocalEndpointRef>>>,
 }
 
@@ -112,9 +118,7 @@ impl TopicInner {
 pub struct Topic {
     pub(crate) inner: Arc<TopicInner>,
 }
-impl Topic {
-
-}
+impl Topic {}
 impl Deref for Topic {
     type Target = TopicInner;
 
@@ -146,18 +150,14 @@ impl TopicInner {
     }
 }
 impl Topic {
-    
     pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, crate::Error> {
         let handle = self.wait_ack(message.id()).await;
         self.node()
-            .raft()
-            .await
-            .client_write(Proposal::DelegateMessage(DelegateMessage {
+            .proposal(Proposal::DelegateMessage(DelegateMessage {
                 topic: self.code().clone(),
                 message,
             }))
-            .await
-            .map_err(crate::Error::contextual("send message"))?;
+            .await?;
         Ok(handle)
     }
     pub fn node(&self) -> Node {
@@ -191,17 +191,14 @@ impl Topic {
                 attached_topic: self.reference(),
             }),
         };
-        let node = self.node();
-        let raft = node.raft().await;
-        let _ = raft
-            .client_write(Proposal::EpOnline(EndpointOnline {
+        self.node()
+            .proposal(Proposal::EpOnline(EndpointOnline {
                 topic_code: topic_code.clone(),
                 endpoint: ep.address,
                 interests: ep.interest.clone(),
                 host: self.node.id(),
             }))
-            .await
-            .map_err(crate::Error::contextual("create endpoint"))?;
+            .await?;
         self.local_endpoints
             .write()
             .unwrap()
@@ -210,16 +207,13 @@ impl Topic {
     }
     pub async fn delete_endpoint(&self, addr: EndpointAddr) -> Result<(), crate::Error> {
         let node = self.node();
-        let raft = node.raft().await;
         self.local_endpoints.write().unwrap().remove(&addr);
         let ep_offline = EndpointOffline {
             endpoint: addr,
             host: self.node.id(),
             topic_code: self.code().clone(),
         };
-        raft.client_write(Proposal::EpOffline(ep_offline))
-            .await
-            .map_err(crate::Error::contextual("delete endpoint"))?;
+        node.proposal(Proposal::EpOffline(ep_offline)).await?;
         Ok(())
     }
 
@@ -230,15 +224,13 @@ impl Topic {
     ) -> Result<(), ()> {
         todo!()
     }
-    pub(crate) async fn single_ack(&self, ack: MessageAck) ->  Result<(), crate::Error> {
-        let raft = self.node().raft().await;
-        raft.client_write(Proposal::SetState(SetState {
-            topic: self.code().clone(),
-            update: MessageStateUpdate::new(ack.ack_to, HashMap::from([(ack.from, ack.kind)]),),
-        }))
-        .await
-        .map_err(crate::Error::contextual("single ack"))?;
-        Ok(())
+    pub(crate) async fn single_ack(&self, ack: MessageAck) -> Result<(), crate::Error> {
+        self.node()
+            .proposal(Proposal::SetState(SetState {
+                topic: self.code().clone(),
+                update: MessageStateUpdate::new(ack.ack_to, HashMap::from([(ack.from, ack.kind)])),
+            }))
+            .await
     }
     // pub(crate) fn ep_online(&self, endpoint: EndpointAddr, interests: Vec<Interest>, host: NodeId) {
     //     let mut message_need_poll = HashSet::new();
@@ -275,6 +267,4 @@ impl Topic {
     //         self.update_and_flush(MessageStateUpdate::new_empty(id));
     //     }
     // }
-
 }
-

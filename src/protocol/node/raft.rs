@@ -3,7 +3,8 @@ use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     io::Cursor,
-    sync::Arc,
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -15,7 +16,9 @@ pub mod network_factory;
 pub mod proposal;
 pub mod raft_node;
 pub mod state_machine;
-use openraft::{storage::RaftLogStorage, Raft};
+pub mod cluster;
+use network_factory::{RaftNodeInfo, TcpNetworkService};
+use openraft::{storage::RaftLogStorage, BasicNode, Raft};
 use proposal::Proposal;
 use tokio::sync::OnceCell;
 
@@ -49,7 +52,7 @@ impl openraft::RaftTypeConfig for TypeConfig {
 }
 #[derive(Clone)]
 pub struct MaybeLoadingRaft {
-    loading: Arc<OnceCell<Raft<TypeConfig>>>,
+    loading: Arc<OnceLock<Raft<TypeConfig>>>,
     signal: Arc<tokio::sync::Notify>,
 }
 
@@ -57,21 +60,22 @@ impl std::fmt::Debug for MaybeLoadingRaft {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let loaded = self.loading.get().is_some();
         f.debug_struct("MaybeLoadingRaft")
-        .field("loaded", &loaded)
-        .finish()
+            .field("loaded", &loaded)
+            .finish()
     }
 }
 
 impl MaybeLoadingRaft {
     pub fn new() -> Self {
         Self {
-            loading: Arc::new(OnceCell::new()),
+            loading: Default::default(),
             signal: tokio::sync::Notify::new().into(),
         }
     }
     pub fn set(&self, raft: Raft<TypeConfig>) {
-        self.loading.set(raft);
-        self.signal.notify_waiters();
+        if self.loading.set(raft).is_ok() {
+            self.signal.notify_waiters();
+        }
     }
     pub async fn get(&self) -> Raft<TypeConfig> {
         loop {
@@ -84,5 +88,15 @@ impl MaybeLoadingRaft {
     }
     pub fn get_opt(&self) -> Option<Raft<TypeConfig>> {
         self.loading.get().cloned()
+    }
+    pub fn net_work_service(&self, id: NodeId, node: BasicNode) -> TcpNetworkService {
+        TcpNetworkService {
+            info: RaftNodeInfo {
+                id,
+                node,
+            },
+            raft: self.clone(),
+            connections: Default::default(),
+        }
     }
 }

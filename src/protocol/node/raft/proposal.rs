@@ -47,7 +47,7 @@ pub struct ProposalContext {
 impl ProposalContext {
     pub fn set_topic_code(&mut self, code: TopicCode) {
         self.topic_code = Some(code);
-    }   
+    }
     pub fn resolve_ack(&self, id: MessageId, result: WaitAckResult) {
         let Some(node) = self.node_ref.upgrade() else {
             return;
@@ -59,9 +59,9 @@ impl ProposalContext {
             return;
         };
         tokio::spawn(async move {
-            topic.ack_waiting_pool.write().await.remove(&id).map(|tx| {
+            if let Some(tx) = topic.ack_waiting_pool.write().await.remove(&id) {
                 let _ = tx.send(result);
-            });
+            }
         });
     }
     pub fn dispatch_message(&self, message: &Message, endpoint: EndpointAddr) {}

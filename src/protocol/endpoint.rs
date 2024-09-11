@@ -43,17 +43,13 @@ impl Drop for LocalEndpointInner {
         if let Some(topic) = self.attached_topic.upgrade() {
             tokio::spawn(async move {
                 let node = topic.node();
-                if let Some(raft) = node.raft_opt() {
-                    let _ = raft
-                        .client_write(Proposal::EpOffline(EndpointOffline {
-                            topic_code: topic.code().clone(),
-                            endpoint,
-                            host: node.id(),
-                        }))
-                        .await
-                        .map_err(|e| {
-                            tracing::warn!("commit ep_offline failed: {:?}", e);
-                        });
+                let result = node.proposal(Proposal::EpOffline(EndpointOffline {
+                    topic_code: topic.code().clone(),
+                    endpoint,
+                    host: node.id(),
+                })).await;
+                if let Err(err) = result {
+                    tracing::error!(?err, "offline endpoint failed");
                 }
             });
         }
@@ -136,16 +132,11 @@ impl LocalEndpoint {
     pub async fn update_interest(&self, interests: Vec<Interest>) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
             let node = topic.node();
-            let raft = node.raft().await;
-            let _ = raft
-                .client_write(Proposal::EpInterest(EndpointInterest {
-                    topic_code: topic.code().clone(),
-                    endpoint: self.address,
-                    interests,
-                }))
-                .await
-                .map_err(crate::Error::contextual("update_interest"))?;
-            Ok(())
+            node.proposal(Proposal::EpInterest(EndpointInterest {
+                topic_code: topic.code().clone(),
+                endpoint: self.address,
+                interests,
+            })).await
         } else {
             Err(crate::Error::new(
                 "topic not found",

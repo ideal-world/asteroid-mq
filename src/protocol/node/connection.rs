@@ -10,7 +10,7 @@ use crate::protocol::{
     },
 };
 
-use super::{N2nPacket, NodeAuth, NodeConfig, NodeRef};
+use super::{N2nPacket, NodeAuth, NodeConfig, NodeId, NodeRef};
 
 pub mod tokio_tcp;
 pub mod tokio_ws;
@@ -65,7 +65,7 @@ pub struct EdgeConnectionInstance {
     pub config: ConnectionConfig,
     pub outbound: flume::Sender<N2nPacket>,
     pub alive: Arc<std::sync::atomic::AtomicBool>,
-    pub peer_info: NodeConfig,
+    pub peer_id: NodeId,
     pub peer_auth: NodeAuth,
     pub finish_signal: flume::Receiver<()>,
 }
@@ -102,12 +102,9 @@ impl EdgeConnectionInstance {
                 "node was dropped",
             ));
         };
-        let info = NodeConfig {
-            id: node.config.id,
-        };
         let my_auth = config.auth.clone();
         let evt = N2nPacket::auth(N2nAuth {
-            info,
+            id: node.id(),
             auth: my_auth,
         });
         sink.send(evt).await?;
@@ -127,7 +124,7 @@ impl EdgeConnectionInstance {
                 NodeConnectionError::new(NodeConnectionErrorKind::Decode(e), "decode auth")
             })?
             .0; 
-        let peer_id = auth_event.info.id;
+        let peer_id = auth_event.id;
         tracing::debug!(auth=?auth_event, "received auth");
 
         if let Some(existed_connection) = node.get_edge_connection(peer_id) {
@@ -222,7 +219,7 @@ impl EdgeConnectionInstance {
         let _handle = {
             let alive_flag = Arc::clone(&alive_flag);
             let attached_node = config.attached_node.clone();
-            let peer_id = auth_event.info.id;
+            let peer_id = auth_event.id;
 
             tokio::spawn(async move {
                 let result = task.await;
@@ -243,7 +240,7 @@ impl EdgeConnectionInstance {
             config: config_clone,
             alive: alive_flag,
             outbound: outbound_tx,
-            peer_info: auth_event.info,
+            peer_id: auth_event.id,
             peer_auth: auth_event.auth,
             finish_signal,
         })

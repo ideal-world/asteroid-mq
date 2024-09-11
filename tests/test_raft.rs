@@ -54,7 +54,7 @@ async fn test_raft() {
     let info = provider.info.clone();
     let mut nodes = Vec::new();
     for (node_id, addr) in info.nodes.iter() {
-        let node = Node::init(NodeConfig::new_cluster_by_id(*node_id));
+        let node = Node::new(NodeConfig::new_cluster_by_id(*node_id));
         node.create_cluster(provider.clone(), *addr).await.unwrap();
         tracing::info!("node {:?} listen on {:?}", node_id, addr);
         nodes.push(node)

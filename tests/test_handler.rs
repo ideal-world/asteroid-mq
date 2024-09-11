@@ -29,7 +29,7 @@ async fn hello_world_handler(Json(hello_world): Json<HelloWorld>) -> asteroid_mq
 
 #[tokio::test]
 async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
-    let node = Node::init(NodeConfig::new_cluster());
+    let node = Node::new(NodeConfig::new_cluster());
     node.set_cluster_size(1);
     let topic = node.get_or_init_topic(TopicCode::const_new("test"));
     let _evt_loop_handle = topic

@@ -70,6 +70,14 @@ impl StateMachineStore {
             node_ref,
         }
     }
+    pub(crate) unsafe fn new_uninitialized() -> Self {
+        Self {
+            state_machine: RwLock::new(StateMachineData::default()),
+            snapshot_idx: AtomicU64::new(0),
+            current_snapshot: RwLock::new(None),
+            node_ref: NodeRef::default(),
+        }
+    }
 }
 impl RaftSnapshotBuilder<TypeConfig> for Arc<StateMachineStore> {
     #[tracing::instrument(level = "trace", skip(self))]
@@ -154,6 +162,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
             match entry.payload {
                 EntryPayload::Blank => res.push(RaftResponse { result: Ok(()) }),
                 EntryPayload::Normal(ref proposal) => {
+                    tracing::debug!(?proposal, "applying proposal to state machine");
                     let context = ProposalContext {
                         node_ref: self.node_ref.clone(),
                         topic_code: None,

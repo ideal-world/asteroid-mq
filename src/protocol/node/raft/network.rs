@@ -7,9 +7,11 @@ use std::{
 };
 
 use openraft::{
-    error::{InstallSnapshotError, RPCError, RaftError, RemoteError, Unreachable},
+    error::{
+        ClientWriteError, InstallSnapshotError, RPCError, RaftError, RemoteError, Unreachable,
+    },
     raft::{
-        AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest,
+        AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
         InstallSnapshotResponse, VoteRequest, VoteResponse,
     },
     BasicNode, Raft, RaftNetwork,
@@ -27,8 +29,7 @@ use tokio::{
 use crate::prelude::NodeId;
 
 use super::{
-    network_factory::{RaftNodeInfo, RaftTcpConnection, RaftTcpConnectionMap, TcpNetworkService},
-    TypeConfig,
+    network_factory::{RaftNodeInfo, RaftTcpConnection, RaftTcpConnectionMap, TcpNetworkService}, proposal::Proposal, TypeConfig
 };
 
 pub struct TcpNetwork {
@@ -55,6 +56,7 @@ pub(super) enum Request {
     Vote(VoteRequest<NodeId>),
     AppendEntries(AppendEntriesRequest<TypeConfig>),
     InstallSnapshot(InstallSnapshotRequest<TypeConfig>),
+    Proposal(Proposal),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,6 +65,12 @@ pub(super) enum Response {
     AppendEntries(Result<AppendEntriesResponse<NodeId>, RaftError<NodeId>>),
     InstallSnapshot(
         Result<InstallSnapshotResponse<NodeId>, RaftError<NodeId, InstallSnapshotError>>,
+    ),
+    Proposal(
+        Result<
+            ClientWriteResponse<TypeConfig>,
+            RaftError<NodeId, ClientWriteError<NodeId, BasicNode>>,
+        >,
     ),
 }
 #[derive(Debug, Serialize, Deserialize)]

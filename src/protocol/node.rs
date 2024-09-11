@@ -3,7 +3,8 @@ pub mod edge;
 pub mod event;
 pub mod raft;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    net::SocketAddr,
     ops::Deref,
     sync::{self, atomic::AtomicUsize, Arc, RwLock},
 };
@@ -22,8 +23,9 @@ use crossbeam::sync::ShardedLock;
 use edge::{EdgeError, EdgeErrorKind, EdgeMessage, EdgePayload};
 use event::{EventKind, N2NUnreachableEvent, N2nEvent, N2nPacket, NodeAuth, NodeKind, NodeTrace};
 use futures_util::TryFutureExt;
-use openraft::{BasicNode, Raft};
+use openraft::{docs::components::state_machine, BasicNode, ChangeMembers, Raft};
 use raft::{
+    cluster::ClusterProvider,
     log_storage::LogStorage,
     network_factory::{RaftNodeInfo, TcpNetworkService},
     proposal::Proposal,
@@ -51,6 +53,7 @@ pub struct NodeId {
 impl From<u64> for NodeId {
     fn from(id: u64) -> Self {
         let mut bytes = [0; 16];
+        bytes[0] = Self::KIND_INDEXED;
         bytes[1..9].copy_from_slice(&id.to_be_bytes());
         NodeId { bytes }
     }
@@ -85,6 +88,7 @@ impl std::fmt::Display for NodeId {
 impl NodeId {
     pub const KIND_SNOWFLAKE: u8 = 0x00;
     pub const KIND_SHA256: u8 = 0x01;
+    pub const KIND_INDEXED: u8 = 0x02;
     pub fn sha256(bytes: &[u8]) -> Self {
         let dg = <sha2::Sha256 as sha2::Digest>::digest(bytes);
         let mut bytes = [0; 16];
@@ -116,17 +120,20 @@ impl Default for NodeId {
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
     pub id: NodeId,
+    pub addr: SocketAddr,
+    pub raft: openraft::Config,
 }
 
 #[derive(Debug)]
 pub struct NodeInner {
     raft: MaybeLoadingRaft,
+    network: TcpNetworkService,
     config: NodeConfig,
     edge_connections: RwLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
     topics: RwLock<HashMap<TopicCode, Topic>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NodeRef {
     inner: std::sync::Weak<NodeInner>,
 }
@@ -153,29 +160,148 @@ impl Node {
     pub async fn raft(&self) -> Raft<TypeConfig> {
         self.raft.get().await
     }
+    pub async fn init_raft<C: ClusterProvider>(
+        &self,
+        mut cluster_provider: C,
+    ) -> Result<(), crate::Error> {
+        if self.raft_opt().is_some() {
+            return Ok(());
+        }
+        let node_ref = self.node_ref();
+        let id = self.id();
+        let maybe_loading_raft = self.raft.clone();
+        let tcp_service = self.network.clone();
+        let state_machine_store = StateMachineStore::new(node_ref);
+        let raft_config = self
+            .config
+            .raft
+            .clone()
+            .validate()
+            .map_err(crate::Error::contextual_custom("validate raft config"))?;
+        tcp_service.run();
+        let raft = Raft::<TypeConfig>::new(
+            id,
+            Arc::new(raft_config),
+            tcp_service.clone(),
+            LogStorage::default(),
+            Arc::new(state_machine_store),
+        )
+        .await
+        .map_err(crate::Error::contextual_custom("create raft node"))?;
+        let members = cluster_provider
+            .pristine_nodes()
+            .await?
+            .into_iter()
+            .map(|(id, addr)| {
+                let node = BasicNode::new(addr);
+                (id, node)
+            })
+            .collect::<BTreeMap<_, _>>();
+        raft.initialize(members.clone())
+            .await
+            .map_err(crate::Error::contextual_custom("init raft node"))?;
+        maybe_loading_raft.set(raft.clone());
+        {
+            let mut prev_members = members.keys().cloned().collect::<HashSet<_>>();
+            tokio::spawn(async move {
+                loop {
+                    let members = cluster_provider.next_update().await;
+                    let members = match members {
+                        Ok(members) => members,
+                        Err(e) => {
+                            tracing::error!(?e, "cluster provider error");
+                            continue;
+                        }
+                    };
+                    let members = members
+                        .into_iter()
+                        .map(|(id, addr)| {
+                            let node = BasicNode::new(addr);
+                            (id, node)
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    let now_ids = members.keys().cloned().collect::<HashSet<_>>();
+                    let added_ids = now_ids
+                        .difference(&prev_members)
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    let deleted_ids = prev_members
+                        .difference(&now_ids)
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    let mut added_members = BTreeMap::new();
+                    for node_id in added_ids {
+                        let node = members.get(&node_id).unwrap().clone();
+                        let result = raft.add_learner(node_id, node.clone(), true).await;
+                        if let Err(e) = result {
+                            tracing::error!(?e, "add learner error");
+                        }
+                        added_members.insert(node_id, node);
+                    }
+                    if !deleted_ids.is_empty() {
+                        let remove = ChangeMembers::RemoveNodes(deleted_ids);
+                        let _ = raft
+                            .change_membership(remove, false)
+                            .await
+                            .inspect_err(|e| {
+                                tracing::error!(?e, "remove nodes error");
+                            });
+                    }
+                    if !added_members.is_empty() {
+                        let add = ChangeMembers::AddNodes(added_members);
+                        let _ = raft.change_membership(add, false).await.inspect_err(|e| {
+                            tracing::error!(?e, "add voters error");
+                        });
+                    }
+                    prev_members = now_ids.clone();
+                }
+            });
+        }
+        Ok(())
+    }
+    pub(crate) async fn proposal(&self, proposal: Proposal) -> Result<(), crate::Error> {
+        let raft = self.raft().await;
+        let Some(leader) = raft.current_leader().await else {
+            return Err(crate::Error::new(
+                "no leader",
+                crate::error::ErrorKind::Offline,
+            ));
+        };
+        let this = self.id();
+        if this == leader {
+            raft.client_write(proposal)
+                .await
+                .map_err(crate::Error::contextual_custom("client write"))?;
+            Ok(())
+        } else {
+            let Some(connection) = self.network.connections.read().await.get(&leader).cloned()
+            else {
+                return Err(crate::Error::new(
+                    "no connection to leader",
+                    crate::error::ErrorKind::Offline,
+                ));
+            };
+            connection.proposal(proposal).await?;
+            Ok(())
+        }
+    }
+
     pub fn raft_opt(&self) -> Option<Raft<TypeConfig>> {
         self.raft.get_opt()
     }
-    pub async fn init(config: NodeConfig) -> Self {
-        let id = config.id;
-
-        let this = Self {
-            inner: Arc::new_cyclic(|this| {
-                let node_ref = NodeRef {
-                    inner: this.clone(),
-                };
-                todo!("init raft");
-                NodeInner {
-                    edge_connections: RwLock::new(HashMap::new()),
-                    topics: RwLock::new(HashMap::new()),
-                    config,
-                    raft: todo!(),
-                }
-            }),
+    pub fn new(config: NodeConfig) -> Self {
+        let raft = MaybeLoadingRaft::new();
+        let network = raft.net_work_service(config.id, BasicNode::new(config.addr));
+        let inner = NodeInner {
+            edge_connections: RwLock::new(HashMap::new()),
+            topics: RwLock::new(HashMap::new()),
+            config,
+            raft,
+            network,
         };
-        let node_ref = this.node_ref();
-
-        this
+        Self {
+            inner: Arc::new(inner),
+        }
     }
     pub fn node_ref(&self) -> NodeRef {
         NodeRef {
@@ -211,10 +337,10 @@ impl Node {
     ) -> Result<NodeId, NodeConnectionError> {
         let config = ConnectionConfig {
             attached_node: self.node_ref(),
-            auth: todo!(),
+            auth: NodeAuth {},
         };
         let conn_inst = EdgeConnectionInstance::init(config, conn).await?;
-        let peer = conn_inst.peer_info.id;
+        let peer = conn_inst.peer_id;
         {
             let mut wg = self.edge_connections.write().unwrap();
             wg.insert(peer, Arc::new(conn_inst));
@@ -301,25 +427,17 @@ impl Node {
     }
     pub async fn create_new_topic<C: Into<TopicConfig>>(&self, config: C) -> crate::Result<Topic> {
         let config: TopicConfig = config.into();
-        let code = config.code.clone();
-        let inner = TopicInner {
-            code: code.clone(),
-            local_endpoints: Default::default(),
-            ack_waiting_pool: Default::default(),
-            node: self.clone(),
-        };
-        let topic = Topic {
-            inner: Arc::new(inner),
-        };
-        let raft = self.raft().await;
-        raft.client_write(Proposal::LoadTopic(LoadTopic {
-            config,
+        tracing::info!(?config, "create new topic");
+        self.proposal(Proposal::LoadTopic(LoadTopic {
+            config: config.clone(),
             queue: Default::default(),
         }))
-        .await
-        .map_err(crate::Error::contextual("create new topic"))?;
-        let mut topics = self.topics.write().unwrap();
-        topics.insert(code.clone(), topic.clone());
+        .await?;
+        let topics = self.topics.read().unwrap();
+        let topic = topics
+            .get(&config.code)
+            .cloned()
+            .ok_or_else(|| crate::Error::unknown("topic proposal committed but still not found"))?;
         Ok(topic)
     }
 }
