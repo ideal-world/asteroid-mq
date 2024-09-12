@@ -133,7 +133,7 @@ impl RaftTcpConnection {
     fn next_seq(&self) -> u64 {
         self.local_seq.fetch_add(1, atomic::Ordering::Relaxed)
     }
-    pub(crate) async fn proposal(&self, proposal: Proposal) -> crate::Result<()> {
+    pub(crate) async fn proposal(&self, proposal: Proposal) -> crate::Result<ClientWriteResponse<TypeConfig>> {
         let req = Request::Proposal(proposal);
         let resp = self
             .send_request(req)
@@ -150,7 +150,7 @@ impl RaftTcpConnection {
         let resp = resp.map_err(crate::Error::contextual("remote proposal"))?;
         tracing::warn!(?resp, "proposal response");
 
-        Ok(())
+        Ok(resp)
     }
     pub(super) async fn send_request(
         &self,

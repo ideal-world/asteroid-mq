@@ -1695,9 +1695,7 @@ checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
 
 [[package]]
 name = "openraft"
-version = "0.9.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f633802689f2dcce7c4be2419b657aeb3d579f92f93a99cb92985aa8f21d64c"
+version = "0.9.16"
 dependencies = [
  "anyerror",
  "byte-unit",
@@ -1718,9 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "openraft-macros"
-version = "0.9.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "798585f0b7bbd3790680f9ab4097d9f10513947b619a7d8dcb6e88fd11e4dbba"
+version = "0.9.16"
 dependencies = [
  "chrono",
  "proc-macro2",

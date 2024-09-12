@@ -86,9 +86,9 @@ impl std::fmt::Display for NodeId {
 }
 
 impl NodeId {
-    pub const KIND_SNOWFLAKE: u8 = 0x00;
+    pub const KIND_INDEXED: u8 = 0x00;
     pub const KIND_SHA256: u8 = 0x01;
-    pub const KIND_INDEXED: u8 = 0x02;
+    pub const KIND_SNOWFLAKE: u8 = 0x02;
     pub fn sha256(bytes: &[u8]) -> Self {
         let dg = <sha2::Sha256 as sha2::Digest>::digest(bytes);
         let mut bytes = [0; 16];
@@ -268,11 +268,10 @@ impl Node {
             ));
         };
         let this = self.id();
-        if this == leader {
+        let client_write_result = if this == leader {
             raft.client_write(proposal)
                 .await
-                .map_err(crate::Error::contextual_custom("client write"))?;
-            Ok(())
+                .map_err(crate::Error::contextual_custom("client write"))?
         } else {
             let Some(connection) = self.network.connections.read().await.get(&leader).cloned()
             else {
@@ -281,9 +280,14 @@ impl Node {
                     crate::error::ErrorKind::Offline,
                 ));
             };
-            connection.proposal(proposal).await?;
-            Ok(())
-        }
+            connection.proposal(proposal).await?
+        };
+        let id = client_write_result.log_id();
+        raft.wait(None)
+            .applied_index_at_least(Some(id.index), "proposal resolved")
+            .await
+            .map_err(crate::Error::contextual_custom("wait for proposal"))?;
+        Ok(())
     }
 
     pub fn raft_opt(&self) -> Option<Raft<TypeConfig>> {

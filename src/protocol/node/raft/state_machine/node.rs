@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::{
     prelude::{NodeId, Topic, TopicCode},
@@ -54,6 +55,11 @@ impl NodeData {
                 }),
             };
             node.topics.write().unwrap().insert(code, topic);
+            let keys = node.topics.read().unwrap().keys().cloned().collect::<Vec<_>>();
+            tracing::info!(id=?node.id(), "topics: {:?}", keys);
+            
+        } else {
+            tracing::warn!("node is dropped");
         }
     }
     pub(crate) fn apply_set_state(

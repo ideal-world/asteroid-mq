@@ -1,5 +1,5 @@
-use std::{collections::HashMap, future::Future, time::Duration};
 
+use std::{collections::HashMap, future::Future, time::Duration};
 use asteroid_mq::{
     prelude::TopicCode,
     protocol::{

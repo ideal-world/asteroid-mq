@@ -36,12 +36,29 @@ use asteroid_mq::{
         topic::TopicCode,
     },
 };
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_nodes() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+    let console_layer = console_subscriber::spawn();
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(
+                tracing_subscriber::filter::EnvFilter::from_default_env()
+                    .add_directive(tracing_subscriber::filter::Directive::from_str("info").unwrap())
+                    .add_directive(
+                        tracing_subscriber::filter::Directive::from_str("asteroid_mq=debug")
+                            .unwrap(),
+                    ).add_directive(
+                        tracing_subscriber::filter::Directive::from_str("openraft=off")
+                            .unwrap(),
+                    )
+
+            ),
+        )
         .init();
+
     let raft_config = openraft::Config {
         cluster_name: "test".to_string(),
         heartbeat_interval: 200,
@@ -85,6 +102,7 @@ async fn test_nodes() {
             panic!("init node error: {:?}", err);
         }
     }
+    drop(init_tasks);
     const CODE: TopicCode = TopicCode::const_new("events");
     fn topic_config() -> TopicConfig {
         TopicConfig {
@@ -97,6 +115,22 @@ async fn test_nodes() {
         }
     }
     let node_server = nodes.get(&node_id_1).unwrap().clone();
+    let node_client = nodes.get(&node_id_2).unwrap().clone();
+
+    node_server
+        .raft()
+        .await
+        .with_raft_state(|s| {
+            tracing::error!(?s.membership_state);
+        })
+        .await;
+    node_server.raft().await.runtime_config().elect(false);
+    node_client.raft().await.runtime_config().elect(false);
+    node_server.raft().await.runtime_config().heartbeat(false);
+    node_client.raft().await.runtime_config().heartbeat(false);
+    node_server.raft().await.runtime_config().tick(false);
+    node_client.raft().await.runtime_config().tick(false);
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let event_topic = node_server.create_new_topic(topic_config()).await.unwrap();
     let node_server_user = event_topic
         .create_endpoint(vec![Interest::new("events/**")])
@@ -113,7 +147,6 @@ async fn test_nodes() {
         }
     });
 
-    let node_client = nodes.get(&node_id_2).unwrap().clone();
     node_client.raft().await;
     let event_topic = node_client.get_topic(&CODE).unwrap();
     let node_client_sender = event_topic

@@ -139,7 +139,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
             state_machine.last_membership.clone(),
         ))
     }
-
+    
     async fn apply<I>(
         &mut self,
         entries: I,
@@ -151,14 +151,10 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         I: IntoIterator<Item = <TypeConfig as RaftTypeConfig>::Entry> + openraft::OptionalSend,
         I::IntoIter: openraft::OptionalSend,
     {
-        let mut res = Vec::new(); //No `with_capacity`; do not know `len` of iterator
-
         let mut sm = self.state_machine.write().await;
+        let mut res = Vec::new(); //No `with_capacity`; do not know `len` of iterator
         for entry in entries {
-            tracing::debug!(%entry.log_id, "replicate to sm");
-
             sm.last_applied_log = Some(entry.log_id);
-
             match entry.payload {
                 EntryPayload::Blank => res.push(RaftResponse { result: Ok(()) }),
                 EntryPayload::Normal(ref proposal) => {
@@ -173,28 +169,42 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
                         ) => {
                             sm.node
                                 .apply_delegate_message(delegate_message.clone(), context);
+                            res.push(RaftResponse { result: Ok(()) })
+
                         }
                         crate::protocol::node::raft::proposal::Proposal::SetState(set_state) => {
                             sm.node.apply_set_state(set_state.clone(), context);
+                            res.push(RaftResponse { result: Ok(()) })
+
                         }
                         crate::protocol::node::raft::proposal::Proposal::LoadTopic(load_topic) => {
                             sm.node.apply_load_topic(load_topic.clone(), context);
+                            tracing::debug!(?load_topic, "topic loaded");
+                            res.push(RaftResponse { result: Ok(()) })
+
                         }
                         crate::protocol::node::raft::proposal::Proposal::UnloadTopic(
                             unload_topic,
                         ) => {
                             sm.node.apply_unload_topic(unload_topic.clone());
+                            res.push(RaftResponse { result: Ok(()) })
+
                         }
                         crate::protocol::node::raft::proposal::Proposal::EpOnline(ep_online) => {
                             sm.node.apply_ep_online(ep_online.clone(), context);
+                            res.push(RaftResponse { result: Ok(()) })
+
                         }
                         crate::protocol::node::raft::proposal::Proposal::EpOffline(ep_offline) => {
                             sm.node.apply_ep_offline(ep_offline.clone(), context);
+                            res.push(RaftResponse { result: Ok(()) })
+
                         }
                         crate::protocol::node::raft::proposal::Proposal::EpInterest(
                             ep_interest,
                         ) => {
                             sm.node.apply_ep_interest(ep_interest.clone(), context);
+                            res.push(RaftResponse { result: Ok(()) })
                         }
                     }
                 }
