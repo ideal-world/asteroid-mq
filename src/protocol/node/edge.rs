@@ -44,24 +44,19 @@ pub struct EdgeRequest {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EdgeResponse {
     pub id: u64,
-    pub result: EdgeResponseKind,
+    pub result: Result<EdgeResponseKind, EdgeError>,
 }
 
-impl_codec!(
-    struct EdgeResponse {
-        id: u64,
-        result: Bytes,
-    }
-);
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum EdgeResponseKind {
     SendMessage(WaitAckResult),
 }
 impl EdgeResponse {
-    pub fn send_message(id: u64, result: WaitAckResult) -> Self {
+    pub fn from_result(id: u64, result: Result<EdgeResponseKind, EdgeError>) -> Self {
         Self {
             id,
-            result: EdgeResponseKind::SendMessage(result),
+            result,
         }
     }
 }

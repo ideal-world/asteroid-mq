@@ -1,11 +1,13 @@
-use crate::{impl_codec, prelude::{DecodeError, NodeId}, protocol::codec::CodecType};
+use crate::{
+    impl_codec,
+    prelude::{DecodeError, NodeId},
+    protocol::codec::CodecType,
+};
 use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 
-use super::{codec::CodecKind, EdgeResponse};
-
-
+use super::{codec::CodecKind, EdgePayload, EdgeResponse};
 
 #[derive(Debug, Clone)]
 
@@ -70,8 +72,6 @@ pub struct EdgePacketId {
     pub bytes: [u8; 16],
 }
 
-
-
 impl std::fmt::Debug for EdgePacketId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("N2NEventId")
@@ -119,17 +119,6 @@ impl EdgePacket {
     pub fn id(&self) -> EdgePacketId {
         self.header.id
     }
-    pub fn auth(auth: Auth) -> Self {
-        let header = EdgePacketHeader {
-            id: EdgePacketId::new_snowflake(),
-            codec: CodecKind::CBOR,
-        };
-        let payload = EdgePayload::Auth(EdgeAuth {
-            id: NodeId::new_snowflake(),
-            auth,
-        });
-        Self { header, payload: payload.encode() }
-    }
 }
 
 #[repr(u8)]
@@ -147,7 +136,6 @@ impl_codec!(
         Request = 0x30,
         Response = 0x31,
         Push = 0x32,
-
     }
 );
 
@@ -175,8 +163,7 @@ impl_codec!(
 );
 
 #[derive(Debug, Clone, Default)]
-pub struct Auth {
-}
+pub struct Auth {}
 
 impl_codec!(
     struct Auth {}

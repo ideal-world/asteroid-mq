@@ -356,9 +356,9 @@ impl Node {
     pub(crate) async fn handle_edge_request(
         &self,
         from: NodeId,
-        edge_request: edge::EdgeRequest,
-    ) -> Result<edge::EdgeResponse, edge::EdgeError> {
-        match edge_request.kind {
+        edge_request_kind: edge::EdgeRequestKind,
+    ) -> Result<edge::EdgeResponseKind, edge::EdgeError> {
+        match edge_request_kind {
             edge::EdgeRequestKind::SendMessage(edge_message) => {
                 let (message, topic_code) = edge_message.into_message();
                 let Some(topic) = self.get_topic(&topic_code) else {
@@ -378,12 +378,12 @@ impl Node {
                     })
                     .await?;
                 let response = handle.await;
-                Ok(response.encode_to_bytes())
+                Ok(edge::EdgeResponseKind::SendMessage(response))
             }
             _ => {
                 Err(EdgeError::new(
                     "unsupported request kind",
-                    EdgeErrorKind::UnsupportedRequestKind,
+                    EdgeErrorKind::Internal,
                 ))
             }
         }

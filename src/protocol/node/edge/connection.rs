@@ -9,7 +9,7 @@ use crate::protocol::{
     },
 };
 
-use super::{super::{Auth, EdgePacket, NodeId, NodeRef}, codec::CodecRegistry};
+use super::{super::{Auth, EdgePacket, NodeId, NodeRef}, codec::{CodecKind, CodecRegistry}};
 
 pub mod tokio_tcp;
 // pub mod tokio_ws;
@@ -56,7 +56,8 @@ pub trait NodeConnection:
 pub struct ConnectionConfig {
     pub attached_node: NodeRef,
     pub peer_id: NodeId,
-    pub codec: Arc<CodecRegistry>,
+    pub codec_registry: Arc<CodecRegistry>,
+    pub codec: CodecKind,
     pub auth: Auth,
 }
 
@@ -97,6 +98,13 @@ impl EdgeConnectionInstance {
         let config_clone = config.clone();
         let (mut sink, mut stream) = connection.split();
         let peer_id = config.peer_id;
+        let codec_kind = config.codec;
+        let codec = config.codec_registry.get(codec_kind).ok_or_else(|| {
+            NodeConnectionError::new(
+                NodeConnectionErrorKind::Protocol,
+                "codec is not registered",
+            )
+        })?;
         let node = config.attached_node.upgrade().ok_or_else(|| {
             NodeConnectionError::new(
                 NodeConnectionErrorKind::Closed,
@@ -110,7 +118,7 @@ impl EdgeConnectionInstance {
                 PacketOut(EdgePacket),
             }
             let internal_outbound_tx = outbound_tx.clone();
-            let codec_registry = config.codec.clone();
+            let codec_registry = config.codec_registry.clone();
             let task = async move {
                 loop {
                     let event = futures_util::select! {
@@ -142,13 +150,15 @@ impl EdgeConnectionInstance {
                                 warn!("failed to decode packet");
                                 continue;
                             };
+                            let outbound = internal_outbound_tx.clone();
                             match payload {
                                 EdgePayload::Request(request) => {
                                     tokio::spawn(async move {
-                                        let resp = node.handle_edge_request(peer_id, request).await;
-                                        let resp = EdgeResponse::from_result(id, resp);
-                                        let packet = EdgePacket::edge_response(resp);
-                                        outbound.send(packet).unwrap_or_else(|e| {
+                                        let seq_id = request.seq_id;
+                                        let resp = node.handle_edge_request(peer_id, request.kind).await;
+                                        let resp = EdgeResponse::from_result(seq_id, resp);
+                                        let resp = EdgePacket::n(CodecType::Json, EdgePayload::Response(resp));
+                                        outbound.send(resp).unwrap_or_else(|e| {
                                             warn!(?e, "failed to send edge response");
                                         });
                                     });
