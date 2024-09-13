@@ -8,7 +8,9 @@ use chrono::{TimeZone, Utc};
 
 use crate::protocol::endpoint::EndpointAddr;
 
-use crate::protocol::node::{event::N2nPacketId, NodeId};
+use crate::protocol::node::{NodeId};
+
+use super::node::edge::packet::EdgePacketId;
 #[macro_export]
 macro_rules! impl_codec {
     ( struct $ImplTy: ident { $($field:ident: $Type:ty),* $(,)? }) => {
@@ -495,17 +497,17 @@ impl CodecType for EndpointAddr {
     }
 }
 
-impl CodecType for N2nPacketId {
+impl CodecType for EdgePacketId {
     fn decode(mut bytes: Bytes) -> Result<(Self, Bytes), DecodeError> {
-        if bytes.len() < size_of::<N2nPacketId>() {
+        if bytes.len() < size_of::<EdgePacketId>() {
             return Err(DecodeError::new::<Self>(
                 "too short payload: expect EndpointAddr",
             ));
         }
         Ok((
-            N2nPacketId {
+            EdgePacketId {
                 bytes: bytes
-                    .split_to(size_of::<N2nPacketId>())
+                    .split_to(size_of::<EdgePacketId>())
                     .as_ref()
                     .try_into()
                     .expect("have enough bytes"),

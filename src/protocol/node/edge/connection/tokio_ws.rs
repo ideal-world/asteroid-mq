@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures_util::{Sink, Stream};
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 
-use crate::protocol::node::event::N2nPacket;
+use crate::protocol::node::edge::packet::EdgePacket;
 
 use super::{NodeConnection, NodeConnectionError, NodeConnectionErrorKind};
 
@@ -26,7 +26,7 @@ impl TokioWs {
         Ok(Self::new(ws_stream))
     }
 }
-impl Sink<N2nPacket> for TokioWs {
+impl Sink<EdgePacket> for TokioWs {
     type Error = NodeConnectionError;
 
     fn poll_ready(
@@ -41,7 +41,7 @@ impl Sink<N2nPacket> for TokioWs {
         })
     }
 
-    fn start_send(self: std::pin::Pin<&mut Self>, item: N2nPacket) -> Result<(), Self::Error> {
+    fn start_send(self: std::pin::Pin<&mut Self>, item: EdgePacket) -> Result<(), Self::Error> {
         self.project()
             .inner
             .start_send(Message::binary(item.to_binary()))
@@ -79,7 +79,7 @@ impl Sink<N2nPacket> for TokioWs {
 }
 
 impl Stream for TokioWs {
-    type Item = Result<N2nPacket, NodeConnectionError>;
+    type Item = Result<EdgePacket, NodeConnectionError>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -89,7 +89,7 @@ impl Stream for TokioWs {
         match next {
             Some(Ok(Message::Binary(data))) => {
                 let data = Bytes::from(data);
-                let packet = N2nPacket::from_binary(data).map_err(|e| {
+                let packet = EdgePacket::from_binary(data).map_err(|e| {
                     NodeConnectionError::new(
                         NodeConnectionErrorKind::Decode(e),
                         "invalid binary packet",

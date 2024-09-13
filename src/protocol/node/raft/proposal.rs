@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{oneshot, RwLock};
 
 use crate::{
-    prelude::{MessageId, NodeId, TopicCode},
+    prelude::{MessageId, Node, NodeId, TopicCode},
     protocol::{
         endpoint::{
             DelegateMessage, EndpointAddr, EndpointInterest, EndpointOffline, EndpointOnline,
-            Message, MessageAck, SetState,
+            Message, MessageAck, MessageStateUpdate, MessageStatusKind, SetState,
         },
         node::NodeRef,
         topic::durable_message::{LoadTopic, UnloadTopic},
@@ -40,7 +40,7 @@ pub enum Proposal {
 }
 #[derive(Debug, Clone)]
 pub struct ProposalContext {
-    pub node_ref: NodeRef,
+    pub node: Node,
     pub topic_code: Option<TopicCode>,
 }
 
@@ -49,13 +49,10 @@ impl ProposalContext {
         self.topic_code = Some(code);
     }
     pub fn resolve_ack(&self, id: MessageId, result: WaitAckResult) {
-        let Some(node) = self.node_ref.upgrade() else {
-            return;
-        };
         let Some(ref code) = self.topic_code else {
             return;
         };
-        let Some(topic) = node.get_topic(code) else {
+        let Some(topic) = self.node.get_topic(code) else {
             return;
         };
         tokio::spawn(async move {
@@ -64,5 +61,39 @@ impl ProposalContext {
             }
         });
     }
-    pub fn dispatch_message(&self, message: &Message, endpoint: EndpointAddr) {}
+    #[tracing::instrument(skip(self))]
+    pub fn dispatch_message(&self, message: &Message, endpoint: EndpointAddr) {
+        let Some(ref code) = self.topic_code else {
+            // topic code is not set
+            tracing::warn!("topic code is not set");
+            return;
+        };
+        let Some(topic) = self.node.get_topic(code) else {
+            // TODO: recover snapshot here
+            tracing::warn!(?code, "topic not found");
+            return;
+        };
+        let message = message.clone();
+        let code = code.clone();
+        let node = self.node.clone();
+        tokio::spawn(async move {
+            let message_id = message.id();
+            let status = topic
+                .dispatch_message(message, &endpoint)
+                .await
+                .unwrap_or(MessageStatusKind::Unreachable);
+            let proposal_result = node
+                .proposal(Proposal::SetState(SetState {
+                    topic: code,
+                    update: MessageStateUpdate::new(
+                        message_id,
+                        HashMap::from([(endpoint, status)]),
+                    ),
+                }))
+                .await;
+            if let Err(err) = proposal_result {
+                tracing::error!(?err, "set state failed");
+            }
+        });
+    }
 }

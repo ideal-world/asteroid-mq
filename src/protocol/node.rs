@@ -1,6 +1,4 @@
-pub mod connection;
 pub mod edge;
-pub mod event;
 pub mod raft;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -15,13 +13,12 @@ use super::{
     topic::{Topic, TopicCode, TopicInner},
 };
 use bytes::Bytes;
-use connection::{
+use crossbeam::sync::ShardedLock;
+use edge::connection::{
     ConnectionConfig, EdgeConnectionInstance, EdgeConnectionRef, NodeConnection,
     NodeConnectionError,
 };
-use crossbeam::sync::ShardedLock;
-use edge::{EdgeError, EdgeErrorKind, EdgeMessage, EdgePayload};
-use event::{EventKind, N2NUnreachableEvent, N2nEvent, N2nPacket, NodeAuth, NodeKind, NodeTrace};
+use edge::{EdgeError, EdgeErrorKind, EdgeMessage, EdgePayload, packet::{EdgePacket, Auth, NodeKind, NodeTrace}};
 use futures_util::TryFutureExt;
 use openraft::{docs::components::state_machine, BasicNode, ChangeMembers, Raft};
 use raft::{
@@ -318,22 +315,6 @@ impl Node {
             hops: Vec::new(),
         }
     }
-    pub(crate) fn new_cast_message(&self, to: NodeId, message: CastMessage) -> N2nEvent {
-        N2nEvent {
-            to,
-            trace: self.new_trace(),
-            payload: message.encode_to_bytes(),
-            kind: EventKind::CastMessage,
-        }
-    }
-    pub(crate) fn new_ack(&self, to: NodeId, message: MessageAck) -> N2nEvent {
-        N2nEvent {
-            to,
-            trace: self.new_trace(),
-            payload: message.encode_to_bytes(),
-            kind: EventKind::Ack,
-        }
-    }
 
     pub async fn create_edge_connection<C: NodeConnection>(
         &self,
@@ -341,7 +322,7 @@ impl Node {
     ) -> Result<NodeId, NodeConnectionError> {
         let config = ConnectionConfig {
             attached_node: self.node_ref(),
-            auth: NodeAuth {},
+            auth: Auth {},
         };
         let conn_inst = EdgeConnectionInstance::init(config, conn).await?;
         let peer = conn_inst.peer_id;
@@ -359,10 +340,6 @@ impl Node {
         self.id() == id
     }
 
-    #[instrument(skip_all, fields(node = ?self.id()))]
-    pub(crate) async fn handle_message_as_destination(&self, _message_evt: N2nEvent) {
-        // TODO: implement this for edge nodes
-    }
     pub fn get_edge_connection(&self, to: NodeId) -> Option<EdgeConnectionRef> {
         let connections = self.edge_connections.read().unwrap();
         let conn = connections.get(&to)?;
@@ -380,17 +357,10 @@ impl Node {
         &self,
         from: NodeId,
         edge_request: edge::EdgeRequest,
-    ) -> Result<Bytes, edge::EdgeError> {
+    ) -> Result<edge::EdgeResponse, edge::EdgeError> {
         match edge_request.kind {
-            edge::EdgeRequestKind::SendMessage => {
-                let message = EdgeMessage::decode_from_bytes(edge_request.data).map_err(|e| {
-                    EdgeError::with_message(
-                        "decode EdgeMessage",
-                        e.to_string(),
-                        EdgeErrorKind::Decode,
-                    )
-                })?;
-                let (message, topic_code) = message.into_message();
+            edge::EdgeRequestKind::SendMessage(edge_message) => {
+                let (message, topic_code) = edge_message.into_message();
                 let Some(topic) = self.get_topic(&topic_code) else {
                     return Err(EdgeError::new(
                         format!("topic ${topic_code} not found"),
@@ -410,18 +380,12 @@ impl Node {
                 let response = handle.await;
                 Ok(response.encode_to_bytes())
             }
-            edge::EdgeRequestKind::CreateEndpoint => Err(EdgeError::new(
-                "create endpoint not supported",
-                EdgeErrorKind::Internal,
-            )),
-            edge::EdgeRequestKind::DeleteEndpoint => Err(EdgeError::new(
-                "create endpoint not supported",
-                EdgeErrorKind::Internal,
-            )),
-            edge::EdgeRequestKind::Ack => Err(EdgeError::new(
-                "create endpoint not supported",
-                EdgeErrorKind::Internal,
-            )),
+            _ => {
+                Err(EdgeError::new(
+                    "unsupported request kind",
+                    EdgeErrorKind::UnsupportedRequestKind,
+                ))
+            }
         }
     }
 

@@ -9,17 +9,18 @@ use std::{
 };
 
 use bytes::Bytes;
-pub mod connection;
+pub mod cluster;
 pub mod log_storage;
 pub mod network;
 pub mod network_factory;
 pub mod proposal;
 pub mod raft_node;
+pub mod response;
 pub mod state_machine;
-pub mod cluster;
 use network_factory::{RaftNodeInfo, TcpNetworkService};
 use openraft::{storage::RaftLogStorage, BasicNode, Raft};
 use proposal::Proposal;
+use response::RaftResponse;
 use tokio::sync::OnceCell;
 
 use crate::{
@@ -31,10 +32,8 @@ use crate::{
     },
 };
 
-use super::{
-    event::{EventKind, N2nPacket, RaftData, RaftResponse},
-    Node, NodeId, NodeRef,
-};
+use super::NodeId;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Copy)]
 pub struct TypeConfig {
     _private: (),
@@ -91,10 +90,7 @@ impl MaybeLoadingRaft {
     }
     pub fn net_work_service(&self, id: NodeId, node: BasicNode) -> TcpNetworkService {
         TcpNetworkService {
-            info: RaftNodeInfo {
-                id,
-                node,
-            },
+            info: RaftNodeInfo { id, node },
             raft: self.clone(),
             connections: Default::default(),
         }

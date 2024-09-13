@@ -54,14 +54,17 @@ impl HoldMessage {
     //         wait_ack,
     //     }
     // }
-    pub(crate) fn send_unsent(&self, context: &ProposalContext) {
-        let eps = self
-            .wait_ack
-            .status
-            .iter()
-            .filter_map(|(ep, status)| status.is_unsent().then_some(*ep));
-        for ep in eps {
-            context.dispatch_message(&self.message, ep)
+    pub(crate) fn send_unsent(
+        &mut self,
+        reachable_eps: &HashSet<EndpointAddr>,
+        context: &ProposalContext,
+    ) {
+        for (ep, status) in self.wait_ack.status.iter_mut() {
+            tracing::debug!(?ep, %status, ?reachable_eps, "send_unsent");
+            if status.is_unsent() && reachable_eps.contains(ep) {
+                *status = MessageStatusKind::Sending;
+                context.dispatch_message(&self.message, *ep);
+            }
         }
     }
     pub(crate) fn is_resolved(&self) -> bool {
@@ -215,15 +218,18 @@ impl MessageQueue {
                             *status = kind;
                         }
                     }
+                    MessageStatusKind::Sent => {
+                        if kind != MessageStatusKind::Unsent || kind != MessageStatusKind::Sending {
+                            *status = kind;
+                        }
+                    }
                     MessageStatusKind::Sending => {
                         if kind != MessageStatusKind::Unsent {
                             *status = kind;
                         }
                     }
-                    MessageStatusKind::Sent => {
-                        if kind != MessageStatusKind::Unsent || kind != MessageStatusKind::Sending {
-                            *status = kind;
-                        }
+                    MessageStatusKind::Unsent => {
+                        *status = kind;
                     }
                     _ => {
                         // otherwise, it must be resolved
@@ -233,21 +239,17 @@ impl MessageQueue {
             hm.wait_ack.status.insert(from, kind);
         }
     }
-    pub(crate) fn poll_all(&mut self, ctx: &ProposalContext) {
-        for id in self.hold_messages.keys().copied().collect::<Vec<_>>() {
-            self.poll_message(id, ctx);
-        }
-    }
     // poll with resolved cache
     pub(crate) fn poll_message(
         &mut self,
         id: MessageId,
+        reachable_eps: &HashSet<EndpointAddr>,
         ctx: &ProposalContext,
     ) -> Option<Poll<()>> {
         if self.resolved.contains(&id) {
             Some(Poll::Ready(()))
         } else {
-            let resolved = self.poll_message_inner(id, ctx)?;
+            let resolved = self.poll_message_inner(id, reachable_eps, ctx)?;
             if resolved.is_ready() {
                 self.resolved.insert(id);
             }
@@ -257,9 +259,9 @@ impl MessageQueue {
     pub(crate) fn poll_message_inner(
         &mut self,
         id: MessageId,
+        reachable_eps: &HashSet<EndpointAddr>,
         ctx: &ProposalContext,
     ) -> Option<Poll<()>> {
-        let message = self.hold_messages.get(&id)?;
         if self.blocking {
             let front = self.get_front()?;
             // if blocking, check if the message is the first one
@@ -267,7 +269,8 @@ impl MessageQueue {
                 return Some(Poll::Pending);
             }
         }
-        message.send_unsent(ctx);
+        let message = self.hold_messages.get_mut(&id)?;
+        message.send_unsent(reachable_eps, ctx);
 
         if message.is_resolved() {
             Some(Poll::Ready(()))
@@ -284,19 +287,19 @@ impl MessageQueue {
         std::mem::swap(&mut swap_out, &mut self.resolved);
         swap_out
     }
-    pub(crate) fn blocking_pop(&mut self, context: &ProposalContext) -> Option<HoldMessage> {
+    pub(crate) fn blocking_pop(&mut self, reachable_eps: &HashSet<EndpointAddr>, context: &ProposalContext) -> Option<HoldMessage> {
         let next = self.get_front()?;
-        let poll = self.poll_message(next.message.id(), context)?;
+        let poll = self.poll_message(next.message.id(), reachable_eps, context)?;
         if poll.is_ready() {
             self.pop()
         } else {
             None
         }
     }
-    pub(crate) fn flush(&mut self, context: &ProposalContext) {
+    pub(crate) fn flush(&mut self, reachable_eps: &HashSet<EndpointAddr>, context: &ProposalContext) {
         tracing::trace!(blocking = self.blocking, "flushing");
         if self.blocking {
-            while let Some(m) = self.blocking_pop(context) {
+            while let Some(m) = self.blocking_pop(reachable_eps, context) {
                 let id = m.message.id();
                 let result = m.resolve();
                 context.resolve_ack(id, result);

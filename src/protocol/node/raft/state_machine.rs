@@ -22,10 +22,10 @@ use tokio::sync::RwLock;
 
 use crate::{
     prelude::{CodecType, Node, NodeId},
-    protocol::node::{event::RaftResponse, raft::proposal::ProposalContext, NodeRef},
+    protocol::node::{raft::proposal::ProposalContext, NodeRef},
 };
 
-use super::{MaybeLoadingRaft, TypeConfig};
+use super::{response::RaftResponse, MaybeLoadingRaft, TypeConfig};
 #[derive(Debug)]
 pub struct StoredSnapshot {
     pub meta: SnapshotMeta<NodeId, BasicNode>,
@@ -159,8 +159,14 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
                 EntryPayload::Blank => res.push(RaftResponse { result: Ok(()) }),
                 EntryPayload::Normal(ref proposal) => {
                     tracing::debug!(?proposal, "applying proposal to state machine");
+                    let Some(node) = self.node_ref.upgrade() else {
+                        res.push(RaftResponse {
+                            result: Err(()),
+                        });
+                        continue;
+                    };
                     let context = ProposalContext {
-                        node_ref: self.node_ref.clone(),
+                        node,
                         topic_code: None,
                     };
                     match proposal {

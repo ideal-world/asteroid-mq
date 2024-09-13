@@ -176,9 +176,7 @@ impl RaftLogStorage<TypeConfig> for LogStorage<TypeConfig> {
             + openraft::OptionalSend,
         I::IntoIter: openraft::OptionalSend,
     {
-        tracing::warn!("log append start");
         let result = self.inner.lock().await.append(entries, callback).await;
-        tracing::warn!("log append end");
         result
 
     }

@@ -13,7 +13,7 @@ use futures_util::{Sink, Stream};
 
 use asteroid_mq::{
     prelude::{Node, NodeId, NodeConfig},
-    protocol::node::event::{N2nPacket, NodeKind},
+    protocol::node::packet::{EdgePacket, NodeKind},
 };
 
 use asteroid_mq::protocol::node::connection::{
@@ -32,7 +32,7 @@ impl AxumWs {
         Self { inner }
     }
 }
-impl Sink<N2nPacket> for AxumWs {
+impl Sink<EdgePacket> for AxumWs {
     type Error = NodeConnectionError;
 
     fn poll_ready(
@@ -47,7 +47,7 @@ impl Sink<N2nPacket> for AxumWs {
         })
     }
 
-    fn start_send(self: std::pin::Pin<&mut Self>, item: N2nPacket) -> Result<(), Self::Error> {
+    fn start_send(self: std::pin::Pin<&mut Self>, item: EdgePacket) -> Result<(), Self::Error> {
         self.project()
             .inner
             .start_send(Message::Binary(item.to_binary().into()))
@@ -85,7 +85,7 @@ impl Sink<N2nPacket> for AxumWs {
 }
 
 impl Stream for AxumWs {
-    type Item = Result<N2nPacket, NodeConnectionError>;
+    type Item = Result<EdgePacket, NodeConnectionError>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -95,7 +95,7 @@ impl Stream for AxumWs {
         match next {
             Some(Ok(Message::Binary(data))) => {
                 let data = Bytes::from(data);
-                let packet = N2nPacket::from_binary(data).map_err(|e| {
+                let packet = EdgePacket::from_binary(data).map_err(|e| {
                     NodeConnectionError::new(
                         NodeConnectionErrorKind::Decode(e),
                         "invalid binary packet",

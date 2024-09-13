@@ -23,12 +23,37 @@ pub enum MessageStatusKind {
     Failed = 0x80,
     Unreachable = 0x81,
 }
+
+impl std::fmt::Display for MessageStatusKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessageStatusKind::Sending => write!(f, "Sending"),
+            MessageStatusKind::Unsent => write!(f, "Unsent"),
+            MessageStatusKind::Sent => write!(f, "Sent"),
+            MessageStatusKind::Received => write!(f, "Received"),
+            MessageStatusKind::Processed => write!(f, "Processed"),
+            MessageStatusKind::Failed => write!(f, "Failed"),
+            MessageStatusKind::Unreachable => write!(f, "Unreachable"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum MessageAckExpectKind {
     #[default]
     Sent = 0x00,
     Received = 0x01,
     Processed = 0x02,
+}
+
+impl std::fmt::Display for MessageAckExpectKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessageAckExpectKind::Sent => write!(f, "Sent"),
+            MessageAckExpectKind::Received => write!(f, "Received"),
+            MessageAckExpectKind::Processed => write!(f, "Processed"),
+        }
+    }
 }
 impl_codec! {
     enum MessageAckExpectKind {
@@ -101,6 +126,18 @@ impl std::fmt::Debug for MessageId {
                 crate::util::hex(&self.bytes[12..16]),
             ]))
             .finish()
+    }
+}
+
+impl std::fmt::Display for MessageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}-{}-{}",
+            crate::util::hex(&self.bytes[0..4]),
+            crate::util::hex(&self.bytes[4..12]),
+            crate::util::hex(&self.bytes[12..16])
+        )
     }
 }
 

@@ -133,7 +133,10 @@ impl RaftTcpConnection {
     fn next_seq(&self) -> u64 {
         self.local_seq.fetch_add(1, atomic::Ordering::Relaxed)
     }
-    pub(crate) async fn proposal(&self, proposal: Proposal) -> crate::Result<ClientWriteResponse<TypeConfig>> {
+    pub(crate) async fn proposal(
+        &self,
+        proposal: Proposal,
+    ) -> crate::Result<ClientWriteResponse<TypeConfig>> {
         let req = Request::Proposal(proposal);
         let resp = self
             .send_request(req)
@@ -148,15 +151,13 @@ impl RaftTcpConnection {
             return Err(crate::Error::unknown("unexpected response"));
         };
         let resp = resp.map_err(crate::Error::contextual("remote proposal"))?;
-        tracing::warn!(?resp, "proposal response");
-
         Ok(resp)
     }
     pub(super) async fn send_request(
         &self,
         req: Request,
     ) -> Result<oneshot::Receiver<Response>, Unreachable> {
-        tracing::debug!(?req, "send request");
+        tracing::trace!(?req, "send request");
         let payload = Payload::Request(req);
         let seq_id = self.next_seq();
         let packet = Packet { seq_id, payload };
@@ -262,11 +263,7 @@ impl RaftTcpConnection {
                                         raft.install_snapshot(install).await,
                                     ),
                                     Request::Proposal(proposal) => {
-                                        tracing::warn!(?proposal, "proposal");
-                                        let resp = Response::Proposal(raft.client_write(proposal).await);
-                                        tracing::warn!(?resp, "proposal resp");
-
-                                        resp
+                                        Response::Proposal(raft.client_write(proposal).await)
                                     }
                                 };
                                 let payload = Payload::Response(resp);

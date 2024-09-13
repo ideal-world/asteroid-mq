@@ -2,7 +2,7 @@ pub mod config;
 pub mod message_queue;
 pub mod wait_ack;
 use crate::{
-    prelude::{DurableMessage, Interest, NodeId, Subject},
+    prelude::{DurableMessage, Interest, MessageId, NodeId, Subject},
     protocol::{
         endpoint::{
             EndpointAddr, Message, MessageStateUpdate, MessageStatusKind, MessageTargetKind,
@@ -24,7 +24,7 @@ use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicData {
     pub(crate) config: TopicConfig,
-    pub(crate) ep_routing_table: HashMap<EndpointAddr, NodeId>,
+    pub(crate) ep_routing_table: HashMap<NodeId, HashSet<EndpointAddr>>,
     pub(crate) ep_interest_map: InterestMap<EndpointAddr>,
     pub(crate) queue: MessageQueue,
 }
@@ -127,18 +127,29 @@ impl TopicData {
         self.update_and_flush(MessageStateUpdate::new_empty(message.id()), ctx);
         tracing::debug!(?ep_collect, "hold new message");
     }
+    pub(crate) fn reachable_eps(&self, node_id: &NodeId) -> HashSet<EndpointAddr> {
+        self.ep_routing_table
+            .get(node_id).cloned()
+            .unwrap_or_default()
+    }
     pub(crate) fn update_and_flush(&mut self, update: MessageStateUpdate, ctx: &ProposalContext) {
+        let reachable_eps = self.reachable_eps(&ctx.node.id());
         let poll_result = {
             for (from, status) in update.status {
                 self.queue.update_ack(&update.message_id, from, status)
             }
-            self.queue.poll_message(update.message_id, ctx)
+            self.queue.poll_message(update.message_id, &reachable_eps, ctx)
         };
         if let Some(Poll::Ready(())) = poll_result {
-            self.queue.flush(ctx);
+            self.queue.flush(&reachable_eps, ctx);
         }
     }
-    pub(crate) fn update_ep_interest(&mut self, ep: &EndpointAddr, interests: Vec<Interest>, ctx: &ProposalContext) {
+    pub(crate) fn update_ep_interest(
+        &mut self,
+        ep: &EndpointAddr,
+        interests: Vec<Interest>,
+        ctx: &ProposalContext,
+    ) {
         self.ep_interest_map.delete(ep);
         for interest in interests {
             self.ep_interest_map.insert(interest, *ep);
@@ -173,12 +184,12 @@ impl TopicData {
     ) {
         let mut message_need_poll = HashSet::new();
         {
-            let routing_wg = &mut self.ep_routing_table;
-            let interest_wg = &mut self.ep_interest_map;
-
-            routing_wg.insert(endpoint, host);
+            self.ep_routing_table
+                .entry(host)
+                .or_default()
+                .insert(endpoint);
             for interest in &interests {
-                interest_wg.insert(interest.clone(), endpoint);
+                self.ep_interest_map.insert(interest.clone(), endpoint);
             }
             let queue = &mut self.queue;
             for (id, message) in &mut queue.hold_messages {
@@ -190,7 +201,7 @@ impl TopicData {
                             .header
                             .subjects
                             .iter()
-                            .any(|s| interest_wg.find(s).contains(&endpoint))
+                            .any(|s| self.ep_interest_map.find(s).contains(&endpoint))
                     {
                         status.insert(endpoint, MessageStatusKind::Unsent);
                         message_need_poll.insert(*id);
@@ -203,12 +214,20 @@ impl TopicData {
         }
     }
 
-    pub(crate) fn ep_offline(&mut self, endpoint: &EndpointAddr, ctx: &ProposalContext) {
-        self.ep_routing_table.remove(endpoint);
+    pub(crate) fn ep_offline(
+        &mut self,
+        host: NodeId,
+        endpoint: &EndpointAddr,
+        ctx: &ProposalContext,
+    ) {
+        self.ep_routing_table
+            .entry(host)
+            .or_default()
+            .remove(endpoint);
         self.ep_interest_map.delete(endpoint);
         let mut message_need_poll = HashSet::new();
         // update state
-        for (_, message) in &mut self.queue.hold_messages {
+        for message in self.queue.hold_messages.values_mut() {
             if let Some(status) = message.wait_ack.status.get_mut(endpoint) {
                 *status = MessageStatusKind::Unreachable;
                 message_need_poll.insert(message.message.id());
@@ -218,5 +237,4 @@ impl TopicData {
             self.update_and_flush(MessageStateUpdate::new_empty(id), &ctx);
         }
     }
-
 }

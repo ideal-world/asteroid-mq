@@ -1,7 +1,9 @@
 use std::{borrow::Cow, sync::Arc};
 
 use bytes::Bytes;
-
+pub mod codec;
+pub mod connection;
+pub mod packet;
 use crate::{
     impl_codec,
     prelude::{
@@ -10,52 +12,39 @@ use crate::{
     protocol::endpoint::{Message, MessageHeader, MessageTargetKind},
 };
 
-#[derive(Debug, Clone, Copy)]
+use super::raft::state_machine::topic::wait_ack::WaitAckResult;
+
+#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum EdgeRequestKind {
-    SendMessage = 0x10,
-    CreateEndpoint = 0x11,
-    DeleteEndpoint = 0x12,
-    Ack = 0x13,
-}
-impl_codec!(
-    enum EdgeRequestKind {
-        SendMessage = 0x10,
-        CreateEndpoint = 0x11,
-        DeleteEndpoint = 0x12,
-        Ack = 0x13,
-    }
-);
-
-pub struct EdgePayload {
-    pub kind: EdgeRequestKind,
-    pub data: Bytes,
+    SendMessage(EdgeMessage),
 }
 
-impl_codec!(
-    struct EdgePayload {
-        kind: EdgeRequestKind,
-        data: Bytes,
-    }
-);
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum EdgePayload {
+    Message(EdgeMessage),
+    Response(EdgeResponse),
+    Request(EdgeRequest),
+    Error(EdgeError),
+}
+pub enum EdgePush {
+    Message(Message),
+    Ack(WaitAckResult),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 
 pub struct EdgeRequest {
-    pub id: u64,
+    pub seq_id: u64,
     pub kind: EdgeRequestKind,
-    pub data: Bytes,
 }
 
-impl_codec!(
-    struct EdgeRequest {
-        id: u64,
-        kind: EdgeRequestKind,
-        data: Bytes,
-    }
-);
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EdgeResponse {
     pub id: u64,
-    pub result: Bytes,
+    pub result: EdgeResponseKind,
 }
 
 impl_codec!(
@@ -64,16 +53,19 @@ impl_codec!(
         result: Bytes,
     }
 );
-
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum EdgeResponseKind {
+    SendMessage(WaitAckResult),
+}
 impl EdgeResponse {
-    pub fn from_result<T: CodecType>(id: u64, result: Result<T, EdgeError>) -> Self {
+    pub fn send_message(id: u64, result: WaitAckResult) -> Self {
         Self {
             id,
-            result: result.encode_to_bytes(),
+            result: EdgeResponseKind::SendMessage(result),
         }
     }
 }
-
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EdgeError {
     pub context: Cow<'static, str>,
     pub message: Option<Cow<'static, str>>,
@@ -110,7 +102,8 @@ impl EdgeError {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+
 pub enum EdgeErrorKind {
     Decode = 0x00,
     TopicNotFound = 0x02,
@@ -124,7 +117,7 @@ impl_codec!(
         Internal = 0xf0,
     }
 );
-
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EdgeMessageHeader {
     pub ack_kind: MessageAckExpectKind,
     pub target_kind: MessageTargetKind,
@@ -157,7 +150,7 @@ impl EdgeMessageHeader {
         )
     }
 }
-
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EdgeMessage {
     pub header: EdgeMessageHeader,
     pub payload: Bytes,

@@ -21,7 +21,7 @@ pub struct WaitAck {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaitAckError {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
     pub exception: Option<WaitAckErrorException>,
@@ -34,7 +34,7 @@ impl_codec!(
     }
 );
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaitAckSuccess {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
@@ -55,7 +55,7 @@ impl WaitAckError {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum WaitAckErrorException {
     MessageDropped = 0,
     Overflow = 1,
@@ -99,6 +99,9 @@ pin_project_lite::pin_project! {
 }
 
 impl WaitAckHandle {
+    pub fn message_id(&self) -> MessageId {
+        self.message_id
+    }
     pub fn new(id: MessageId) -> (tokio::sync::oneshot::Sender<WaitAckResult>, WaitAckHandle) {
         let (tx, rx) = tokio::sync::oneshot::channel();
         (
@@ -108,9 +111,6 @@ impl WaitAckHandle {
                 result: rx,
             },
         )
-    }
-    pub fn message_id(&self) -> MessageId {
-        self.message_id
     }
 }
 

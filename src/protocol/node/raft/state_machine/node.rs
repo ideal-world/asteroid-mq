@@ -24,6 +24,7 @@ pub struct NodeData {
 }
 
 impl NodeData {
+    #[instrument(skip_all, fields(node_id=%ctx.node.id(), topic=%topic, message_id = %message.id()))]
     pub(crate) fn apply_delegate_message(
         &mut self,
         DelegateMessage { topic, message }: DelegateMessage,
@@ -45,23 +46,26 @@ impl NodeData {
         let code = config.code.clone();
         let topic = TopicData::from_durable(config, queue);
         self.topics.insert(code.clone(), topic);
-        if let Some(node) = ctx.node_ref.upgrade() {
-            let topic = Topic {
-                inner: Arc::new(TopicInner {
-                    code: code.clone(),
-                    node: node.clone(),
-                    ack_waiting_pool: Default::default(),
-                    local_endpoints: Default::default(),
-                }),
-            };
-            node.topics.write().unwrap().insert(code, topic);
-            let keys = node.topics.read().unwrap().keys().cloned().collect::<Vec<_>>();
-            tracing::info!(id=?node.id(), "topics: {:?}", keys);
-            
-        } else {
-            tracing::warn!("node is dropped");
-        }
+        let node = ctx.node.clone();
+        let topic = Topic {
+            inner: Arc::new(TopicInner {
+                code: code.clone(),
+                node: node.clone(),
+                ack_waiting_pool: Default::default(),
+                local_endpoints: Default::default(),
+            }),
+        };
+        node.topics.write().unwrap().insert(code, topic);
+        let keys = node
+            .topics
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        tracing::info!(id=?node.id(), "topics: {:?}", keys);
     }
+    #[instrument(skip_all, fields(node_id=%ctx.node.id(), topic=%topic, message_id=%update.message_id))]
     pub(crate) fn apply_set_state(
         &mut self,
         SetState { topic, update }: SetState,
@@ -98,7 +102,7 @@ impl NodeData {
         EndpointOffline {
             topic_code,
             endpoint,
-            host: _,
+            host,
         }: EndpointOffline,
         mut ctx: ProposalContext,
     ) {
@@ -106,7 +110,7 @@ impl NodeData {
             return;
         };
         ctx.set_topic_code(topic_code);
-        topic.ep_offline(&endpoint, &ctx);
+        topic.ep_offline(host, &endpoint, &ctx);
     }
     pub(crate) fn apply_ep_interest(
         &mut self,
@@ -122,6 +126,5 @@ impl NodeData {
         };
         ctx.set_topic_code(topic_code);
         topic.update_ep_interest(&endpoint, interests, &ctx);
-        
     }
 }

@@ -1,19 +1,18 @@
-use std::{borrow::Cow, error::Error, ops::Deref, sync::Arc, time::Instant};
+use std::{borrow::Cow, error::Error, ops::Deref, sync::Arc};
 
 use tracing::warn;
 
 use crate::protocol::{
     codec::{CodecType, DecodeError},
-    node::{
-        edge::{EdgeRequest, EdgeResponse},
-        event::{N2NPayloadKind, N2nAuth},
+    node::edge::{
+        packet::{EdgeAuth, EdgePayloadKind}, EdgePayload, EdgeRequest, EdgeResponse
     },
 };
 
-use super::{N2nPacket, NodeAuth, NodeConfig, NodeId, NodeRef};
+use super::{super::{Auth, EdgePacket, NodeId, NodeRef}, codec::CodecRegistry};
 
 pub mod tokio_tcp;
-pub mod tokio_ws;
+// pub mod tokio_ws;
 #[derive(Debug)]
 pub struct NodeConnectionError {
     pub kind: NodeConnectionErrorKind,
@@ -42,31 +41,32 @@ pub enum NodeConnectionErrorKind {
 #[derive(Debug)]
 
 pub struct NodeSendError {
-    pub raw_packet: N2nPacket,
+    pub raw_packet: EdgePacket,
     pub error: Box<dyn std::error::Error + Send + Sync>,
 }
 use futures_util::{FutureExt, Sink, SinkExt, Stream, StreamExt};
 pub trait NodeConnection:
     Send
     + 'static
-    + Stream<Item = Result<N2nPacket, NodeConnectionError>>
-    + Sink<N2nPacket, Error = NodeConnectionError>
+    + Stream<Item = Result<EdgePacket, NodeConnectionError>>
+    + Sink<EdgePacket, Error = NodeConnectionError>
 {
 }
 #[derive(Clone, Debug)]
 pub struct ConnectionConfig {
     pub attached_node: NodeRef,
-    pub auth: NodeAuth,
+    pub peer_id: NodeId,
+    pub codec: Arc<CodecRegistry>,
+    pub auth: Auth,
 }
-
 
 #[derive(Debug)]
 pub struct EdgeConnectionInstance {
     pub config: ConnectionConfig,
-    pub outbound: flume::Sender<N2nPacket>,
+    pub outbound: flume::Sender<EdgePacket>,
     pub alive: Arc<std::sync::atomic::AtomicBool>,
     pub peer_id: NodeId,
-    pub peer_auth: NodeAuth,
+    pub peer_auth: Auth,
     pub finish_signal: flume::Receiver<()>,
 }
 
@@ -96,56 +96,21 @@ impl EdgeConnectionInstance {
         tracing::debug!(?config, "init edge connection");
         let config_clone = config.clone();
         let (mut sink, mut stream) = connection.split();
-        let Some(node) = config.attached_node.upgrade() else {
-            return Err(NodeConnectionError::new(
+        let peer_id = config.peer_id;
+        let node = config.attached_node.upgrade().ok_or_else(|| {
+            NodeConnectionError::new(
                 NodeConnectionErrorKind::Closed,
-                "node was dropped",
-            ));
-        };
-        let my_auth = config.auth.clone();
-        let evt = N2nPacket::auth(N2nAuth {
-            id: node.id(),
-            auth: my_auth,
-        });
-        sink.send(evt).await?;
-        tracing::trace!("sent auth");
-        let auth = stream.next().await.unwrap_or(Err(NodeConnectionError::new(
-            NodeConnectionErrorKind::Closed,
-            "event stream reached unexpected end when send auth packet",
-        )))?;
-        if auth.header.kind != N2NPayloadKind::Auth {
-            return Err(NodeConnectionError::new(
-                NodeConnectionErrorKind::Protocol,
-                "unexpected event, expect auth",
-            ));
-        }
-        let auth_event = N2nAuth::decode(auth.payload)
-            .map_err(|e| {
-                NodeConnectionError::new(NodeConnectionErrorKind::Decode(e), "decode auth")
-            })?
-            .0; 
-        let peer_id = auth_event.id;
-        tracing::debug!(auth=?auth_event, "received auth");
-
-        if let Some(existed_connection) = node.get_edge_connection(peer_id) {
-            if existed_connection.is_alive() {
-                return Err(NodeConnectionError::new(
-                    NodeConnectionErrorKind::Existed,
-                    "connection already exists",
-                ));
-            } else {
-                node.remove_edge_connection(peer_id);
-            }
-        }
-        // if peer is cluster, and we are cluster:
-
-        let (outbound_tx, outbound_rx) = flume::bounded::<N2nPacket>(1024);
+                "node is already dropped",
+            )
+        })?;
+        let (outbound_tx, outbound_rx) = flume::bounded::<EdgePacket>(1024);
         let task = if true {
             enum PollEvent {
-                PacketIn(N2nPacket),
-                PacketOut(N2nPacket),
+                PacketIn(EdgePacket),
+                PacketOut(EdgePacket),
             }
             let internal_outbound_tx = outbound_tx.clone();
+            let codec_registry = config.codec.clone();
             let task = async move {
                 loop {
                     let event = futures_util::select! {
@@ -173,26 +138,21 @@ impl EdgeConnectionInstance {
                     };
                     match event {
                         PollEvent::PacketIn(packet) => {
-                            match packet.header.kind {
-                                N2NPayloadKind::Heartbeat => {}
-                                N2NPayloadKind::EdgeRequest => {
-                                    let node = node.clone();
-                                    let Ok(request) =
-                                        EdgeRequest::decode_from_bytes(packet.payload)
-                                    else {
-                                        continue;
-                                    };
-                                    let outbound = internal_outbound_tx.clone();
-                                    let id = request.id;
+                            let Ok(payload) = codec_registry.decode(packet.codec(), &packet.payload) else {
+                                warn!("failed to decode packet");
+                                continue;
+                            };
+                            match payload {
+                                EdgePayload::Request(request) => {
                                     tokio::spawn(async move {
                                         let resp = node.handle_edge_request(peer_id, request).await;
                                         let resp = EdgeResponse::from_result(id, resp);
-                                        let packet = N2nPacket::edge_response(resp);
+                                        let packet = EdgePacket::edge_response(resp);
                                         outbound.send(packet).unwrap_or_else(|e| {
                                             warn!(?e, "failed to send edge response");
                                         });
                                     });
-                                }
+                                },
                                 _ => {
                                     // invalid event, ignore
                                 }

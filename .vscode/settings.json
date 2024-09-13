@@ -1,6 +1,7 @@
 {
     "cSpell.words": [
         "Bincode",
+        "Cbor",
         "chrono",
         "Deque",
         "kademlia",

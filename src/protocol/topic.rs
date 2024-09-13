@@ -32,7 +32,6 @@ use super::{
     },
     interest::{Interest, InterestMap, Subject},
     node::{
-        event::{EventKind, N2nEvent, N2nPacket},
         raft::{
             proposal::Proposal,
             state_machine::topic::{
@@ -219,10 +218,11 @@ impl Topic {
 
     pub(crate) async fn dispatch_message(
         &self,
-        message: &Message,
+        message: Message,
         ep: &EndpointAddr,
-    ) -> Result<(), ()> {
-        todo!()
+    ) -> Option<MessageStatusKind> {
+        self.get_local_ep(ep)?.upgrade()?.push_message(message);
+        Some(MessageStatusKind::Sent)
     }
     pub(crate) async fn single_ack(&self, ack: MessageAck) -> Result<(), crate::Error> {
         self.node()

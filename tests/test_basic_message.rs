@@ -38,7 +38,7 @@ use asteroid_mq::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test()]
 async fn test_nodes() {
     let console_layer = console_subscriber::spawn();
     tracing_subscriber::registry()
@@ -51,7 +51,7 @@ async fn test_nodes() {
                         tracing_subscriber::filter::Directive::from_str("asteroid_mq=debug")
                             .unwrap(),
                     ).add_directive(
-                        tracing_subscriber::filter::Directive::from_str("openraft=off")
+                        tracing_subscriber::filter::Directive::from_str("openraft=info")
                             .unwrap(),
                     )
 
@@ -107,7 +107,7 @@ async fn test_nodes() {
     fn topic_config() -> TopicConfig {
         TopicConfig {
             code: CODE,
-            blocking: false,
+            blocking: true,
             overflow_config: Some(TopicOverflowConfig {
                 policy: TopicOverflowPolicy::RejectNew,
                 size: NonZeroU32::new(500).unwrap(),
@@ -124,56 +124,48 @@ async fn test_nodes() {
             tracing::error!(?s.membership_state);
         })
         .await;
-    node_server.raft().await.runtime_config().elect(false);
-    node_client.raft().await.runtime_config().elect(false);
-    node_server.raft().await.runtime_config().heartbeat(false);
-    node_client.raft().await.runtime_config().heartbeat(false);
-    node_server.raft().await.runtime_config().tick(false);
-    node_client.raft().await.runtime_config().tick(false);
     tokio::time::sleep(Duration::from_secs(1)).await;
     let event_topic = node_server.create_new_topic(topic_config()).await.unwrap();
-    let node_server_user = event_topic
+    let node_server_receiver = event_topic
         .create_endpoint(vec![Interest::new("events/**")])
         .await
         .unwrap();
     tokio::spawn(async move {
         loop {
-            let message = node_server_user.next_message().await;
+            let message = node_server_receiver.next_message().await;
             tracing::info!(?message, "recv message in server node");
-            node_server_user
+            node_server_receiver
                 .ack_processed(&message.header)
                 .await
                 .unwrap();
         }
     });
 
-    node_client.raft().await;
     let event_topic = node_client.get_topic(&CODE).unwrap();
-    let node_client_sender = event_topic
+    let node_client_receiver = event_topic
         .create_endpoint(vec![Interest::new("events/hello-world")])
         .await
         .unwrap();
 
     tokio::spawn(async move {
         loop {
-            let message = node_client_sender.next_message().await;
+            let message = node_client_receiver.next_message().await;
             tracing::info!(?message, "recv message");
-            node_client_sender
+            node_client_receiver
                 .ack_processed(&message.header)
                 .await
                 .unwrap();
         }
     });
-    tokio::time::sleep(Duration::from_secs(1)).await;
     let mut handles = vec![];
     for no in 0..10 {
         let ack_handle = event_topic
             .send_message(Message::new(
                 MessageHeader::builder([Subject::new("events/hello-world")])
                     .ack_kind(MessageAckExpectKind::Processed)
-                    .mode_push()
+                    .mode_online()
                     .build(),
-                format!("Message No.{no}"),
+                    format!("Message No.{no} of {}", MessageAckExpectKind::Processed),
             ))
             .await
             .unwrap();
@@ -192,15 +184,16 @@ async fn test_nodes() {
                     .ack_kind(MessageAckExpectKind::Sent)
                     .mode_push()
                     .build(),
-                format!("Message No.{no}"),
+                format!("Message No.{no} of {}", MessageAckExpectKind::Sent),
             ))
             .await
             .unwrap();
         handles.push(ack_handle);
     }
     for ack_handle in handles {
+        let id = ack_handle.message_id();
         let success = ack_handle.await.unwrap();
-        tracing::info!("recv all ack: {success:?}")
+        tracing::info!("recv all ack: {success:?} for {id}")
     }
 
     let mut handles = vec![];
@@ -211,14 +204,15 @@ async fn test_nodes() {
                     .ack_kind(MessageAckExpectKind::Received)
                     .mode_push()
                     .build(),
-                format!("Message No.{no}"),
+                format!("Message No.{no} of {}", MessageAckExpectKind::Received),
             ))
             .await
             .unwrap();
         handles.push(ack_handle);
     }
     for ack_handle in handles {
+        let id = ack_handle.message_id();
         let success = ack_handle.await.unwrap();
-        tracing::info!("recv all ack: {success:?}")
+        tracing::info!("recv all ack: {success:?} for {id}")
     }
 }
