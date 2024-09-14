@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, sync::Arc};
+use std::{borrow::Cow, collections::{HashMap, HashSet}, sync::Arc};
 
 use serde::de::DeserializeOwned;
 
@@ -70,6 +70,15 @@ impl CodecRegistry {
     }
     pub fn register<C: Codec + 'static>(&mut self, kind: CodecKind, codec: C) {
         self.registry.insert(kind, Arc::new(codec));
+    }
+    pub fn get(&self, kind: &CodecKind) -> Option<Arc<dyn Codec>> {
+        self.registry.get(kind).cloned()
+    }
+    pub fn pick_preferred_codec(&self, supported: &HashSet<CodecKind>) -> Option<CodecKind> {
+        supported
+            .iter()
+            .find(|kind| self.registry.contains_key(kind))
+            .copied()
     }
     pub fn encode(&self, kind: CodecKind, value: &EdgePayload) -> Result<Vec<u8>, CodecError> {
         self.registry

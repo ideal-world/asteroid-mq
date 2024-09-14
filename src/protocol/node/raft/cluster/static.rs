@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, net::SocketAddr};
 
 use futures_util::future::pending;
 
-use crate::prelude::NodeId;
+use crate::prelude::{NodeConfig, NodeId};
 
 use super::ClusterProvider;
 
@@ -13,6 +13,11 @@ pub struct StaticClusterProvider {
 
 impl StaticClusterProvider {
     pub fn new(nodes: BTreeMap<NodeId, SocketAddr>) -> Self {
+        Self { nodes }
+    }
+    pub fn singleton(node_config: &NodeConfig) -> Self {
+        let mut nodes = BTreeMap::new();
+        nodes.insert(node_config.id, node_config.addr);
         Self { nodes }
     }
 }

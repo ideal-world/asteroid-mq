@@ -119,48 +119,12 @@ impl EdgePacket {
     pub fn id(&self) -> EdgePacketId {
         self.header.id
     }
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EdgePayloadKind {
-    Auth = 0x00,
-    Request = 0x30,
-    Response = 0x31,
-    Push = 0x32,
-}
-
-impl_codec!(
-    enum EdgePayloadKind {
-        Auth = 0x00,
-        Request = 0x30,
-        Response = 0x31,
-        Push = 0x32,
-    }
-);
-
-impl From<u8> for EdgePayloadKind {
-    fn from(value: u8) -> Self {
-        match value {
-            0x00 => EdgePayloadKind::Auth,
-            0x30 => EdgePayloadKind::Request,
-            0x31 => EdgePayloadKind::Response,
-            _ => EdgePayloadKind::Push,
-        }
+    pub fn new(codec: CodecKind, payload: impl Into<Bytes>) -> Self {
+        let id = EdgePacketId::new_snowflake();
+        let header = EdgePacketHeader { id, codec };
+        Self { header, payload: payload.into() }
     }
 }
-
-#[derive(Debug, Clone)]
-pub struct EdgeAuth {
-    pub id: NodeId,
-    pub auth: Auth,
-}
-impl_codec!(
-    struct EdgeAuth {
-        id: NodeId,
-        auth: Auth,
-    }
-);
 
 #[derive(Debug, Clone, Default)]
 pub struct Auth {}

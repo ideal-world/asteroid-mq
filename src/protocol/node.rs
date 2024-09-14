@@ -1,10 +1,7 @@
 pub mod edge;
 pub mod raft;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    net::SocketAddr,
-    ops::Deref,
-    sync::{self, atomic::AtomicUsize, Arc, RwLock},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet}, net::SocketAddr, ops::Deref, str::FromStr, sync::{self, atomic::AtomicUsize, Arc, RwLock}
 };
 
 use super::{
@@ -12,13 +9,21 @@ use super::{
     endpoint::{EndpointInterest, SetState},
     topic::{Topic, TopicCode, TopicInner},
 };
+use bincode::config;
 use bytes::Bytes;
 use crossbeam::sync::ShardedLock;
-use edge::connection::{
-    ConnectionConfig, EdgeConnectionInstance, EdgeConnectionRef, NodeConnection,
-    NodeConnectionError,
+use edge::{
+    codec::CodecRegistry,
+    connection::{
+        ConnectionConfig, EdgeConnectionInstance, EdgeConnectionRef, NodeConnection,
+        NodeConnectionError,
+    },
+    EdgeConfig, EdgeResult,
 };
-use edge::{EdgeError, EdgeErrorKind, EdgeMessage, EdgePayload, packet::{EdgePacket, Auth, NodeKind, NodeTrace}};
+use edge::{
+    packet::{Auth, EdgePacket, NodeKind, NodeTrace},
+    EdgeError, EdgeErrorKind, EdgeMessage, EdgePayload,
+};
 use futures_util::TryFutureExt;
 use openraft::{docs::components::state_machine, BasicNode, ChangeMembers, Raft};
 use raft::{
@@ -33,26 +38,22 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    impl_codec,
-    protocol::{
+    impl_codec, prelude::DurableMessage, protocol::{
         endpoint::EndpointOnline,
         topic::durable_message::{LoadTopic, UnloadTopic},
-    },
+    }, DEFAULT_TCP_SOCKET_ADDR
 };
 
 use super::endpoint::{CastMessage, DelegateMessage, EndpointOffline, EndpointSync, MessageAck};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId {
     pub bytes: [u8; 16],
 }
 impl From<u64> for NodeId {
     fn from(id: u64) -> Self {
-        let mut bytes = [0; 16];
-        bytes[0] = Self::KIND_INDEXED;
-        bytes[1..9].copy_from_slice(&id.to_be_bytes());
-        NodeId { bytes }
+        Self::new_indexed(id)
     }
 }
 
@@ -86,6 +87,20 @@ impl NodeId {
     pub const KIND_INDEXED: u8 = 0x00;
     pub const KIND_SHA256: u8 = 0x01;
     pub const KIND_SNOWFLAKE: u8 = 0x02;
+    pub const fn new_indexed(id: u64) -> Self {
+        let mut bytes = [0; 16];
+        bytes[0] = Self::KIND_INDEXED;
+        let index_part = id.to_be_bytes();
+        bytes[1] = index_part[0];
+        bytes[2] = index_part[1];
+        bytes[3] = index_part[2];
+        bytes[4] = index_part[3];
+        bytes[5] = index_part[4];
+        bytes[6] = index_part[5];
+        bytes[7] = index_part[6];
+        bytes[8] = index_part[7];
+        NodeId { bytes }
+    }
     pub fn sha256(bytes: &[u8]) -> Self {
         let dg = <sha2::Sha256 as sha2::Digest>::digest(bytes);
         let mut bytes = [0; 16];
@@ -109,16 +124,22 @@ impl NodeId {
     }
 }
 
-impl Default for NodeId {
-    fn default() -> Self {
-        Self { bytes: [0; 16] }
-    }
-}
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
     pub id: NodeId,
     pub addr: SocketAddr,
     pub raft: openraft::Config,
+}
+
+impl Default for NodeConfig {
+    fn default() -> Self {
+        Self {
+            id: NodeId::default(),
+            addr: DEFAULT_TCP_SOCKET_ADDR,
+            raft: openraft::Config::default(),
+        }
+    }
+
 }
 
 #[derive(Debug)]
@@ -127,6 +148,7 @@ pub struct NodeInner {
     network: TcpNetworkService,
     config: NodeConfig,
     edge_connections: RwLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
+    codec_registry: Arc<CodecRegistry>,
     topics: RwLock<HashMap<TopicCode, Topic>>,
 }
 
@@ -156,6 +178,9 @@ impl Deref for Node {
 impl Node {
     pub async fn raft(&self) -> Raft<TypeConfig> {
         self.raft.get().await
+    }
+    pub fn config(&self) -> &NodeConfig {
+        &self.config
     }
     pub async fn init_raft<C: ClusterProvider>(
         &self,
@@ -298,6 +323,7 @@ impl Node {
             topics: RwLock::new(HashMap::new()),
             config,
             raft,
+            codec_registry: Arc::new(CodecRegistry::new_preloaded()),
             network,
         };
         Self {
@@ -319,10 +345,23 @@ impl Node {
     pub async fn create_edge_connection<C: NodeConnection>(
         &self,
         conn: C,
+        edge_config: EdgeConfig,
     ) -> Result<NodeId, NodeConnectionError> {
+        let preferred = self
+            .codec_registry
+            .pick_preferred_codec(&edge_config.supported_codec_kinds)
+            .ok_or_else(|| {
+                NodeConnectionError::new(
+                    edge::connection::NodeConnectionErrorKind::Protocol,
+                    "no codec available",
+                )
+            })?;
         let config = ConnectionConfig {
             attached_node: self.node_ref(),
             auth: Auth {},
+            codec_registry: self.codec_registry.clone(),
+            preferred_codec: preferred,
+            peer_id: edge_config.peer_id,
         };
         let conn_inst = EdgeConnectionInstance::init(config, conn).await?;
         let peer = conn_inst.peer_id;
@@ -356,10 +395,10 @@ impl Node {
     pub(crate) async fn handle_edge_request(
         &self,
         from: NodeId,
-        edge_request_kind: edge::EdgeRequestKind,
-    ) -> Result<edge::EdgeResponseKind, edge::EdgeError> {
+        edge_request_kind: edge::EdgeRequestEnum,
+    ) -> Result<edge::EdgeResponseEnum, edge::EdgeError> {
         match edge_request_kind {
-            edge::EdgeRequestKind::SendMessage(edge_message) => {
+            edge::EdgeRequestEnum::SendMessage(edge_message) => {
                 let (message, topic_code) = edge_message.into_message();
                 let Some(topic) = self.get_topic(&topic_code) else {
                     return Err(EdgeError::new(
@@ -378,14 +417,12 @@ impl Node {
                     })
                     .await?;
                 let response = handle.await;
-                Ok(edge::EdgeResponseKind::SendMessage(response))
+                Ok(edge::EdgeResponseEnum::SendMessage(EdgeResult::from_std(response)))
             }
-            _ => {
-                Err(EdgeError::new(
-                    "unsupported request kind",
-                    EdgeErrorKind::Internal,
-                ))
-            }
+            _ => Err(EdgeError::new(
+                "unsupported request kind",
+                EdgeErrorKind::Internal,
+            )),
         }
     }
 
@@ -393,20 +430,34 @@ impl Node {
         let topics = self.topics.read().unwrap();
         topics.get(code).cloned()
     }
-    pub async fn create_new_topic<C: Into<TopicConfig>>(&self, config: C) -> crate::Result<Topic> {
+    pub async fn load_topic<C: Into<TopicConfig>>(&self, config: C, queue: Vec<DurableMessage>) -> Result<Topic, crate::Error> {
         let config: TopicConfig = config.into();
+        let config_code = config.code.clone();
+        // check if topic already exists
+        {
+            let topics = self.topics.read().unwrap();
+            if topics.contains_key(&config_code) {
+                return Err(crate::Error::new(
+                    "topic already exists",
+                    crate::error::ErrorKind::TopicAlreadyExists
+                ));
+            }
+        }
         tracing::info!(?config, "create new topic");
         self.proposal(Proposal::LoadTopic(LoadTopic {
-            config: config.clone(),
-            queue: Default::default(),
+            config,
+            queue,
         }))
         .await?;
         let topics = self.topics.read().unwrap();
         let topic = topics
-            .get(&config.code)
+            .get(&config_code)
             .cloned()
             .ok_or_else(|| crate::Error::unknown("topic proposal committed but still not found"))?;
         Ok(topic)
+    }
+    pub async fn create_new_topic<C: Into<TopicConfig>>(&self, config: C) -> crate::Result<Topic> {
+        self.load_topic(config, Vec::new()).await
     }
 }
 

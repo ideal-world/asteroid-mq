@@ -10,10 +10,12 @@
         "Protobuf",
         "Sharded",
         "subsec",
+        "typeshare",
         "Uninit"
     ],
     "rust-analyzer.cargo.features": [
         "cluster-k8s",
-        "json"
+        "json",
+        "typeshare"
     ]
 }

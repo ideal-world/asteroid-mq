@@ -83,12 +83,6 @@ impl<T> Timed<T> {
     pub fn new(time: DateTime<Utc>, data: T) -> Self {
         Self { time, data }
     }
-    pub fn new_by_now(data: T) -> Self {
-        Self {
-            time: Utc::now(),
-            data,
-        }
-    }
 }
 
 impl<T: PartialEq> PartialEq for Timed<T> {
@@ -112,13 +106,6 @@ impl<T: Eq> Ord for Timed<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.time.cmp(&other.time)
     }
-}
-
-pub fn random_duration_ms(range: std::ops::Range<u64>) -> std::time::Duration {
-    let mut rng = rand::thread_rng();
-    let ms = rand::Rng::gen_range(&mut rng, range.start..range.end);
-
-    std::time::Duration::from_millis(ms)
 }
 
 pub fn hash64<T: Hash>(value: &T) -> u64 {

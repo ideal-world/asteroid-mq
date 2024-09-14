@@ -3,13 +3,14 @@ use std::{borrow::Cow, error::Error, ops::Deref, sync::Arc};
 use tracing::warn;
 
 use crate::protocol::{
-    codec::{CodecType, DecodeError},
-    node::edge::{
-        packet::{EdgeAuth, EdgePayloadKind}, EdgePayload, EdgeRequest, EdgeResponse
-    },
+    codec::DecodeError,
+    node::edge::{EdgePayload, EdgeResponse},
 };
 
-use super::{super::{Auth, EdgePacket, NodeId, NodeRef}, codec::{CodecKind, CodecRegistry}};
+use super::{
+    super::{Auth, EdgePacket, NodeId, NodeRef},
+    codec::{CodecKind, CodecRegistry},
+};
 
 pub mod tokio_tcp;
 // pub mod tokio_ws;
@@ -57,7 +58,7 @@ pub struct ConnectionConfig {
     pub attached_node: NodeRef,
     pub peer_id: NodeId,
     pub codec_registry: Arc<CodecRegistry>,
-    pub codec: CodecKind,
+    pub preferred_codec: CodecKind,
     pub auth: Auth,
 }
 
@@ -67,7 +68,6 @@ pub struct EdgeConnectionInstance {
     pub outbound: flume::Sender<EdgePacket>,
     pub alive: Arc<std::sync::atomic::AtomicBool>,
     pub peer_id: NodeId,
-    pub peer_auth: Auth,
     pub finish_signal: flume::Receiver<()>,
 }
 
@@ -98,18 +98,17 @@ impl EdgeConnectionInstance {
         let config_clone = config.clone();
         let (mut sink, mut stream) = connection.split();
         let peer_id = config.peer_id;
-        let codec_kind = config.codec;
-        let codec = config.codec_registry.get(codec_kind).ok_or_else(|| {
-            NodeConnectionError::new(
-                NodeConnectionErrorKind::Protocol,
-                "codec is not registered",
-            )
-        })?;
+        let encoder = config
+            .codec_registry
+            .get(&config.preferred_codec)
+            .ok_or_else(|| {
+                NodeConnectionError::new(
+                    NodeConnectionErrorKind::Protocol,
+                    "preferred codec is not registered",
+                )
+            })?;
         let node = config.attached_node.upgrade().ok_or_else(|| {
-            NodeConnectionError::new(
-                NodeConnectionErrorKind::Closed,
-                "node is already dropped",
-            )
+            NodeConnectionError::new(NodeConnectionErrorKind::Closed, "node is already dropped")
         })?;
         let (outbound_tx, outbound_rx) = flume::bounded::<EdgePacket>(1024);
         let task = if true {
@@ -119,6 +118,7 @@ impl EdgeConnectionInstance {
             }
             let internal_outbound_tx = outbound_tx.clone();
             let codec_registry = config.codec_registry.clone();
+            let preferred_codec = config.preferred_codec;
             let task = async move {
                 loop {
                     let event = futures_util::select! {
@@ -146,23 +146,29 @@ impl EdgeConnectionInstance {
                     };
                     match event {
                         PollEvent::PacketIn(packet) => {
-                            let Ok(payload) = codec_registry.decode(packet.codec(), &packet.payload) else {
+                            let Ok(payload) =
+                                codec_registry.decode(packet.codec(), &packet.payload)
+                            else {
                                 warn!("failed to decode packet");
                                 continue;
                             };
                             let outbound = internal_outbound_tx.clone();
                             match payload {
                                 EdgePayload::Request(request) => {
+                                    let node = node.clone();
+                                    let encoder = encoder.clone();
                                     tokio::spawn(async move {
                                         let seq_id = request.seq_id;
-                                        let resp = node.handle_edge_request(peer_id, request.kind).await;
+                                        let resp =
+                                            node.handle_edge_request(peer_id, request.request).await;
                                         let resp = EdgeResponse::from_result(seq_id, resp);
-                                        let resp = EdgePacket::n(CodecType::Json, EdgePayload::Response(resp));
+                                        let payload = encoder.encode(&EdgePayload::Response(resp));
+                                        let resp = EdgePacket::new(preferred_codec, payload);
                                         outbound.send(resp).unwrap_or_else(|e| {
                                             warn!(?e, "failed to send edge response");
                                         });
                                     });
-                                },
+                                }
                                 _ => {
                                     // invalid event, ignore
                                 }
@@ -189,7 +195,6 @@ impl EdgeConnectionInstance {
         let _handle = {
             let alive_flag = Arc::clone(&alive_flag);
             let attached_node = config.attached_node.clone();
-            let peer_id = auth_event.id;
 
             tokio::spawn(async move {
                 let result = task.await;
@@ -210,8 +215,7 @@ impl EdgeConnectionInstance {
             config: config_clone,
             alive: alive_flag,
             outbound: outbound_tx,
-            peer_id: auth_event.id,
-            peer_auth: auth_event.auth,
+            peer_id,
             finish_signal,
         })
     }

@@ -10,10 +10,13 @@ use crate::{
 };
 use bytes::{BufMut, Bytes};
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 use super::EndpointAddr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[typeshare]
+#[repr(u8)]
 pub enum MessageStatusKind {
     Sending = 0xfe,
     Unsent = 0xff,
@@ -39,6 +42,7 @@ impl std::fmt::Display for MessageStatusKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[typeshare]
 pub enum MessageAckExpectKind {
     #[default]
     Sent = 0x00,
@@ -99,10 +103,33 @@ impl MessageStatusKind {
         self.is_failed() || self.is_reached(condition)
     }
 }
-#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, )]
+#[typeshare(serialized_as = "String")]
 #[repr(transparent)]
 pub struct MessageId {
     pub bytes: [u8; 16],
+}
+
+impl Serialize for MessageId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use base64::Engine;
+        serializer.serialize_str(&base64::engine::general_purpose::URL_SAFE.encode(self.bytes))
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use base64::Engine;
+        use serde::de::Error;
+        let s = String::deserialize(deserializer)?;
+        let bytes = base64::engine::general_purpose::URL_SAFE.decode(s.as_bytes()).map_err(D::Error::custom)?;
+        if bytes.len() != 16 {
+            return Err(D::Error::custom("invalid length"));
+        }
+        let mut addr = [0; 16];
+        addr.copy_from_slice(&bytes);
+        Ok(Self { bytes: addr })
+    }
 }
 
 impl CodecType for MessageId {
@@ -162,6 +189,7 @@ impl MessageId {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct Message {
     pub header: MessageHeader,
     pub payload: Bytes,
@@ -195,6 +223,7 @@ impl Message {
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct MessageHeader {
     pub message_id: MessageId,
     pub ack_kind: MessageAckExpectKind,
@@ -283,6 +312,7 @@ impl_codec! {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
+#[typeshare]
 pub enum MessageTargetKind {
     Durable = 0,
     Online = 1,

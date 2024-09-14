@@ -8,15 +8,37 @@ use std::{
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 use crate::impl_codec;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[typeshare(serialized_as = "String")]
 pub struct Subject(pub(crate) Bytes);
 
 impl_codec!(
     struct Subject(Bytes)
 );
+
+impl Serialize for Subject {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let string = unsafe { std::str::from_utf8_unchecked(self.0.as_ref()) };
+        serializer.serialize_str(string)
+    }
+}
+
+impl<'de> Deserialize<'de> for Subject {
+    fn deserialize<D>(deserializer: D) -> Result<Subject, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        Ok(Subject(Bytes::from(string)))
+    }
+}
 
 impl Subject {
     pub fn as_bytes(&self) -> &[u8] {
@@ -80,13 +102,34 @@ impl<'a> Iterator for SubjectSegments<'a> {
 /// # Interest
 /// ## Glob Match Interest
 /// (/)?(<path>|<*>|<**>)/*
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[typeshare(serialized_as = "String")]
 pub struct Interest(Bytes);
 
 impl_codec!(
     struct Interest(Bytes)
 );
+
+impl Serialize for Interest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let string = unsafe { std::str::from_utf8_unchecked(self.0.as_ref()) };
+        serializer.serialize_str(string)
+    }
+}
+
+impl<'de> Deserialize<'de> for Interest {
+    fn deserialize<D>(deserializer: D) -> Result<Interest, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        Ok(Interest(Bytes::from(string)))
+    }
+}
+
 impl Interest {
     pub fn new<B: Into<Bytes>>(bytes: B) -> Self {
         Self(bytes.into())

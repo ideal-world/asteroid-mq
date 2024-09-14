@@ -1,4 +1,3 @@
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::{borrow::Cow, mem::size_of};
@@ -8,7 +7,7 @@ use chrono::{TimeZone, Utc};
 
 use crate::protocol::endpoint::EndpointAddr;
 
-use crate::protocol::node::{NodeId};
+use crate::protocol::node::NodeId;
 
 use super::node::edge::packet::EdgePacketId;
 #[macro_export]
@@ -82,7 +81,12 @@ impl DecodeError {
 impl std::error::Error for DecodeError {}
 impl std::fmt::Display for DecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{parsing_type}: {context}", parsing_type = self.parsing_type, context = self.context)
+        write!(
+            f,
+            "{parsing_type}: {context}",
+            parsing_type = self.parsing_type,
+            context = self.context
+        )
     }
 }
 pub trait CodecType: Sized {
@@ -101,7 +105,6 @@ pub trait CodecType: Sized {
         Ok(value)
     }
 }
-
 
 /*******************************************************************************************
                                     CODEC FOR PRIMITIVE TYPES

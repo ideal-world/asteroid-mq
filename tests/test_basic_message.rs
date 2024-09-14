@@ -24,7 +24,6 @@ use asteroid_mq::{
         endpoint::{Message, MessageAckExpectKind, MessageHeader},
         interest::{Interest, Subject},
         node::{
-            connection::tokio_tcp::TokioTcp,
             raft::{
                 cluster::r#static::StaticClusterProvider,
                 state_machine::topic::config::{

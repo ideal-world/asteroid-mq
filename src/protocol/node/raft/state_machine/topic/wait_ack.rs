@@ -7,6 +7,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 use crate::{
     impl_codec,
@@ -22,6 +23,7 @@ pub struct WaitAck {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct WaitAckError {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
     pub exception: Option<WaitAckErrorException>,
@@ -35,6 +37,7 @@ impl_codec!(
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct WaitAckSuccess {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
@@ -56,6 +59,7 @@ impl WaitAckError {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[typeshare]
 pub enum WaitAckErrorException {
     MessageDropped = 0,
     Overflow = 1,

@@ -1,0 +1,1 @@
+typeshare -l typescript -d ./typescript ./src

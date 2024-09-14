@@ -8,6 +8,7 @@ use super::{
 pub use event::*;
 pub use message::*;
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 use std::{
     ops::Deref,
     sync::{Arc, Weak},
@@ -175,10 +176,32 @@ impl MessageHeader {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[typeshare(serialized_as = "String")]
 pub struct EndpointAddr {
     pub bytes: [u8; 16],
+}
+
+impl Serialize for EndpointAddr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use base64::Engine;
+        serializer.serialize_str(&base64::engine::general_purpose::URL_SAFE.encode(self.bytes))
+    }
+}
+
+impl<'de> Deserialize<'de> for EndpointAddr {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use base64::Engine;
+        use serde::de::Error;
+        let s = String::deserialize(deserializer)?;
+        let bytes = base64::engine::general_purpose::URL_SAFE.decode(s.as_bytes()).map_err(D::Error::custom)?;
+        if bytes.len() != 16 {
+            return Err(D::Error::custom("invalid length"));
+        }
+        let mut addr = [0; 16];
+        addr.copy_from_slice(&bytes);
+        Ok(Self { bytes: addr })
+    }
 }
 
 impl std::fmt::Debug for EndpointAddr {

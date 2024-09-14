@@ -92,6 +92,7 @@ error_kind! {
     pub enum ErrorKind {
         Durability: DurabilityError,
         Offline,
+        TopicAlreadyExists,
         Io: std::io::Error,
         Ack: WaitAckError,
         Custom: Box<dyn std::error::Error + Send + Sync>,

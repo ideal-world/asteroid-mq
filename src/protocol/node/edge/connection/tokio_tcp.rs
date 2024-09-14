@@ -5,7 +5,7 @@ use futures_util::{Sink, Stream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::protocol::node::{
-    edge::{codec::{CodecKind, CodecRegistry}, packet::{EdgePacketHeader, EdgePacketId, EdgePayloadKind}},
+    edge::{codec::{CodecKind, CodecRegistry}, packet::{EdgePacketHeader, EdgePacketId}},
     EdgePacket,
 };
 
@@ -23,6 +23,7 @@ pub enum WriteState {
 }
 
 const HEADER_SIZE: usize = std::mem::size_of::<EdgePacketHeader>();
+const EXTENDED_HEADER_SIZE: usize = HEADER_SIZE + std::mem::size_of::<u32>();
 pin_project_lite::pin_project! {
     #[derive(Debug)]
     pub struct TokioTcp {
@@ -30,14 +31,14 @@ pin_project_lite::pin_project! {
         inner: tokio::net::TcpStream,
         // read buffers
         read_state: ReadState,
-        read_header_buf: [u8; HEADER_SIZE],
+        read_header_buf: [u8; EXTENDED_HEADER_SIZE],
         read_payload_size: u32,
         read_payload_buf: BytesMut,
         read_index: usize,
         read_header: Option<EdgePacketHeader>,
         // write buffers
         write_item: Option<EdgePacket>,
-        write_header_buf: [u8; HEADER_SIZE],
+        write_header_buf: [u8; EXTENDED_HEADER_SIZE],
         write_payload_buf: Bytes,
         write_state: WriteState,
         write_index: usize,
@@ -85,6 +86,7 @@ impl Sink<EdgePacket> for TokioTcp {
         let header = item.header;
         this.write_header_buf[0..16].copy_from_slice(&header.id.bytes);
         this.write_header_buf[16] = header.codec.0;
+        this.write_header_buf[17..21].copy_from_slice(&item.payload.len().to_be_bytes());
         *this.write_payload_buf = item.payload;
         Ok(())
     }
@@ -111,7 +113,7 @@ impl Sink<EdgePacket> for TokioTcp {
                         )
                     })?;
                     *this.write_index += written;
-                    if *this.write_index == HEADER_SIZE {
+                    if *this.write_index == EXTENDED_HEADER_SIZE {
                         *this.write_state = WriteState::WritingPayload;
                         *this.write_index = 0;
                     }
@@ -196,12 +198,11 @@ impl Stream for TokioTcp {
                         }
                         *this.read_header = Some(header);
                     } else {
-                        let new_index = HEADER_SIZE - remaining;
+                        let new_index = EXTENDED_HEADER_SIZE - remaining;
                         *this.read_index = new_index;
                     }
                 }
                 ReadState::ExpectingPayload => {
-                    let header = this.read_header.as_ref().expect("header is set");
                     let payload_size = *this.read_payload_size as usize;
                     if payload_size == 0 {
                         let header = this.read_header.take().expect("header is set");

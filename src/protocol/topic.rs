@@ -20,6 +20,7 @@ use durable_message::{DurabilityService, DurableMessage, LoadTopic, UnloadTopic}
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::instrument;
+use typeshare::typeshare;
 
 use crate::{impl_codec, protocol::endpoint::LocalEndpointInner, TimestampSec};
 
@@ -45,7 +46,7 @@ use super::{
 };
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-
+#[typeshare]
 /// code are expect to be a valid utf8 string
 pub struct TopicCode(Bytes);
 impl TopicCode {

@@ -2,6 +2,7 @@ use std::{borrow::Cow, collections::HashMap, future::Future, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 use crate::{
     impl_codec,
@@ -82,6 +83,7 @@ impl DurableMessageQuery {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct MessageDurabilityConfig {
     // we should have a expire time
     pub expire: DateTime<Utc>,
