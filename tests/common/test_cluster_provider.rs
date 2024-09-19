@@ -1,10 +1,4 @@
-use std::{
-    collections::{BTreeMap, VecDeque},
-    future::pending,
-    net::SocketAddr,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use asteroid_mq::{prelude::NodeId, protocol::node::raft::cluster::ClusterProvider};
 use tokio::sync::{Mutex, Notify};

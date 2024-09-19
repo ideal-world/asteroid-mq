@@ -1,13 +1,7 @@
-use crate::{
-    impl_codec,
-    prelude::{DecodeError, NodeId},
-    protocol::codec::CodecType,
-};
-use bytes::{Bytes, BytesMut};
-use serde::{Deserialize, Serialize};
-use std::mem::size_of;
+use crate::{prelude::NodeId,};
+use bytes::Bytes;
 
-use super::{codec::CodecKind, EdgePayload, EdgeResponse};
+use super::codec::CodecKind;
 
 #[derive(Debug, Clone)]
 
@@ -16,12 +10,7 @@ pub struct NodeTrace {
     pub hops: Vec<NodeId>,
 }
 
-impl_codec!(
-    struct NodeTrace {
-        source: NodeId,
-        hops: Vec<NodeId>,
-    }
-);
+
 impl NodeTrace {
     pub fn source(&self) -> NodeId {
         self.source
@@ -50,12 +39,7 @@ impl NodeKind {
     }
 }
 
-impl_codec!(
-    enum NodeKind {
-        Cluster = 0,
-        Edge = 1,
-    }
-);
+
 
 impl From<u8> for NodeKind {
     fn from(value: u8) -> Self {
@@ -122,13 +106,13 @@ impl EdgePacket {
     pub fn new(codec: CodecKind, payload: impl Into<Bytes>) -> Self {
         let id = EdgePacketId::new_snowflake();
         let header = EdgePacketHeader { id, codec };
-        Self { header, payload: payload.into() }
+        Self {
+            header,
+            payload: payload.into(),
+        }
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Auth {}
 
-impl_codec!(
-    struct Auth {}
-);

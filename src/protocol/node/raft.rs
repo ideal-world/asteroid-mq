@@ -1,14 +1,5 @@
-use std::{
-    borrow::Cow,
-    cmp::Reverse,
-    collections::{BinaryHeap, HashMap, HashSet},
-    io::Cursor,
-    net::SocketAddr,
-    sync::{Arc, OnceLock},
-    time::{Duration, Instant},
-};
+use std::sync::{Arc, OnceLock};
 
-use bytes::Bytes;
 pub mod cluster;
 pub mod log_storage;
 pub mod network;
@@ -18,19 +9,9 @@ pub mod raft_node;
 pub mod response;
 pub mod state_machine;
 use network_factory::{RaftNodeInfo, TcpNetworkService};
-use openraft::{storage::RaftLogStorage, BasicNode, Raft};
+use openraft::{BasicNode, Raft};
 use proposal::Proposal;
 use response::RaftResponse;
-use tokio::sync::OnceCell;
-
-use crate::{
-    impl_codec,
-    protocol::{
-        codec::CodecType,
-        endpoint::{DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, SetState},
-        topic::durable_message::{LoadTopic, UnloadTopic},
-    },
-};
 
 use super::NodeId;
 
@@ -64,6 +45,12 @@ impl std::fmt::Debug for MaybeLoadingRaft {
     }
 }
 
+impl Default for MaybeLoadingRaft {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MaybeLoadingRaft {
     pub fn new() -> Self {
         Self {
@@ -89,10 +76,6 @@ impl MaybeLoadingRaft {
         self.loading.get().cloned()
     }
     pub fn net_work_service(&self, id: NodeId, node: BasicNode) -> TcpNetworkService {
-        TcpNetworkService {
-            info: RaftNodeInfo { id, node },
-            raft: self.clone(),
-            connections: Default::default(),
-        }
+        TcpNetworkService::new(RaftNodeInfo { id, node }, self.clone())
     }
 }

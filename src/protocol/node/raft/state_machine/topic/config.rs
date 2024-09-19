@@ -2,8 +2,7 @@ use std::num::NonZeroU32;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{impl_codec, prelude::TopicCode};
-
+use crate::{prelude::TopicCode};
 
 #[derive(Debug, Clone, Default)]
 
@@ -15,24 +14,14 @@ pub enum TopicOverflowPolicy {
     DropOld = 1,
 }
 
-impl_codec!(
-    enum TopicOverflowPolicy {
-        RejectNew = 0,
-        DropOld = 1,
-    }
-);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 
 pub struct TopicOverflowConfig {
     pub policy: TopicOverflowPolicy,
     pub size: NonZeroU32,
 }
-impl_codec!(
-    struct TopicOverflowConfig {
-        policy: TopicOverflowPolicy,
-        size: NonZeroU32,
-    }
-);
+
 
 impl TopicOverflowConfig {
     #[inline(always)]
@@ -60,13 +49,7 @@ pub struct TopicConfig {
     pub overflow_config: Option<TopicOverflowConfig>,
 }
 
-impl_codec!(
-    struct TopicConfig {
-        code: TopicCode,
-        blocking: bool,
-        overflow_config: Option<TopicOverflowConfig>,
-    }
-);
+
 
 impl From<TopicCode> for TopicConfig {
     fn from(code: TopicCode) -> Self {

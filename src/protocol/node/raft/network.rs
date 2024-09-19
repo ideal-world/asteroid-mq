@@ -1,10 +1,4 @@
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    io::Write,
-    sync::{atomic::AtomicBool, Arc},
-    task::Waker,
-};
+use std::sync::Arc;
 
 use openraft::{
     error::{
@@ -14,41 +8,22 @@ use openraft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
         InstallSnapshotResponse, VoteRequest, VoteResponse,
     },
-    BasicNode, Raft, RaftNetwork,
+    BasicNode, RaftNetwork,
 };
 use serde::{Deserialize, Serialize};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{tcp::OwnedWriteHalf, TcpStream},
-    sync::{
-        oneshot::{Receiver, Sender},
-        Mutex, OnceCell, RwLock,
-    },
-};
+use tokio::{net::TcpStream, sync::oneshot::Receiver};
 
 use crate::prelude::NodeId;
 
 use super::{
-    network_factory::{RaftNodeInfo, RaftTcpConnection, RaftTcpConnectionMap, TcpNetworkService}, proposal::Proposal, TypeConfig
+    network_factory::{RaftNodeInfo, RaftTcpConnection, TcpNetworkService},
+    proposal::Proposal,
+    TypeConfig,
 };
 
 pub struct TcpNetwork {
     peer: RaftNodeInfo,
     source: TcpNetworkService,
-}
-
-pub struct TcpNetworkConnected {
-    packet_tx: flume::Sender<Packet>,
-    write_task: tokio::task::JoinHandle<std::io::Result<()>>,
-    read_task: tokio::task::JoinHandle<std::io::Result<()>>,
-    wait_poll: Arc<Mutex<HashMap<u64, Sender<Response>>>>,
-}
-
-impl Drop for TcpNetworkConnected {
-    fn drop(&mut self) {
-        self.read_task.abort();
-        self.write_task.abort();
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -133,7 +108,7 @@ impl RaftNetwork<TypeConfig> for TcpNetwork {
     async fn vote(
         &mut self,
         rpc: VoteRequest<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
-        option: openraft::network::RPCOption,
+        _option: openraft::network::RPCOption,
     ) -> Result<
         VoteResponse<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
         RPCError<
@@ -154,7 +129,7 @@ impl RaftNetwork<TypeConfig> for TcpNetwork {
     async fn append_entries(
         &mut self,
         rpc: openraft::raft::AppendEntriesRequest<TypeConfig>,
-        option: openraft::network::RPCOption,
+        _option: openraft::network::RPCOption,
     ) -> Result<
         openraft::raft::AppendEntriesResponse<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
         openraft::error::RPCError<
@@ -175,7 +150,7 @@ impl RaftNetwork<TypeConfig> for TcpNetwork {
     async fn install_snapshot(
         &mut self,
         rpc: openraft::raft::InstallSnapshotRequest<TypeConfig>,
-        option: openraft::network::RPCOption,
+        _option: openraft::network::RPCOption,
     ) -> Result<
         openraft::raft::InstallSnapshotResponse<<TypeConfig as openraft::RaftTypeConfig>::NodeId>,
         openraft::error::RPCError<

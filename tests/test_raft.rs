@@ -29,7 +29,7 @@ async fn test_raft() {
             19000 + index as u16,
         )
     }
-    let mut cluster = common::TestClusterProvider::new(map!(
+    let cluster = common::TestClusterProvider::new(map!(
         node_id(1) => node_addr(1),
     ));
 

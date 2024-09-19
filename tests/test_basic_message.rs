@@ -49,11 +49,10 @@ async fn test_nodes() {
                     .add_directive(
                         tracing_subscriber::filter::Directive::from_str("asteroid_mq=debug")
                             .unwrap(),
-                    ).add_directive(
-                        tracing_subscriber::filter::Directive::from_str("openraft=info")
-                            .unwrap(),
                     )
-
+                    .add_directive(
+                        tracing_subscriber::filter::Directive::from_str("openraft=info").unwrap(),
+                    ),
             ),
         )
         .init();
@@ -164,7 +163,7 @@ async fn test_nodes() {
                     .ack_kind(MessageAckExpectKind::Processed)
                     .mode_online()
                     .build(),
-                    format!("Message No.{no} of {}", MessageAckExpectKind::Processed),
+                format!("Message No.{no} of {}", MessageAckExpectKind::Processed),
             ))
             .await
             .unwrap();

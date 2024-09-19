@@ -5,11 +5,13 @@ use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::{
-    impl_codec,
-    protocol::{endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind}, node::raft::state_machine::topic::config::TopicConfig},
+    protocol::{
+        endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind},
+        node::raft::state_machine::topic::config::TopicConfig,
+    },
 };
 
-use super::{TopicCode};
+use super::TopicCode;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurableMessage {
     pub message: Message,
@@ -17,13 +19,6 @@ pub struct DurableMessage {
     pub time: DateTime<Utc>,
 }
 
-impl_codec!(
-    struct DurableMessage {
-        message: Message,
-        status: HashMap<EndpointAddr, MessageStatusKind>,
-        time: DateTime<Utc>,
-    }
-);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadTopic {
@@ -40,12 +35,7 @@ impl LoadTopic {
     }
 }
 
-impl_codec!(
-    struct LoadTopic {
-        config: TopicConfig,
-        queue: Vec<DurableMessage>,
-    }
-);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 
 pub struct UnloadTopic {
@@ -58,11 +48,6 @@ impl UnloadTopic {
     }
 }
 
-impl_codec!(
-    struct UnloadTopic {
-        code: TopicCode,
-    }
-);
 
 #[derive(Debug, Clone)]
 pub struct DurableMessageQuery {
@@ -91,12 +76,7 @@ pub struct MessageDurabilityConfig {
     pub max_receiver: Option<u32>,
 }
 
-impl_codec!(
-    struct MessageDurabilityConfig {
-        expire: DateTime<Utc>,
-        max_receiver: Option<u32>,
-    }
-);
+
 #[derive(Debug)]
 pub struct DurabilityError {
     pub context: Cow<'static, str>,

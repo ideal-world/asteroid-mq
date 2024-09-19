@@ -2,7 +2,6 @@ pub mod node;
 pub mod topic;
 
 use std::{
-    collections::{BTreeMap, HashMap},
     io::{self, Cursor},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -10,22 +9,19 @@ use std::{
     },
 };
 
-use bytes::Bytes;
-use crossbeam::sync::ShardedLock;
 use node::NodeData;
 use openraft::{
-    storage::RaftStateMachine, BasicNode, DefensiveError, EntryPayload, LogId, RaftSnapshotBuilder,
-    RaftTypeConfig, Snapshot, SnapshotMeta, StorageError, StoredMembership, Violation,
+    storage::RaftStateMachine, BasicNode, EntryPayload, LogId, RaftSnapshotBuilder, RaftTypeConfig,
+    Snapshot, SnapshotMeta, StorageError, StoredMembership,
 };
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::{
-    prelude::{CodecType, Node, NodeId},
+    prelude::NodeId,
     protocol::node::{raft::proposal::ProposalContext, NodeRef},
 };
 
-use super::{response::RaftResponse, MaybeLoadingRaft, TypeConfig};
+use super::{response::RaftResponse, TypeConfig};
 #[derive(Debug)]
 pub struct StoredSnapshot {
     pub meta: SnapshotMeta<NodeId, BasicNode>,
@@ -139,7 +135,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
             state_machine.last_membership.clone(),
         ))
     }
-    
+
     async fn apply<I>(
         &mut self,
         entries: I,
@@ -160,9 +156,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
                 EntryPayload::Normal(ref proposal) => {
                     tracing::debug!(?proposal, "applying proposal to state machine");
                     let Some(node) = self.node_ref.upgrade() else {
-                        res.push(RaftResponse {
-                            result: Err(()),
-                        });
+                        res.push(RaftResponse { result: Err(()) });
                         continue;
                     };
                     let context = ProposalContext {
@@ -176,35 +170,29 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
                             sm.node
                                 .apply_delegate_message(delegate_message.clone(), context);
                             res.push(RaftResponse { result: Ok(()) })
-
                         }
                         crate::protocol::node::raft::proposal::Proposal::SetState(set_state) => {
                             sm.node.apply_set_state(set_state.clone(), context);
                             res.push(RaftResponse { result: Ok(()) })
-
                         }
                         crate::protocol::node::raft::proposal::Proposal::LoadTopic(load_topic) => {
                             sm.node.apply_load_topic(load_topic.clone(), context);
                             tracing::debug!(?load_topic, "topic loaded");
                             res.push(RaftResponse { result: Ok(()) })
-
                         }
                         crate::protocol::node::raft::proposal::Proposal::UnloadTopic(
                             unload_topic,
                         ) => {
                             sm.node.apply_unload_topic(unload_topic.clone());
                             res.push(RaftResponse { result: Ok(()) })
-
                         }
                         crate::protocol::node::raft::proposal::Proposal::EpOnline(ep_online) => {
                             sm.node.apply_ep_online(ep_online.clone(), context);
                             res.push(RaftResponse { result: Ok(()) })
-
                         }
                         crate::protocol::node::raft::proposal::Proposal::EpOffline(ep_offline) => {
                             sm.node.apply_ep_offline(ep_offline.clone(), context);
                             res.push(RaftResponse { result: Ok(()) })
-
                         }
                         crate::protocol::node::raft::proposal::Proposal::EpInterest(
                             ep_interest,

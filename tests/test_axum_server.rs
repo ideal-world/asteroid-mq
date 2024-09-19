@@ -5,6 +5,8 @@ use axum::{
     },
     response::Response,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use std::task::ready;
 
@@ -120,14 +122,19 @@ impl Stream for AxumWs {
 }
 
 impl NodeConnection for AxumWs {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectQuery {
+    pub node_id: String,
+}
 async fn handler(
     ws: WebSocketUpgrade,
+    query: axum::extract::Query<ConnectQuery>,
     state: State<Node>,
-    peer_id: axum::extract::Query<String>,
 ) -> Response {
     use base64::Engine;
     let id = base64::engine::general_purpose::URL_SAFE
-        .decode(peer_id.0)
+        .decode(query.0.node_id)
         .unwrap();
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&id);
@@ -136,6 +143,7 @@ async fn handler(
         supported_codec_kinds: vec![CodecKind::JSON].into_iter().collect(),
         peer_auth: Auth {},
     };
+    tracing::info!(?config, "new edge connection");
     ws.on_upgrade(|ws| async move { handle_socket(ws, state.0, config).await })
 }
 
@@ -157,10 +165,16 @@ async fn handle_socket(socket: WebSocket, node: Node, config: EdgeConfig) {
     tracing::info!(?node_id, "edge disconnected");
 }
 
+async fn get_node_id() -> String {
+    let node_id = NodeId::snowflake().to_base64();
+    tracing::info!(?node_id, "new node id");
+    node_id
+}
+
 #[tokio::test]
 async fn test_websocket_server() -> asteroid_mq::Result<()> {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_env_filter("debug,asteroid_mq=debug,openraft=warn")
         .init();
     let node = Node::new(NodeConfig::default());
     let cluster_provider = StaticClusterProvider::singleton(node.config());
@@ -174,7 +188,8 @@ async fn test_websocket_server() -> asteroid_mq::Result<()> {
     tokio::spawn(async move {
         loop {
             let message = receiver_endpoint.next_message().await;
-            tracing::info!(?message, "recv message in server node");
+            let payload: Value = serde_json::from_slice(&message.payload.0).expect("invalid json");
+            tracing::info!(%payload, header=?message.header, "recv message in server node");
             receiver_endpoint
                 .ack_processed(&message.header)
                 .await
@@ -187,7 +202,8 @@ async fn test_websocket_server() -> asteroid_mq::Result<()> {
         .unwrap();
     tracing::info!("listening on {}", tcp_listener.local_addr().unwrap());
     let route = axum::Router::new()
-        .route("/", axum::routing::get(handler))
+        .route("/connect", axum::routing::get(handler))
+        .route("/node_id", axum::routing::put(get_node_id))
         .with_state(node);
     serve(tcp_listener, route).await.unwrap();
     Ok(())

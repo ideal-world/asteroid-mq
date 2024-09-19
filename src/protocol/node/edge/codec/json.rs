@@ -4,7 +4,10 @@ use super::Codec;
 pub struct Json;
 
 impl Codec for Json {
-    fn decode(&self, bytes: &[u8]) -> Result<crate::protocol::node::edge::EdgePayload, super::CodecError> {
+    fn decode(
+        &self,
+        bytes: &[u8],
+    ) -> Result<crate::protocol::node::edge::EdgePayload, super::CodecError> {
         serde_json::from_slice(bytes).map_err(super::CodecError::decode_error)
     }
     fn encode(&self, value: &crate::protocol::node::edge::EdgePayload) -> Vec<u8> {

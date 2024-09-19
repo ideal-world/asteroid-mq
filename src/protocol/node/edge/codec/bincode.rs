@@ -4,7 +4,10 @@ use super::Codec;
 pub struct Bincode;
 
 impl Codec for Bincode {
-    fn decode(&self, bytes: &[u8]) -> Result<crate::protocol::node::edge::EdgePayload, super::CodecError> {
+    fn decode(
+        &self,
+        bytes: &[u8],
+    ) -> Result<crate::protocol::node::edge::EdgePayload, super::CodecError> {
         bincode::deserialize(bytes).map_err(super::CodecError::decode_error)
     }
     fn encode(&self, value: &crate::protocol::node::edge::EdgePayload) -> Vec<u8> {

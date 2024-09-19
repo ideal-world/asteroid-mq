@@ -1,25 +1,19 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use openraft::Raft;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{oneshot, RwLock};
 
 use crate::{
-    prelude::{MessageId, Node, NodeId, TopicCode},
+    prelude::{MessageId, Node, TopicCode},
     protocol::{
         endpoint::{
             DelegateMessage, EndpointAddr, EndpointInterest, EndpointOffline, EndpointOnline,
-            Message, MessageAck, MessageStateUpdate, MessageStatusKind, SetState,
+            Message, MessageStateUpdate, MessageStatusKind, SetState,
         },
-        node::NodeRef,
         topic::durable_message::{LoadTopic, UnloadTopic},
     },
 };
 
-use super::{
-    state_machine::topic::wait_ack::{WaitAckError, WaitAckResult, WaitAckSuccess},
-    MaybeLoadingRaft, TypeConfig,
-};
+use super::state_machine::topic::wait_ack::WaitAckResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[repr(u8)]

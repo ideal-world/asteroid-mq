@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 use crate::{
-    impl_codec,
     protocol::{interest::Interest, node::NodeId, topic::TopicCode},
     TimestampSec,
 };
@@ -15,27 +15,15 @@ pub struct DelegateMessage {
     pub topic: TopicCode,
     pub message: Message,
 }
-impl_codec!(
-    struct DelegateMessage {
-        topic: TopicCode,
-        message: Message,
-    }
-);
+
 #[derive(Debug)]
 
 pub struct CastMessage {
     pub target_eps: Vec<EndpointAddr>,
     pub message: Message,
 }
-impl_codec!(
-    struct CastMessage {
-        target_eps: Vec<EndpointAddr>,
-        message: Message,
-    }
-);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-
 
 pub struct EndpointOnline {
     pub topic_code: TopicCode,
@@ -44,14 +32,7 @@ pub struct EndpointOnline {
     pub host: NodeId,
 }
 
-impl_codec!(
-    struct EndpointOnline {
-        endpoint: EndpointAddr,
-        topic_code: TopicCode,
-        host: NodeId,
-        interests: Vec<Interest>,
-    }
-);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 
 pub struct EndpointOffline {
@@ -60,41 +41,25 @@ pub struct EndpointOffline {
     pub host: NodeId,
 }
 
-impl_codec!(
-    struct EndpointOffline {
-        topic_code: TopicCode,
-        endpoint: EndpointAddr,
-        host: NodeId,
-    }
-);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct EndpointInterest {
     pub topic_code: TopicCode,
     pub endpoint: EndpointAddr,
     pub interests: Vec<Interest>,
 }
 
-impl_codec!(
-    struct EndpointInterest {
-        topic_code: TopicCode,
-        endpoint: EndpointAddr,
-        interests: Vec<Interest>,
-    }
-);
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct MessageStateUpdate {
     pub message_id: MessageId,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
 
-impl_codec!(
-    struct MessageStateUpdate {
-        message_id: MessageId,
-        status: HashMap<EndpointAddr, MessageStatusKind>,
-    }
-);
+
 
 impl MessageStateUpdate {
     pub fn new(message_id: MessageId, status: HashMap<EndpointAddr, MessageStatusKind>) -> Self {
@@ -108,17 +73,12 @@ impl MessageStateUpdate {
     }
 }
 
-
 #[derive(Debug)]
 pub struct EndpointSync {
     pub entries: Vec<(TopicCode, Vec<EpInfo>)>,
 }
 
-impl_codec!(
-    struct EndpointSync {
-        entries: Vec<(TopicCode, Vec<EpInfo>)>,
-    }
-);
+
 
 #[derive(Debug)]
 pub struct EpInfo {
@@ -128,23 +88,10 @@ pub struct EpInfo {
     pub latest_active: TimestampSec,
 }
 
-impl_codec!(
-    struct EpInfo {
-        addr: EndpointAddr,
-        host: NodeId,
-        interests: Vec<Interest>,
-        latest_active: TimestampSec,
-    }
-);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct SetState {
     pub topic: TopicCode,
     pub update: MessageStateUpdate,
 }
-
-impl_codec!(
-    struct SetState {
-        topic: TopicCode,
-        update: MessageStateUpdate,
-    }
-);

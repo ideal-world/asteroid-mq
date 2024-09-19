@@ -1,6 +1,8 @@
-use std::{borrow::Cow, collections::{HashMap, HashSet}, sync::Arc};
-
-use serde::de::DeserializeOwned;
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use super::EdgePayload;
 pub mod bincode;
@@ -18,12 +20,13 @@ impl std::fmt::Display for CodecKind {
     }
 }
 
-
 impl CodecKind {
     pub const CBOR: Self = Self(0x00);
     pub const BINCODE: Self = Self(0x01);
     pub const JSON: Self = Self(0x40);
 }
+
+#[derive(Debug)]
 pub struct CodecError {
     reason: Cow<'static, str>,
 }

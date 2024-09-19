@@ -8,11 +8,11 @@ use super::{
 pub use event::*;
 pub use message::*;
 use serde::{Deserialize, Serialize};
-use typeshare::typeshare;
 use std::{
     ops::Deref,
     sync::{Arc, Weak},
 };
+use typeshare::typeshare;
 
 use crate::protocol::interest::Interest;
 #[derive(Clone, Debug)]
@@ -44,11 +44,13 @@ impl Drop for LocalEndpointInner {
         if let Some(topic) = self.attached_topic.upgrade() {
             tokio::spawn(async move {
                 let node = topic.node();
-                let result = node.proposal(Proposal::EpOffline(EndpointOffline {
-                    topic_code: topic.code().clone(),
-                    endpoint,
-                    host: node.id(),
-                })).await;
+                let result = node
+                    .proposal(Proposal::EpOffline(EndpointOffline {
+                        topic_code: topic.code().clone(),
+                        endpoint,
+                        host: node.id(),
+                    }))
+                    .await;
                 if let Err(err) = result {
                     tracing::error!(?err, "offline endpoint failed");
                 }
@@ -137,7 +139,8 @@ impl LocalEndpoint {
                 topic_code: topic.code().clone(),
                 endpoint: self.address,
                 interests,
-            })).await
+            }))
+            .await
         } else {
             Err(crate::Error::new(
                 "topic not found",
@@ -184,23 +187,36 @@ pub struct EndpointAddr {
 
 impl Serialize for EndpointAddr {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use base64::Engine;
-        serializer.serialize_str(&base64::engine::general_purpose::URL_SAFE.encode(self.bytes))
+        if serializer.is_human_readable() {
+            use base64::Engine;
+            serializer.serialize_str(&base64::engine::general_purpose::URL_SAFE.encode(self.bytes))
+        } else {
+            <[u8; 16]>::serialize(&self.bytes, serializer)
+        }
     }
 }
 
 impl<'de> Deserialize<'de> for EndpointAddr {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use base64::Engine;
-        use serde::de::Error;
-        let s = String::deserialize(deserializer)?;
-        let bytes = base64::engine::general_purpose::URL_SAFE.decode(s.as_bytes()).map_err(D::Error::custom)?;
-        if bytes.len() != 16 {
-            return Err(D::Error::custom("invalid length"));
+        if deserializer.is_human_readable() {
+            use base64::Engine;
+            use serde::de::Error;
+            let s = String::deserialize(deserializer)?;
+            let bytes = base64::engine::general_purpose::URL_SAFE
+                .decode(s.as_bytes())
+                .map_err(D::Error::custom)?;
+            if bytes.len() != 16 {
+                return Err(D::Error::custom("invalid length"));
+            }
+            let mut addr = [0; 16];
+            addr.copy_from_slice(&bytes);
+            Ok(Self { bytes: addr })
+        } else {
+            let bytes = <[u8; 16]>::deserialize(deserializer)?;
+            Ok(Self {
+                bytes
+            })
         }
-        let mut addr = [0; 16];
-        addr.copy_from_slice(&bytes);
-        Ok(Self { bytes: addr })
     }
 }
 

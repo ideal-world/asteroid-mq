@@ -7,46 +7,37 @@ pub mod durable_message;
 
 use std::{
     borrow::Borrow,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     hash::Hash,
     ops::Deref,
-    sync::{Arc, RwLock, Weak},
-    task::Poll,
+    sync::{Arc, Weak},
 };
 
 use bytes::Bytes;
 use crossbeam::sync::ShardedLock;
-use durable_message::{DurabilityService, DurableMessage, LoadTopic, UnloadTopic};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
-use tracing::instrument;
 use typeshare::typeshare;
 
-use crate::{impl_codec, protocol::endpoint::LocalEndpointInner, TimestampSec};
+use crate::protocol::endpoint::LocalEndpointInner;
 
 use super::{
-    codec::CodecType,
     endpoint::{
-        DelegateMessage, EndpointAddr, EndpointOffline, EndpointOnline, EpInfo, LocalEndpoint,
+        DelegateMessage, EndpointAddr, EndpointOffline, EndpointOnline, LocalEndpoint,
         LocalEndpointRef, Message, MessageAck, MessageId, MessageStateUpdate, MessageStatusKind,
-        MessageTargetKind, SetState,
+        SetState,
     },
-    interest::{Interest, InterestMap, Subject},
+    interest::Interest,
     node::{
         raft::{
             proposal::Proposal,
-            state_machine::topic::{
-                config::TopicConfig,
-                wait_ack::{WaitAckHandle, WaitAckResult},
-            },
-            MaybeLoadingRaft,
+            state_machine::topic::wait_ack::{WaitAckHandle, WaitAckResult},
         },
-        Node, NodeId, NodeRef,
+        Node,
     },
 };
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[typeshare(serialized_as = "String")]
 /// code are expect to be a valid utf8 string
 pub struct TopicCode(Bytes);
 impl TopicCode {
@@ -55,6 +46,20 @@ impl TopicCode {
     }
     pub const fn const_new(code: &'static str) -> Self {
         Self(Bytes::from_static(code.as_bytes()))
+    }
+}
+
+impl Serialize for TopicCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let string = unsafe { std::str::from_utf8_unchecked(self.0.as_ref()) };
+        serializer.serialize_str(string)
+    }
+}
+
+impl<'de> Deserialize<'de> for TopicCode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let string = String::deserialize(deserializer)?;
+        Ok(Self(Bytes::from(string)))
     }
 }
 
@@ -69,19 +74,7 @@ impl std::fmt::Display for TopicCode {
         unsafe { f.write_str(std::str::from_utf8_unchecked(&self.0)) }
     }
 }
-impl CodecType for TopicCode {
-    fn decode(bytes: Bytes) -> Result<(Self, Bytes), super::codec::DecodeError> {
-        Bytes::decode(bytes).and_then(|(s, bytes)| {
-            std::str::from_utf8(&s)
-                .map_err(|e| super::codec::DecodeError::new::<TopicCode>(e.to_string()))?;
-            Ok((TopicCode(s), bytes))
-        })
-    }
 
-    fn encode(&self, buf: &mut bytes::BytesMut) {
-        self.0.encode(buf)
-    }
-}
 
 #[derive(Debug, Default, Clone)]
 pub struct TopicRef {
@@ -222,8 +215,24 @@ impl Topic {
         message: Message,
         ep: &EndpointAddr,
     ) -> Option<MessageStatusKind> {
-        self.get_local_ep(ep)?.upgrade()?.push_message(message);
-        Some(MessageStatusKind::Sent)
+        // message is local or edge?
+        if let Some(local) = self.get_local_ep(ep) {
+            local.upgrade()?.push_message(message);
+            Some(MessageStatusKind::Sent)
+        } else {
+            // message is edge
+            let node = self.node();
+            tracing::debug!(?ep, "dispatch message to edge");
+            let node_id = node.get_edge_routing(ep)?;
+            tracing::debug!(?node_id, "dispatch message to edge");
+            let edge = node.get_edge_connection(node_id)?;
+            let result = edge.push_message(ep, message);
+            if let Err(err) = result {
+                tracing::warn!(?err, "push message failed");
+                return Some(MessageStatusKind::Unreachable);
+            }
+            Some(MessageStatusKind::Sent)
+        }
     }
     pub(crate) async fn single_ack(&self, ack: MessageAck) -> Result<(), crate::Error> {
         self.node()

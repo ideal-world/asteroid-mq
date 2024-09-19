@@ -7,7 +7,7 @@ codablevoid_constraints = []
 [swift.type_mappings]
 
 [typescript.type_mappings]
-"Bytes" = "Uint8Array"
+"Bytes" = "string"
 "u64" = "bigint"
 "DateTime<Utc>" = "Date"
 "DateTime" = "Date"

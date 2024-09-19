@@ -2,7 +2,7 @@ pub mod config;
 pub mod message_queue;
 pub mod wait_ack;
 use crate::{
-    prelude::{DurableMessage, Interest, MessageId, NodeId, Subject},
+    prelude::{DurableMessage, Interest, NodeId, Subject},
     protocol::{
         endpoint::{
             EndpointAddr, Message, MessageStateUpdate, MessageStatusKind, MessageTargetKind,
@@ -10,7 +10,6 @@ use crate::{
         interest::InterestMap,
         node::raft::proposal::ProposalContext,
     },
-    TimestampSec,
 };
 use config::TopicConfig;
 use message_queue::{HoldMessage, MessageQueue};
@@ -129,7 +128,8 @@ impl TopicData {
     }
     pub(crate) fn reachable_eps(&self, node_id: &NodeId) -> HashSet<EndpointAddr> {
         self.ep_routing_table
-            .get(node_id).cloned()
+            .get(node_id)
+            .cloned()
             .unwrap_or_default()
     }
     pub(crate) fn update_and_flush(&mut self, update: MessageStateUpdate, ctx: &ProposalContext) {
@@ -138,7 +138,8 @@ impl TopicData {
             for (from, status) in update.status {
                 self.queue.update_ack(&update.message_id, from, status)
             }
-            self.queue.poll_message(update.message_id, &reachable_eps, ctx)
+            self.queue
+                .poll_message(update.message_id, &reachable_eps, ctx)
         };
         if let Some(Poll::Ready(())) = poll_result {
             self.queue.flush(&reachable_eps, ctx);
@@ -210,7 +211,7 @@ impl TopicData {
             }
         }
         for id in message_need_poll {
-            self.update_and_flush(MessageStateUpdate::new_empty(id), &ctx);
+            self.update_and_flush(MessageStateUpdate::new_empty(id), ctx);
         }
     }
 
@@ -234,7 +235,7 @@ impl TopicData {
             }
         }
         for id in message_need_poll {
-            self.update_and_flush(MessageStateUpdate::new_empty(id), &ctx);
+            self.update_and_flush(MessageStateUpdate::new_empty(id), ctx);
         }
     }
 }

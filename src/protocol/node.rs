@@ -1,17 +1,16 @@
 pub mod edge;
 pub mod raft;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet}, net::SocketAddr, ops::Deref, str::FromStr, sync::{self, atomic::AtomicUsize, Arc, RwLock}
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    net::SocketAddr,
+    ops::Deref,
+    sync::{self, Arc, RwLock},
 };
 
 use super::{
-    codec::CodecType,
-    endpoint::{EndpointInterest, SetState},
-    topic::{Topic, TopicCode, TopicInner},
+    endpoint::{EndpointAddr, EndpointOffline, EndpointOnline, SetState},
+    topic::{Topic, TopicCode},
 };
-use bincode::config;
-use bytes::Bytes;
-use crossbeam::sync::ShardedLock;
 use edge::{
     codec::CodecRegistry,
     connection::{
@@ -21,36 +20,59 @@ use edge::{
     EdgeConfig, EdgeResult,
 };
 use edge::{
-    packet::{Auth, EdgePacket, NodeKind, NodeTrace},
-    EdgeError, EdgeErrorKind, EdgeMessage, EdgePayload,
+    packet::{Auth, EdgePacket, NodeTrace},
+    EdgeError, EdgeErrorKind,
 };
 use futures_util::TryFutureExt;
-use openraft::{docs::components::state_machine, BasicNode, ChangeMembers, Raft};
+use openraft::{BasicNode, ChangeMembers, Raft};
 use raft::{
     cluster::ClusterProvider,
     log_storage::LogStorage,
-    network_factory::{RaftNodeInfo, TcpNetworkService},
+    network_factory::TcpNetworkService,
     proposal::Proposal,
     state_machine::{topic::config::TopicConfig, StateMachineStore},
     MaybeLoadingRaft, TypeConfig,
 };
 use serde::{Deserialize, Serialize};
-use tracing::instrument;
+use typeshare::typeshare;
 
 use crate::{
-    impl_codec, prelude::DurableMessage, protocol::{
-        endpoint::EndpointOnline,
-        topic::durable_message::{LoadTopic, UnloadTopic},
-    }, DEFAULT_TCP_SOCKET_ADDR
+    prelude::DurableMessage, protocol::topic::durable_message::LoadTopic,
+    DEFAULT_TCP_SOCKET_ADDR,
 };
 
-use super::endpoint::{CastMessage, DelegateMessage, EndpointOffline, EndpointSync, MessageAck};
-
-#[derive(Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[typeshare(serialized_as = "string")]
 pub struct NodeId {
     pub bytes: [u8; 16],
 }
+
+impl Serialize for NodeId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&self.to_base64())
+        } else {
+            <[u8; 16]>::serialize(&self.bytes, serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NodeId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        if deserializer.is_human_readable() {
+            let s = <&'de str>::deserialize(deserializer)?;
+            NodeId::from_base64(s).map_err(D::Error::custom)
+        } else {
+            let bytes = <[u8; 16]>::deserialize(deserializer)?;
+            Ok(NodeId { bytes })
+        }
+    }
+}
+
 impl From<u64> for NodeId {
     fn from(id: u64) -> Self {
         Self::new_indexed(id)
@@ -122,6 +144,17 @@ impl NodeId {
         bytes[10..16].copy_from_slice(&(crate::util::timestamp_sec()).to_be_bytes()[2..8]);
         NodeId { bytes }
     }
+    pub fn to_base64(&self) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE.encode(self.bytes)
+    }
+    pub fn from_base64(s: &str) -> Result<Self, base64::DecodeError> {
+        use base64::Engine;
+        let id = base64::engine::general_purpose::URL_SAFE.decode(s)?;
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&id);
+        Ok(Self { bytes })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -139,7 +172,6 @@ impl Default for NodeConfig {
             raft: openraft::Config::default(),
         }
     }
-
 }
 
 #[derive(Debug)]
@@ -148,6 +180,7 @@ pub struct NodeInner {
     network: TcpNetworkService,
     config: NodeConfig,
     edge_connections: RwLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
+    edge_routing: RwLock<HashMap<EndpointAddr, (NodeId, TopicCode)>>,
     codec_registry: Arc<CodecRegistry>,
     topics: RwLock<HashMap<TopicCode, Topic>>,
 }
@@ -320,6 +353,7 @@ impl Node {
         let network = raft.net_work_service(config.id, BasicNode::new(config.addr));
         let inner = NodeInner {
             edge_connections: RwLock::new(HashMap::new()),
+            edge_routing: RwLock::new(HashMap::new()),
             topics: RwLock::new(HashMap::new()),
             config,
             raft,
@@ -378,7 +412,13 @@ impl Node {
     pub fn is(&self, id: NodeId) -> bool {
         self.id() == id
     }
-
+    pub(crate) fn get_edge_routing(&self, addr: &EndpointAddr) -> Option<NodeId> {
+        let routing = self.edge_routing.read().unwrap();
+        Some(routing.get(addr)?.0)
+    }
+    pub(crate) fn set_edge_routing(&self, addr: EndpointAddr, edge: NodeId, topic: TopicCode) {
+        self.edge_routing.write().unwrap().insert(addr, (edge, topic));
+    }
     pub fn get_edge_connection(&self, to: NodeId) -> Option<EdgeConnectionRef> {
         let connections = self.edge_connections.read().unwrap();
         let conn = connections.get(&to)?;
@@ -389,9 +429,51 @@ impl Node {
         }
     }
     pub fn remove_edge_connection(&self, to: NodeId) {
-        self.edge_connections.write().unwrap().remove(&to);
+        let Some(_connection) = self.edge_connections.write().unwrap().remove(&to) else {
+            return
+        };
+        let mut routing = self.edge_routing.write().unwrap();
+        let mut offline_eps = Vec::new();
+        for (addr, (node_id, topic)) in routing.iter() {
+            if node_id == &to {
+                offline_eps.push((*addr, topic.clone()));
+            }
+        }
+        for (ref addr, _) in &offline_eps {
+            routing.remove(addr);
+        }
+        drop(routing);
+        let host = self.id();
+        for (addr, topic_code) in offline_eps {
+            let offline = EndpointOffline {
+                endpoint: addr,
+                host,
+                topic_code,
+            };
+            let node = self.clone();
+            tokio::spawn(async move {
+                let _ = node.proposal(Proposal::EpOffline(offline)).await;
+            });
+        }
     }
-
+    pub fn check_ep_auth(&self, ep: &EndpointAddr, peer: &NodeId) -> Result<(), EdgeError> {
+        let routing = self.edge_routing.read().unwrap();
+        if let Some((owner, _topic)) = routing.get(ep) {
+            if owner == peer {
+                Ok(())
+            } else {
+                Err(EdgeError::new(
+                    "endpoint not owned by sender",
+                    EdgeErrorKind::Unauthorized,
+                ))
+            }
+        } else {
+            Err(EdgeError::new(
+                "endpoint not found",
+                EdgeErrorKind::EndpointNotFound,
+            ))
+        }
+    }
     pub(crate) async fn handle_edge_request(
         &self,
         from: NodeId,
@@ -417,12 +499,104 @@ impl Node {
                     })
                     .await?;
                 let response = handle.await;
-                Ok(edge::EdgeResponseEnum::SendMessage(EdgeResult::from_std(response)))
+                Ok(edge::EdgeResponseEnum::SendMessage(EdgeResult::from_std(
+                    response,
+                )))
             }
-            _ => Err(EdgeError::new(
-                "unsupported request kind",
-                EdgeErrorKind::Internal,
-            )),
+            edge::EdgeRequestEnum::EndpointOnline(online) => {
+                let topic_code = online.topic_code.clone();
+                let topic = self.get_topic(&topic_code).ok_or_else(|| {
+                    EdgeError::new(
+                        format!("topic ${topic_code} not found"),
+                        EdgeErrorKind::TopicNotFound,
+                    )
+                })?;
+                let node = topic.node();
+                let endpoint = EndpointAddr::new_snowflake();
+                node.proposal(Proposal::EpOnline(EndpointOnline {
+                    topic_code: topic_code.clone(),
+                    interests: online.interests,
+                    endpoint,
+                    host: node.id(),
+                }))
+                .await
+                .map_err(|e| {
+                    EdgeError::with_message(
+                        "endpoint online",
+                        e.to_string(),
+                        EdgeErrorKind::Internal,
+                    )
+                })?;
+                self.set_edge_routing(endpoint, from, topic_code);
+                Ok(edge::EdgeResponseEnum::EndpointOnline(endpoint))
+            }
+            edge::EdgeRequestEnum::EndpointOffline(offline) => {
+                let topic_code = offline.topic_code.clone();
+                let topic = self.get_topic(&topic_code).ok_or_else(|| {
+                    EdgeError::new(
+                        format!("topic ${topic_code} not found"),
+                        EdgeErrorKind::TopicNotFound,
+                    )
+                })?;
+                let node = topic.node();
+                self.check_ep_auth(&offline.endpoint, &from)?;
+                node.proposal(Proposal::EpOffline(EndpointOffline {
+                    topic_code: topic_code.clone(),
+                    endpoint: offline.endpoint,
+                    host: from,
+                }))
+                .await
+                .map_err(|e| {
+                    EdgeError::with_message(
+                        "endpoint offline",
+                        e.to_string(),
+                        EdgeErrorKind::Internal,
+                    )
+                })?;
+                self.edge_routing.write().unwrap().remove(&offline.endpoint);
+                Ok(edge::EdgeResponseEnum::EndpointOffline)
+            }
+            edge::EdgeRequestEnum::EndpointInterest(interest) => {
+                let topic_code = interest.topic_code.clone();
+
+                let topic = self.get_topic(&topic_code).ok_or_else(|| {
+                    EdgeError::new(
+                        format!("topic ${topic_code} not found"),
+                        EdgeErrorKind::TopicNotFound,
+                    )
+                })?;
+                let node = topic.node();
+                self.check_ep_auth(&interest.endpoint, &from)?;
+                node.proposal(Proposal::EpInterest(interest.clone()))
+                    .await
+                    .map_err(|e| {
+                        EdgeError::with_message(
+                            "endpoint interest",
+                            e.to_string(),
+                            EdgeErrorKind::Internal,
+                        )
+                    })?;
+                Ok(edge::EdgeResponseEnum::EndpointInterest)
+            }
+            edge::EdgeRequestEnum::SetState(set_state) => {
+                let topic_code = set_state.topic.clone();
+                let topic = self.get_topic(&topic_code).ok_or_else(|| {
+                    EdgeError::new(
+                        format!("topic ${topic_code} not found"),
+                        EdgeErrorKind::TopicNotFound,
+                    )
+                })?;
+                let node = topic.node();
+                for ep in set_state.update.status.keys() {
+                    self.check_ep_auth(ep, &from)?;
+                }
+                node.proposal(Proposal::SetState(set_state.clone()))
+                    .await
+                    .map_err(|e| {
+                        EdgeError::with_message("set state", e.to_string(), EdgeErrorKind::Internal)
+                    })?;
+                Ok(edge::EdgeResponseEnum::SetState)
+            }
         }
     }
 
@@ -430,7 +604,11 @@ impl Node {
         let topics = self.topics.read().unwrap();
         topics.get(code).cloned()
     }
-    pub async fn load_topic<C: Into<TopicConfig>>(&self, config: C, queue: Vec<DurableMessage>) -> Result<Topic, crate::Error> {
+    pub async fn load_topic<C: Into<TopicConfig>>(
+        &self,
+        config: C,
+        queue: Vec<DurableMessage>,
+    ) -> Result<Topic, crate::Error> {
         let config: TopicConfig = config.into();
         let config_code = config.code.clone();
         // check if topic already exists
@@ -439,16 +617,13 @@ impl Node {
             if topics.contains_key(&config_code) {
                 return Err(crate::Error::new(
                     "topic already exists",
-                    crate::error::ErrorKind::TopicAlreadyExists
+                    crate::error::ErrorKind::TopicAlreadyExists,
                 ));
             }
         }
         tracing::info!(?config, "create new topic");
-        self.proposal(Proposal::LoadTopic(LoadTopic {
-            config,
-            queue,
-        }))
-        .await?;
+        self.proposal(Proposal::LoadTopic(LoadTopic { config, queue }))
+            .await?;
         let topics = self.topics.read().unwrap();
         let topic = topics
             .get(&config_code)
@@ -467,12 +642,6 @@ pub struct N2nRoutingInfo {
     hops: u32,
 }
 
-impl_codec!(
-    struct N2nRoutingInfo {
-        next_jump: NodeId,
-        hops: u32,
-    }
-);
 
 pub struct Connection {
     pub attached_node: sync::Weak<NodeInner>,

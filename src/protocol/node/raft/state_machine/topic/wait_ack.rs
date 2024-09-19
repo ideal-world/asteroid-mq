@@ -1,16 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    sync::RwLock,
     task::Poll,
-    time::Instant,
 };
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::{
-    impl_codec,
     protocol::endpoint::{
         EndpointAddr, Message, MessageAckExpectKind, MessageId, MessageStatusKind,
     },
@@ -29,12 +26,7 @@ pub struct WaitAckError {
     pub exception: Option<WaitAckErrorException>,
 }
 
-impl_codec!(
-    struct WaitAckError {
-        status: HashMap<EndpointAddr, MessageStatusKind>,
-        exception: Option<WaitAckErrorException>,
-    }
-);
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[typeshare]
@@ -42,11 +34,6 @@ pub struct WaitAckSuccess {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
 
-impl_codec!(
-    struct WaitAckSuccess {
-        status: HashMap<EndpointAddr, MessageStatusKind>,
-    }
-);
 
 impl WaitAckError {
     pub fn exception(exception: WaitAckErrorException) -> Self {
@@ -66,14 +53,6 @@ pub enum WaitAckErrorException {
     NoAvailableTarget = 2,
 }
 
-impl_codec!(
-    enum WaitAckErrorException {
-        MessageDropped = 0,
-        Overflow = 1,
-        NoAvailableTarget = 2,
-    }
-);
-
 pub enum AckWaitErrorKind {
     Timeout,
     Fail,
@@ -86,10 +65,7 @@ impl WaitAck {
                 .into_iter()
                 .map(|ep| (ep, MessageStatusKind::Unsent)),
         );
-        Self {
-            status: status.into(),
-            expect,
-        }
+        Self { status, expect }
     }
 }
 

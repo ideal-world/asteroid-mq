@@ -1,11 +1,14 @@
-use std::{sync::Arc, task::ready};
+use std::task::ready;
 
 use bytes::{Bytes, BytesMut};
 use futures_util::{Sink, Stream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::protocol::node::{
-    edge::{codec::{CodecKind, CodecRegistry}, packet::{EdgePacketHeader, EdgePacketId}},
+    edge::{
+        codec::CodecKind,
+        packet::{EdgePacketHeader, EdgePacketId},
+    },
     EdgePacket,
 };
 
@@ -187,10 +190,7 @@ impl Stream for TokioTcp {
                                 .try_into()
                                 .expect("have enough bytes"),
                         );
-                        let header = EdgePacketHeader {
-                            id,
-                            codec
-                        };
+                        let header = EdgePacketHeader { id, codec };
                         *this.read_payload_size = payload_size;
                         this.read_payload_buf.reserve(payload_size as usize);
                         unsafe {

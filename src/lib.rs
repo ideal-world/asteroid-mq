@@ -11,10 +11,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub mod prelude {
     pub use crate::error::Error;
     pub use crate::event_handler::{Event, EventAttribute, EventCodec, HandleEventLoop, Handler};
-    pub use crate::protocol::codec::{CodecType, DecodeError};
     pub use crate::protocol::endpoint::{MessageAckExpectKind, MessageId};
     pub use crate::protocol::interest::{Interest, Subject};
-    pub use crate::protocol::node::{Node, NodeId, NodeConfig};
+    pub use crate::protocol::node::{Node, NodeConfig, NodeId};
     pub use crate::protocol::topic::{
         durable_message::{
             Durability, DurabilityError, DurabilityService, DurableMessage, MessageDurabilityConfig,
@@ -25,9 +24,7 @@ pub mod prelude {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TimestampSec(u64);
-impl_codec!(
-    struct TimestampSec(u64)
-);
+
 impl TimestampSec {
     pub fn now() -> Self {
         Self(crate::util::timestamp_sec())

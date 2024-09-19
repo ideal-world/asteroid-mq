@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use k8s_openapi::api::core::v1::Event;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{EventAttribute, EventCodec};

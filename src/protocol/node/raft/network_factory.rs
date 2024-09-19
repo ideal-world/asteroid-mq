@@ -1,32 +1,26 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    collections::HashMap,
     ops::Deref,
     sync::{
         atomic::{self, AtomicBool, AtomicU64},
-        Arc,
+        Arc, OnceLock,
     },
 };
 
 use openraft::{
-    error::{ClientWriteError, RaftError, Unreachable},
-    raft::ClientWriteResponse,
-    BasicNode, Raft, RaftNetworkFactory,
+    error::Unreachable, raft::ClientWriteResponse, BasicNode, Raft, RaftNetworkFactory,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{oneshot, OnceCell},
+    sync::oneshot,
 };
 use tracing::Instrument;
 
 use crate::{
-    prelude::{Node, NodeConfig, NodeId},
-    protocol::node::raft::{
-        cluster::ClusterProvider, log_storage::LogStorage, network::TcpNetwork,
-        state_machine::StateMachineStore, TypeConfig,
-    },
+    prelude::NodeId,
+    protocol::node::raft::{network::TcpNetwork, TypeConfig},
 };
 
 use super::{
@@ -39,6 +33,7 @@ pub struct TcpNetworkService {
     pub info: RaftNodeInfo,
     pub raft: MaybeLoadingRaft,
     pub connections: RaftTcpConnectionMap,
+    pub service_task: Arc<OnceLock<tokio::task::JoinHandle<()>>>,
 }
 
 impl TcpNetworkService {
@@ -47,50 +42,60 @@ impl TcpNetworkService {
             let tcp_service = self.clone();
             let info = self.info.clone();
             let info_for_tracing = info.clone();
-            let handle = tokio::spawn(
-                async move {
-                    // let raft = tcp_service.raft.get().await;
-                    let tcp_listener = TcpListener::bind(info.node.addr.clone()).await?;
-                    loop {
-                        let (stream, _) = tcp_listener.accept().await?;
-                        if let Ok(connection) =
-                            RaftTcpConnection::from_tokio_tcp_stream(stream, tcp_service.clone())
+            let create_task = move || {
+                tokio::spawn(
+                    async move {
+                        let inner_task = async move {
+                            // let raft = tcp_service.raft.get().await;
+                            let tcp_listener = TcpListener::bind(info.node.addr.clone()).await?;
+                            loop {
+                                let (stream, _) = tcp_listener.accept().await?;
+                                if let Ok(connection) = RaftTcpConnection::from_tokio_tcp_stream(
+                                    stream,
+                                    tcp_service.clone(),
+                                )
                                 .await
-                        {
-                            let peer_id = connection.peer_id();
-                            // let peer_node = connection.peer_node();
-                            if tcp_service.connections.read().await.contains_key(&peer_id) {
-                                tracing::warn!(?connection, "connection already exists");
-                                continue;
-                            } else {
-                                tracing::info!(?connection, "new connection");
-                                tcp_service
-                                    .connections
-                                    .write()
-                                    .await
-                                    .insert(peer_id, Arc::new(connection));
-                            }
+                                {
+                                    let peer_id = connection.peer_id();
+                                    // let peer_node = connection.peer_node();
+                                    if tcp_service.connections.read().await.contains_key(&peer_id) {
+                                        tracing::warn!(?connection, "connection already exists");
+                                        continue;
+                                    } else {
+                                        tracing::info!(?connection, "new connection");
+                                        tcp_service
+                                            .connections
+                                            .write()
+                                            .await
+                                            .insert(peer_id, Arc::new(connection));
+                                    }
 
-                            // let result = raft.add_learner(peer_id, peer_node, false).await;
-                            // match result {
-                            //     Ok(_) => {
-                            //         tracing::info!("add learner success");
-                            //     }
-                            //     Err(e) => {
-                            //         tracing::error!(?e, "add learner failed");
-                            //     }
-                            // }
-                        }
+                                    // let result = raft.add_learner(peer_id, peer_node, false).await;
+                                    // match result {
+                                    //     Ok(_) => {
+                                    //         tracing::info!("add learner success");
+                                    //     }
+                                    //     Err(e) => {
+                                    //         tracing::error!(?e, "add learner failed");
+                                    //     }
+                                    // }
+                                }
+                            }
+                            #[allow(unreachable_code)]
+                            std::io::Result::Ok(())
+                        };
+                        if let Err(e) = inner_task.await {
+                            tracing::error!(?e, "tcp service error");
+                        };
                     }
-                    #[allow(unreachable_code)]
-                    std::io::Result::Ok(())
-                }
-                .instrument(tracing::span!(
-                    tracing::Level::INFO,
-                    "tcp_network_service",
-                    info=?info_for_tracing
-                )),
-            );
+                    .instrument(tracing::span!(
+                        tracing::Level::INFO,
+                        "tcp_network_service",
+                        info=?info_for_tracing
+                    )),
+                )
+            };
+            self.service_task.get_or_init(create_task);
         }
     }
 }
@@ -114,6 +119,16 @@ pub struct RaftTcpConnection {
     wait_poll: Arc<tokio::sync::Mutex<HashMap<u64, oneshot::Sender<Response>>>>,
     local_seq: Arc<AtomicU64>,
     alive: Arc<AtomicBool>,
+    read_task: tokio::task::JoinHandle<()>,
+    write_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for RaftTcpConnection {
+    fn drop(&mut self) {
+        self.read_task.abort();
+        self.write_task.abort();
+        self.alive.store(false, atomic::Ordering::Relaxed);
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RaftNodeInfo {
@@ -199,24 +214,30 @@ impl RaftTcpConnection {
         let (packet_tx, packet_rx) = flume::bounded::<Packet>(512);
         let write_task = tokio::spawn(
             async move {
-                let write_loop = async {
-                    while let Ok(packet) = packet_rx.recv_async().await {
-                        let bytes = bincode::serialize(&packet.payload)
-                            .expect("should be valid for bincode");
-                        write.write_u64(packet.seq_id).await?;
-                        write.write_u32(bytes.len() as u32).await?;
-                        write.write_all(&bytes).await?;
-                        write.flush().await?;
-                        tracing::trace!(?packet, "flushed");
+                let task_inner = async move {
+                    let write_loop = async {
+                        while let Ok(packet) = packet_rx.recv_async().await {
+                            let bytes = bincode::serialize(&packet.payload)
+                                .expect("should be valid for bincode");
+                            write.write_u64(packet.seq_id).await?;
+                            write.write_u32(bytes.len() as u32).await?;
+                            write.write_all(&bytes).await?;
+                            write.flush().await?;
+                            tracing::trace!(?packet, "flushed");
+                        }
+                        std::io::Result::<()>::Ok(())
+                    };
+                    match write_loop.await {
+                        Ok(_) => Ok(()),
+                        Err(e) => {
+                            tracing::error!(?e);
+                            Err(e)
+                        }
                     }
-                    std::io::Result::<()>::Ok(())
                 };
-                match write_loop.await {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        tracing::error!(?e);
-                        Err(e)
-                    }
+                let result = task_inner.await;
+                if let Err(e) = result {
+                    tracing::error!(?e, "write task error");
                 }
             }
             .instrument(tracing::span!(
@@ -283,6 +304,9 @@ impl RaftTcpConnection {
             };
             tokio::spawn(async move {
                 let result: std::io::Result<()> = inner_task.await;
+                if let Err(e) = result {
+                    tracing::error!(?e, "read task error");
+                }
                 alive.store(false, atomic::Ordering::Relaxed);
             })
         };
@@ -292,6 +316,8 @@ impl RaftTcpConnection {
             peer,
             local_seq: Arc::new(AtomicU64::new(0)),
             alive,
+            read_task,
+            write_task,
         })
     }
 }
@@ -302,10 +328,11 @@ impl TcpNetworkService {
             info,
             raft,
             connections: RaftTcpConnectionMap::default(),
+            service_task: Arc::new(OnceLock::new()),
         }
     }
     pub fn set_raft(&self, raft: Raft<TypeConfig>) {
-        let _ = self.raft.set(raft);
+        self.raft.set(raft);
     }
 }
 
@@ -328,6 +355,8 @@ impl RaftNetworkFactory<TypeConfig> for TcpNetworkService {
 #[cfg(test)]
 #[test]
 fn test_mem() {
+    use crate::protocol::node::{LogStorage, StateMachineStore};
+
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
@@ -345,98 +374,4 @@ fn test_mem() {
         }
     }
     openraft::testing::Suite::test_all(MemStore {}).unwrap();
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_network_factory() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
-    let raft_config = openraft::Config {
-        cluster_name: "test".to_string(),
-        heartbeat_interval: 200,
-        election_timeout_max: 1000,
-        election_timeout_min: 500,
-        ..Default::default()
-    }
-    .validate()
-    .unwrap();
-
-    const CLUSTER_SIZE: usize = 3;
-    const PORT_START: u16 = 12321;
-    let nodes = (0..CLUSTER_SIZE)
-        .map(|idx| {
-            let port = PORT_START + idx as u16;
-            let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
-            let node_id = NodeId::snowflake();
-            (node_id, socket_addr)
-        })
-        .collect::<BTreeMap<_, _>>();
-    #[derive(Clone)]
-    pub struct LocalClusterProvider {
-        seq: VecDeque<BTreeMap<NodeId, SocketAddr>>,
-        duration: std::time::Duration,
-    }
-    impl ClusterProvider for LocalClusterProvider {
-        async fn next_update(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
-            tokio::time::sleep(self.duration).await;
-            if let Some(next) = self.seq.pop_front() {
-                if self.seq.is_empty() {
-                    self.seq.push_back(next.clone());
-                }
-                Ok(next)
-            } else {
-                unreachable!("no more update")
-            }
-        }
-        async fn pristine_nodes(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
-            if let Some(next) = self.seq.pop_front() {
-                if self.seq.is_empty() {
-                    self.seq.push_back(next.clone());
-                }
-                Ok(next)
-            } else {
-                unreachable!("no more update")
-            }
-        }
-    }
-    let cluster_provider = LocalClusterProvider {
-        seq: VecDeque::from([nodes.clone()]),
-        duration: std::time::Duration::from_millis(100),
-    };
-    for (id, addr) in nodes {
-        let config = raft_config.clone();
-        let cluster_provider = cluster_provider.clone();
-        let service = std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let _result = rt.block_on(
-                async move {
-                    let node = Node::new(NodeConfig {
-                        id,
-                        addr,
-                        raft: config.clone(),
-                    });
-                    node.init_raft(cluster_provider).await?;
-                    let raft = node.raft().await;
-                    tracing::info!("raft service started");
-                    loop {
-                        let leader = raft.current_leader().await;
-                        if let Some(leader) = leader {
-                            tracing::error!(?leader, "leader");
-                            break;
-                        } else {
-                            tokio::task::yield_now().await;
-                        }
-                    }
-                    let _ = tokio::signal::ctrl_c().await;
-                    crate::Result::Ok(())
-                }
-                .instrument(tracing::span!(
-                    tracing::Level::INFO,
-                    "node",
-                    id = id.to_string()
-                )),
-            );
-        });
-    }
-    let _ = tokio::signal::ctrl_c().await;
 }

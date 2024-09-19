@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
 use crate::{
-    impl_codec,
     protocol::{
-        codec::CodecType,
         interest::Subject,
         topic::{durable_message::MessageDurabilityConfig, TopicCode},
-    },
+    }, util::MaybeBase64Bytes,
 };
-use bytes::{BufMut, Bytes};
+use bytes::{Bytes};
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
@@ -59,24 +57,7 @@ impl std::fmt::Display for MessageAckExpectKind {
         }
     }
 }
-impl_codec! {
-    enum MessageAckExpectKind {
-        Sent = 0x00,
-        Received = 0x01,
-        Processed = 0x02,
-    }
-}
-impl_codec! {
-    enum MessageStatusKind {
-        Sending = 0xfe,
-        Unsent = 0xff,
-        Sent = 0x00,
-        Received = 0x01,
-        Processed = 0x02,
-        Failed = 0x80,
-        Unreachable = 0x81,
-    }
-}
+
 
 impl MessageStatusKind {
     #[inline(always)]
@@ -103,7 +84,7 @@ impl MessageStatusKind {
         self.is_failed() || self.is_reached(condition)
     }
 }
-#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, )]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[typeshare(serialized_as = "String")]
 #[repr(transparent)]
 pub struct MessageId {
@@ -122,7 +103,9 @@ impl<'de> Deserialize<'de> for MessageId {
         use base64::Engine;
         use serde::de::Error;
         let s = String::deserialize(deserializer)?;
-        let bytes = base64::engine::general_purpose::URL_SAFE.decode(s.as_bytes()).map_err(D::Error::custom)?;
+        let bytes = base64::engine::general_purpose::URL_SAFE
+            .decode(s.as_bytes())
+            .map_err(D::Error::custom)?;
         if bytes.len() != 16 {
             return Err(D::Error::custom("invalid length"));
         }
@@ -132,17 +115,6 @@ impl<'de> Deserialize<'de> for MessageId {
     }
 }
 
-impl CodecType for MessageId {
-    fn decode(bytes: Bytes) -> Result<(Self, Bytes), crate::protocol::codec::DecodeError> {
-        let mut buf = [0; 16];
-        buf.copy_from_slice(&bytes[0..16]);
-        Ok((Self { bytes: buf }, bytes.slice(16..)))
-    }
-
-    fn encode(&self, buf: &mut bytes::BytesMut) {
-        buf.put_slice(&self.bytes);
-    }
-}
 
 impl std::fmt::Debug for MessageId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -192,15 +164,9 @@ impl MessageId {
 #[typeshare]
 pub struct Message {
     pub header: MessageHeader,
-    pub payload: Bytes,
+    pub payload: MaybeBase64Bytes,
 }
 
-impl_codec!(
-    struct Message {
-        header: MessageHeader,
-        payload: Bytes,
-    }
-);
 
 impl Message {
     pub fn id(&self) -> MessageId {
@@ -218,7 +184,7 @@ impl Message {
     pub fn new(header: MessageHeader, payload: impl Into<Bytes>) -> Self {
         Self {
             header,
-            payload: payload.into(),
+            payload: MaybeBase64Bytes::new(payload.into()),
         }
     }
 }
@@ -283,15 +249,6 @@ impl MessageHeaderBuilder {
     }
 }
 
-impl_codec! {
-    struct MessageHeader {
-        message_id: MessageId,
-        ack_kind: MessageAckExpectKind,
-        target_kind: MessageTargetKind,
-        durability:  Option<MessageDurabilityConfig>,
-        subjects: Arc<[Subject]>,
-    }
-}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 
 pub struct MessageAck {
@@ -301,14 +258,7 @@ pub struct MessageAck {
     pub kind: MessageStatusKind,
 }
 
-impl_codec! {
-    struct MessageAck {
-        ack_to: MessageId,
-        topic_code: TopicCode,
-        from: EndpointAddr,
-        kind: MessageStatusKind,
-    }
-}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
@@ -321,13 +271,5 @@ pub enum MessageTargetKind {
     Push = 3,
 }
 
-impl_codec!(
-    enum MessageTargetKind {
-        Durable = 0,
-        Online = 1,
-        Available = 2,
-        Push = 3,
-    }
-);
 
 impl MessageTargetKind {}

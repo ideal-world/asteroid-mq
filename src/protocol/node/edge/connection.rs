@@ -3,13 +3,14 @@ use std::{borrow::Cow, error::Error, ops::Deref, sync::Arc};
 use tracing::warn;
 
 use crate::protocol::{
-    codec::DecodeError,
+    endpoint::{EndpointAddr, Message},
     node::edge::{EdgePayload, EdgeResponse},
 };
 
 use super::{
     super::{Auth, EdgePacket, NodeId, NodeRef},
-    codec::{CodecKind, CodecRegistry},
+    codec::{CodecError, CodecKind, CodecRegistry},
+    EdgePush,
 };
 
 pub mod tokio_tcp;
@@ -30,21 +31,15 @@ impl NodeConnectionError {
 }
 #[derive(Debug)]
 pub enum NodeConnectionErrorKind {
-    Send(NodeSendError),
-    Decode(DecodeError),
     Io(std::io::Error),
     Underlying(Box<dyn Error + Send>),
+    Codec(CodecError),
     Closed,
     Timeout,
     Protocol,
     Existed,
 }
-#[derive(Debug)]
 
-pub struct NodeSendError {
-    pub raw_packet: EdgePacket,
-    pub error: Box<dyn std::error::Error + Send + Sync>,
-}
 use futures_util::{FutureExt, Sink, SinkExt, Stream, StreamExt};
 pub trait NodeConnection:
     Send
@@ -90,6 +85,33 @@ impl EdgeConnectionInstance {
             inner: Arc::clone(self),
         }
     }
+    pub fn send_packet(&self, packet: EdgePacket) -> Result<(), NodeConnectionError> {
+        self.outbound
+            .send(packet)
+            .map_err(|_e| NodeConnectionError::new(NodeConnectionErrorKind::Closed, "send message"))
+    }
+    pub fn encode_packet(&self, payload: &EdgePayload) -> Result<EdgePacket, NodeConnectionError> {
+        let payload = self
+            .config
+            .codec_registry
+            .encode(self.config.preferred_codec, payload)
+            .map_err(|e| {
+                NodeConnectionError::new(NodeConnectionErrorKind::Codec(e), "encode message")
+            })?;
+        let packet = EdgePacket::new(self.config.preferred_codec, payload);
+        Ok(packet)
+    }
+    pub fn push_message(
+        &self,
+        endpoint: &EndpointAddr,
+        message: Message,
+    ) -> Result<(), NodeConnectionError> {
+        let packet = self.encode_packet(&EdgePayload::Push(EdgePush::Message {
+            endpoints: vec![*endpoint],
+            message,
+        }))?;
+        self.send_packet(packet)
+    }
     pub async fn init<C: NodeConnection>(
         config: ConnectionConfig,
         connection: C,
@@ -119,7 +141,8 @@ impl EdgeConnectionInstance {
             let internal_outbound_tx = outbound_tx.clone();
             let codec_registry = config.codec_registry.clone();
             let preferred_codec = config.preferred_codec;
-            let task = async move {
+
+            async move {
                 loop {
                     let event = futures_util::select! {
                         next_pack = stream.next().fuse() => {
@@ -146,10 +169,12 @@ impl EdgeConnectionInstance {
                     };
                     match event {
                         PollEvent::PacketIn(packet) => {
-                            let Ok(payload) =
-                                codec_registry.decode(packet.codec(), &packet.payload)
+                            let Ok(payload) = codec_registry
+                                .decode(packet.codec(), &packet.payload)
+                                .inspect_err(|err| {
+                                    warn!(bytes=?packet.payload, ?err, "failed to decode packet");
+                                })
                             else {
-                                warn!("failed to decode packet");
                                 continue;
                             };
                             let outbound = internal_outbound_tx.clone();
@@ -159,8 +184,9 @@ impl EdgeConnectionInstance {
                                     let encoder = encoder.clone();
                                     tokio::spawn(async move {
                                         let seq_id = request.seq_id;
-                                        let resp =
-                                            node.handle_edge_request(peer_id, request.request).await;
+                                        let resp = node
+                                            .handle_edge_request(peer_id, request.request)
+                                            .await;
                                         let resp = EdgeResponse::from_result(seq_id, resp);
                                         let payload = encoder.encode(&EdgePayload::Response(resp));
                                         let resp = EdgePacket::new(preferred_codec, payload);
@@ -181,8 +207,7 @@ impl EdgeConnectionInstance {
                 }
 
                 Ok(())
-            };
-            task
+            }
         } else {
             return Err(NodeConnectionError::new(
                 NodeConnectionErrorKind::Protocol,

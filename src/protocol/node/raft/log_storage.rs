@@ -176,9 +176,7 @@ impl RaftLogStorage<TypeConfig> for LogStorage<TypeConfig> {
             + openraft::OptionalSend,
         I::IntoIter: openraft::OptionalSend,
     {
-        let result = self.inner.lock().await.append(entries, callback).await;
-        result
-
+        self.inner.lock().await.append(entries, callback).await
     }
     async fn get_log_reader(&mut self) -> Self::LogReader {
         self.clone()

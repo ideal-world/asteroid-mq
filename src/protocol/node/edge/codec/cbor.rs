@@ -4,7 +4,10 @@ use super::Codec;
 pub struct Cbor;
 
 impl Codec for Cbor {
-    fn decode(&self, mut bytes: &[u8]) -> Result<crate::protocol::node::edge::EdgePayload, super::CodecError> {
+    fn decode(
+        &self,
+        mut bytes: &[u8],
+    ) -> Result<crate::protocol::node::edge::EdgePayload, super::CodecError> {
         ciborium::from_reader(&mut bytes).map_err(super::CodecError::decode_error)
     }
     fn encode(&self, value: &crate::protocol::node::edge::EdgePayload) -> Vec<u8> {

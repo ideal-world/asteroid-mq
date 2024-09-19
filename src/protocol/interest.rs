@@ -10,15 +10,10 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use crate::impl_codec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[typeshare(serialized_as = "String")]
 pub struct Subject(pub(crate) Bytes);
-
-impl_codec!(
-    struct Subject(Bytes)
-);
 
 impl Serialize for Subject {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -105,10 +100,6 @@ impl<'a> Iterator for SubjectSegments<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[typeshare(serialized_as = "String")]
 pub struct Interest(Bytes);
-
-impl_codec!(
-    struct Interest(Bytes)
-);
 
 impl Serialize for Interest {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

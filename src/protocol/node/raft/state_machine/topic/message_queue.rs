@@ -1,33 +1,24 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
-    sync::RwLock,
     task::Poll,
 };
 
 use chrono::{DateTime, Utc};
-use openraft::{raft::AppendEntriesRequest, Raft};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     prelude::DurableMessage,
     protocol::{
-        endpoint::{
-            EndpointAddr, Message, MessageAck, MessageId, MessageStateUpdate, MessageStatusKind,
-            SetState,
-        },
+        endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind},
         node::raft::{
-            proposal::{Proposal, ProposalContext},
+            proposal::ProposalContext,
             state_machine::topic::wait_ack::{WaitAckError, WaitAckSuccess},
-            TypeConfig,
         },
     },
     util::Timed,
 };
 
-use super::{
-    wait_ack::{WaitAck, WaitAckResult},
-    TopicData,
-};
+use super::wait_ack::{WaitAck, WaitAckResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HoldMessage {
@@ -287,7 +278,11 @@ impl MessageQueue {
         std::mem::swap(&mut swap_out, &mut self.resolved);
         swap_out
     }
-    pub(crate) fn blocking_pop(&mut self, reachable_eps: &HashSet<EndpointAddr>, context: &ProposalContext) -> Option<HoldMessage> {
+    pub(crate) fn blocking_pop(
+        &mut self,
+        reachable_eps: &HashSet<EndpointAddr>,
+        context: &ProposalContext,
+    ) -> Option<HoldMessage> {
         let next = self.get_front()?;
         let poll = self.poll_message(next.message.id(), reachable_eps, context)?;
         if poll.is_ready() {
@@ -296,7 +291,11 @@ impl MessageQueue {
             None
         }
     }
-    pub(crate) fn flush(&mut self, reachable_eps: &HashSet<EndpointAddr>, context: &ProposalContext) {
+    pub(crate) fn flush(
+        &mut self,
+        reachable_eps: &HashSet<EndpointAddr>,
+        context: &ProposalContext,
+    ) {
         tracing::trace!(blocking = self.blocking, "flushing");
         if self.blocking {
             while let Some(m) = self.blocking_pop(reachable_eps, context) {
