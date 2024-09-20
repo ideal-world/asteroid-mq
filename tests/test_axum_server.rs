@@ -102,6 +102,10 @@ impl Stream for AxumWs {
                 let packet = EdgePacket::new(CodecKind::JSON, data);
                 std::task::Poll::Ready(Some(Ok(packet)))
             }
+            Some(Ok(Message::Text(data))) => {
+                let packet = EdgePacket::new(CodecKind::JSON, data);
+                std::task::Poll::Ready(Some(Ok(packet)))
+            }
             Some(Ok(Message::Close(_))) => {
                 tracing::debug!("received close message");
                 std::task::Poll::Ready(None)

@@ -17,7 +17,7 @@ pub mod prelude {
     pub use crate::protocol::node::{Node, NodeConfig, NodeId};
     pub use crate::protocol::topic::{
         durable_message::{
-            Durability, DurabilityError, DurabilityService, DurableMessage, MessageDurabilityConfig,
+            Durable, DurableError, DurableService, DurableMessage, MessageDurableConfig,
         },
         Topic, TopicCode,
     };

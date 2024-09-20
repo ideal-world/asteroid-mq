@@ -9,7 +9,7 @@ use crate::{
     prelude::NodeId,
     protocol::{
         node::raft::state_machine::topic::wait_ack::WaitAckError,
-        topic::durable_message::DurabilityError,
+        topic::durable_message::DurableError,
     },
 };
 
@@ -90,7 +90,7 @@ macro_rules! error_kind {
 }
 error_kind! {
     pub enum ErrorKind {
-        Durability: DurabilityError,
+        Durability: DurableError,
         Offline,
         TopicAlreadyExists,
         Io: std::io::Error,

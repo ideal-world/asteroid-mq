@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    prelude::{MessageId, Node, TopicCode},
-    protocol::endpoint::EndpointAddr,
-    protocol::message::*,
+    prelude::{DurableService, MessageId, Node, TopicCode},
+    protocol::{endpoint::EndpointAddr, message::*},
 };
 
 use super::state_machine::topic::wait_ack::WaitAckResult;
@@ -47,6 +46,9 @@ pub struct ProposalContext {
 }
 
 impl ProposalContext {
+    pub fn durable_service(&self) -> Option<DurableService> {
+        self.node.config.durable.clone()
+    }
     pub fn set_topic_code(&mut self, code: TopicCode) {
         self.topic_code = Some(code);
     }

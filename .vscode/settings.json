@@ -13,9 +13,5 @@
         "typeshare",
         "Uninit"
     ],
-    "rust-analyzer.cargo.features": [
-        "cluster-k8s",
-        "typeshare",
-        "cbor"
-    ]
+    "rust-analyzer.cargo.features": "all"
 }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    prelude::{Topic, TopicCode},
+    prelude::{DurableMessage, Topic, TopicCode},
     protocol::{
         node::raft::proposal::{
             DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, LoadTopic,
@@ -30,9 +30,23 @@ impl NodeData {
     ) {
         ctx.set_topic_code(topic.clone());
         if let Some(topic) = self.topics.get_mut(&topic) {
-            topic.hold_new_message(message, &ctx);
+            topic.hold_new_message(message.clone(), &ctx);
+            if let Some(durable) = ctx.durable_service() {
+                tokio::spawn(async move {
+                    let result = durable
+                        .save(DurableMessage {
+                            message,
+                            status: Default::default(),
+                            time: chrono::Utc::now(),
+                        })
+                        .await;
+                    if let Err(e) = result {
+                        tracing::error!(?e, "save durable message failed");
+                    }
+                });
+            }
         } else {
-            todo!()
+            tracing::error!(?topic, "topic not found");
         }
     }
     pub(crate) fn apply_load_topic(
@@ -71,9 +85,16 @@ impl NodeData {
     ) {
         ctx.set_topic_code(topic.clone());
         if let Some(topic) = self.topics.get_mut(&topic) {
-            topic.update_and_flush(update, &ctx);
+            topic.update_and_flush(update.clone(), &ctx);
+            if let Some(durable) = ctx.durable_service() {
+                tokio::spawn(async move {
+                    let _ = durable.update_status(update).await.inspect_err(|e| {
+                        tracing::error!(?e, "update status failed");
+                    });
+                });
+            }
         } else {
-            todo!()
+            tracing::error!(?topic, "topic not found");
         }
     }
     pub(crate) fn apply_unload_topic(&mut self, UnloadTopic { code }: UnloadTopic) {

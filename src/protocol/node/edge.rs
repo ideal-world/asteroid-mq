@@ -9,7 +9,7 @@ pub mod connection;
 pub mod packet;
 use crate::{
     prelude::{
-        Interest, MessageAckExpectKind, MessageDurabilityConfig, MessageId, Subject, TopicCode,
+        Interest, MessageAckExpectKind, MessageDurableConfig, MessageId, Subject, TopicCode,
     },
     protocol::endpoint::EndpointAddr,
     protocol::message::*,
@@ -171,7 +171,7 @@ pub enum EdgeErrorKind {
 pub struct EdgeMessageHeader {
     pub ack_kind: MessageAckExpectKind,
     pub target_kind: MessageTargetKind,
-    pub durability: Option<MessageDurabilityConfig>,
+    pub durability: Option<MessageDurableConfig>,
     pub subjects: Vec<Subject>,
     pub topic: TopicCode,
 }

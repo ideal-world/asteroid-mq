@@ -36,7 +36,7 @@ use raft::{
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use crate::{prelude::DurableMessage, DEFAULT_TCP_SOCKET_ADDR};
+use crate::{prelude::{DurableService, DurableMessage}, DEFAULT_TCP_SOCKET_ADDR};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[typeshare(serialized_as = "string")]
@@ -159,6 +159,7 @@ pub struct NodeConfig {
     pub id: NodeId,
     pub addr: SocketAddr,
     pub raft: openraft::Config,
+    pub durable: Option<DurableService>,
 }
 
 impl Default for NodeConfig {
@@ -167,6 +168,7 @@ impl Default for NodeConfig {
             id: NodeId::default(),
             addr: DEFAULT_TCP_SOCKET_ADDR,
             raft: openraft::Config::default(),
+            durable: None,
         }
     }
 }
@@ -180,6 +182,7 @@ pub struct NodeInner {
     edge_routing: RwLock<HashMap<EndpointAddr, (NodeId, TopicCode)>>,
     codec_registry: Arc<CodecRegistry>,
     topics: RwLock<HashMap<TopicCode, Topic>>,
+
 }
 
 #[derive(Debug, Clone, Default)]

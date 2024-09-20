@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     protocol::{
         interest::Subject,
-        topic::{durable_message::MessageDurabilityConfig, TopicCode},
+        topic::{durable_message::MessageDurableConfig, TopicCode},
     },
     util::MaybeBase64Bytes,
 };
@@ -202,13 +202,13 @@ pub struct MessageHeader {
     pub message_id: MessageId,
     pub ack_kind: MessageAckExpectKind,
     pub target_kind: MessageTargetKind,
-    pub durability: Option<MessageDurabilityConfig>,
+    pub durability: Option<MessageDurableConfig>,
     pub subjects: Arc<[Subject]>,
 }
 pub struct MessageHeaderBuilder {
     pub ack_kind: MessageAckExpectKind,
     target_kind: MessageTargetKind,
-    durability: Option<MessageDurabilityConfig>,
+    durability: Option<MessageDurableConfig>,
     pub subjects: Vec<Subject>,
 }
 
@@ -237,7 +237,7 @@ impl MessageHeaderBuilder {
         self.target_kind = MessageTargetKind::Online;
         self
     }
-    pub fn mode_durable(mut self, config: MessageDurabilityConfig) -> Self {
+    pub fn mode_durable(mut self, config: MessageDurableConfig) -> Self {
         self.target_kind = MessageTargetKind::Durable;
         self.durability = Some(config);
         self

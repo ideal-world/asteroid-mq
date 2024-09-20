@@ -29,7 +29,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 bincode = "1"
 ciborium = { version = "0.2", optional = true }
-typeshare = { version = "1", optional = true }
+typeshare = { version = "1" }
 base64 = "0.22"
 
 # raft
@@ -38,7 +38,6 @@ openraft = { version = "0.9.16", features = ["serde", "storage-v2"] }
 
 [features]
 cluster-k8s = ["kube", "k8s-openapi"]
-typeshare = ["dep:typeshare"]
 cbor = ["dep:ciborium"]
 [dev-dependencies]
 tracing-subscriber = "0.3.18"
