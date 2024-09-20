@@ -119,7 +119,6 @@ pub fn hash64<T: Hash>(value: &T) -> u64 {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MaybeBase64Bytes(pub Bytes);
 
-
 impl Serialize for MaybeBase64Bytes {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
@@ -137,7 +136,7 @@ impl<'de> Deserialize<'de> for MaybeBase64Bytes {
         if deserializer.is_human_readable() {
             use base64::Engine;
             use serde::de::Error;
-            let s = String::deserialize(deserializer)?;
+            let s = <&'de str>::deserialize(deserializer)?;
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(s.as_bytes())
                 .map_err(D::Error::custom)?;

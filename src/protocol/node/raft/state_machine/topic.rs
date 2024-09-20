@@ -4,11 +4,10 @@ pub mod wait_ack;
 use crate::{
     prelude::{DurableMessage, Interest, NodeId, Subject},
     protocol::{
-        endpoint::{
-            EndpointAddr, Message, MessageStateUpdate, MessageStatusKind, MessageTargetKind,
-        },
+        endpoint::EndpointAddr,
         interest::InterestMap,
-        node::raft::proposal::ProposalContext,
+        message::*,
+        node::raft::proposal::{MessageStateUpdate, ProposalContext},
     },
 };
 use config::TopicConfig;
@@ -21,7 +20,7 @@ use std::{
 use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TopicData {
+pub(crate) struct TopicData {
     pub(crate) config: TopicConfig,
     pub(crate) ep_routing_table: HashMap<NodeId, HashSet<EndpointAddr>>,
     pub(crate) ep_interest_map: InterestMap<EndpointAddr>,

@@ -5,9 +5,14 @@ use std::{
 };
 
 use super::EdgePayload;
-pub mod bincode;
-pub mod cbor;
-pub mod json;
+pub(crate) mod bincode;
+pub use bincode::*;
+#[cfg(feature = "cbor")]
+pub(crate) mod cbor;
+#[cfg(feature = "cbor")]
+pub use cbor::*;
+pub(crate) mod json;
+pub use json::*;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -29,6 +34,12 @@ impl CodecKind {
 #[derive(Debug)]
 pub struct CodecError {
     reason: Cow<'static, str>,
+}
+
+impl std::fmt::Display for CodecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "codec error: {}", self.reason)
+    }
 }
 
 impl CodecError {

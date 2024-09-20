@@ -66,6 +66,7 @@ impl StateMachineStore {
             node_ref,
         }
     }
+    #[cfg(test)]
     pub(crate) unsafe fn new_uninitialized() -> Self {
         Self {
             state_machine: RwLock::new(StateMachineData::default()),

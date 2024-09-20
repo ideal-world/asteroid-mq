@@ -4,14 +4,13 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    prelude::{NodeId, Topic, TopicCode},
+    prelude::{Topic, TopicCode},
     protocol::{
-        endpoint::{DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, SetState},
-        node::{raft::proposal::ProposalContext, N2nRoutingInfo},
-        topic::{
-            durable_message::{LoadTopic, UnloadTopic},
-            TopicInner,
+        node::raft::proposal::{
+            DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, LoadTopic,
+            ProposalContext, SetState, UnloadTopic,
         },
+        topic::TopicInner,
     },
 };
 
@@ -20,7 +19,6 @@ use super::topic::TopicData;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeData {
     pub(crate) topics: HashMap<TopicCode, TopicData>,
-    routing: HashMap<NodeId, N2nRoutingInfo>,
 }
 
 impl NodeData {

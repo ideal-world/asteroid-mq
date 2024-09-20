@@ -1,15 +1,3 @@
-//! 1. 按照主题的权限 4
-//!   - 1.1. 事件中心接口 TODO  
-//!   - 1.2. bios实现 TODO
-//! 2. 主题系统 4
-//!   - 2.1. 主题的数据流是否阻塞 DONE
-//! 3. 主题，消息持久化 3 TO BE CONTINUE
-//! 4. AVATAR功能 2 ALTERNATIVE
-//! 5. 集群化 1 MAYBE RAFT
-//! 6. RUST SDK 1
-//! 7. RUST 接入 2
-//!
-
 use std::{
     collections::{BTreeMap, HashMap},
     net::SocketAddr,
@@ -19,20 +7,13 @@ use std::{
 };
 
 use asteroid_mq::{
-    prelude::{NodeConfig, NodeId},
-    protocol::{
-        endpoint::{Message, MessageAckExpectKind, MessageHeader},
-        interest::{Interest, Subject},
-        node::{
-            raft::{
-                cluster::r#static::StaticClusterProvider,
-                state_machine::topic::config::{
-                    TopicConfig, TopicOverflowConfig, TopicOverflowPolicy,
-                },
-            },
-            Node,
-        },
-        topic::TopicCode,
+    prelude::{
+        Interest, Message, MessageAckExpectKind, MessageHeader, Node, NodeConfig, NodeId, Subject,
+        TopicCode,
+    },
+    protocol::node::raft::{
+        cluster::StaticClusterProvider,
+        state_machine::topic::config::{TopicConfig, TopicOverflowConfig, TopicOverflowPolicy},
     },
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
@@ -121,7 +102,8 @@ async fn test_nodes() {
         .with_raft_state(|s| {
             tracing::error!(?s.membership_state);
         })
-        .await;
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let event_topic = node_server.create_new_topic(topic_config()).await.unwrap();
     let node_server_receiver = event_topic

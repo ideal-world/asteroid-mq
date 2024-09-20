@@ -1,4 +1,3 @@
-#[cfg(feature = "json")]
 pub mod json;
 use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin};
 
@@ -6,7 +5,7 @@ use bytes::Bytes;
 
 use crate::{
     prelude::{Subject, Topic},
-    protocol::endpoint::{LocalEndpoint, Message, MessageAckExpectKind, MessageHeader},
+    protocol::{endpoint::LocalEndpoint, message::*},
 };
 
 type InnerEventHandler =

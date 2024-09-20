@@ -1,55 +1,6 @@
-use crate::{prelude::NodeId,};
 use bytes::Bytes;
 
 use super::codec::CodecKind;
-
-#[derive(Debug, Clone)]
-
-pub struct NodeTrace {
-    pub source: NodeId,
-    pub hops: Vec<NodeId>,
-}
-
-
-impl NodeTrace {
-    pub fn source(&self) -> NodeId {
-        self.source
-    }
-    pub fn prev_node(&self) -> NodeId {
-        self.hops.last().copied().unwrap_or(self.source)
-    }
-    pub fn trace_back(&self) -> impl Iterator<Item = &'_ NodeId> {
-        self.hops.iter().rev().chain(std::iter::once(&self.source))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum NodeKind {
-    Cluster = 0,
-    Edge = 1,
-}
-
-impl NodeKind {
-    pub fn is_cluster(self) -> bool {
-        matches!(self, Self::Cluster)
-    }
-    pub fn is_edge(self) -> bool {
-        matches!(self, Self::Edge)
-    }
-}
-
-
-
-impl From<u8> for NodeKind {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => NodeKind::Cluster,
-            1 => NodeKind::Edge,
-            _ => NodeKind::Edge,
-        }
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EdgePacketId {
@@ -115,4 +66,3 @@ impl EdgePacket {
 
 #[derive(Debug, Clone, Default)]
 pub struct Auth {}
-

@@ -15,7 +15,7 @@
     ],
     "rust-analyzer.cargo.features": [
         "cluster-k8s",
-        "json",
-        "typeshare"
+        "typeshare",
+        "cbor"
     ]
 }

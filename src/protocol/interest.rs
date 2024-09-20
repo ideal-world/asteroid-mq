@@ -10,7 +10,6 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[typeshare(serialized_as = "String")]
 pub struct Subject(pub(crate) Bytes);

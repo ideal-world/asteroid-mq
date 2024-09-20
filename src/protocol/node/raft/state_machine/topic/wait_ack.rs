@@ -7,11 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use crate::{
-    protocol::endpoint::{
-        EndpointAddr, Message, MessageAckExpectKind, MessageId, MessageStatusKind,
-    },
-};
+use crate::protocol::{endpoint::EndpointAddr, message::*};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaitAck {
@@ -26,14 +22,11 @@ pub struct WaitAckError {
     pub exception: Option<WaitAckErrorException>,
 }
 
-
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[typeshare]
 pub struct WaitAckSuccess {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
-
 
 impl WaitAckError {
     pub fn exception(exception: WaitAckErrorException) -> Self {

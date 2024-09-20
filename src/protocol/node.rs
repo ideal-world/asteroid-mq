@@ -8,7 +8,7 @@ use std::{
 };
 
 use super::{
-    endpoint::{EndpointAddr, EndpointOffline, EndpointOnline, SetState},
+    endpoint::EndpointAddr,
     topic::{Topic, TopicCode},
 };
 use edge::{
@@ -20,7 +20,7 @@ use edge::{
     EdgeConfig, EdgeResult,
 };
 use edge::{
-    packet::{Auth, EdgePacket, NodeTrace},
+    packet::{Auth, EdgePacket},
     EdgeError, EdgeErrorKind,
 };
 use futures_util::TryFutureExt;
@@ -29,17 +29,14 @@ use raft::{
     cluster::ClusterProvider,
     log_storage::LogStorage,
     network_factory::TcpNetworkService,
-    proposal::Proposal,
+    proposal::{EndpointOffline, EndpointOnline, LoadTopic, Proposal},
     state_machine::{topic::config::TopicConfig, StateMachineStore},
     MaybeLoadingRaft, TypeConfig,
 };
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use crate::{
-    prelude::DurableMessage, protocol::topic::durable_message::LoadTopic,
-    DEFAULT_TCP_SOCKET_ADDR,
-};
+use crate::{prelude::DurableMessage, DEFAULT_TCP_SOCKET_ADDR};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[typeshare(serialized_as = "string")]
@@ -369,12 +366,6 @@ impl Node {
             inner: Arc::downgrade(&self.inner),
         }
     }
-    pub(crate) fn new_trace(&self) -> NodeTrace {
-        NodeTrace {
-            source: self.id(),
-            hops: Vec::new(),
-        }
-    }
 
     pub async fn create_edge_connection<C: NodeConnection>(
         &self,
@@ -417,7 +408,10 @@ impl Node {
         Some(routing.get(addr)?.0)
     }
     pub(crate) fn set_edge_routing(&self, addr: EndpointAddr, edge: NodeId, topic: TopicCode) {
-        self.edge_routing.write().unwrap().insert(addr, (edge, topic));
+        self.edge_routing
+            .write()
+            .unwrap()
+            .insert(addr, (edge, topic));
     }
     pub fn get_edge_connection(&self, to: NodeId) -> Option<EdgeConnectionRef> {
         let connections = self.edge_connections.read().unwrap();
@@ -430,7 +424,7 @@ impl Node {
     }
     pub fn remove_edge_connection(&self, to: NodeId) {
         let Some(_connection) = self.edge_connections.write().unwrap().remove(&to) else {
-            return
+            return;
         };
         let mut routing = self.edge_routing.write().unwrap();
         let mut offline_eps = Vec::new();
@@ -641,7 +635,6 @@ pub struct N2nRoutingInfo {
     next_jump: NodeId,
     hops: u32,
 }
-
 
 pub struct Connection {
     pub attached_node: sync::Weak<NodeInner>,

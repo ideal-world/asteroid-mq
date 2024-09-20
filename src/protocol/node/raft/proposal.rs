@@ -4,17 +4,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     prelude::{MessageId, Node, TopicCode},
-    protocol::{
-        endpoint::{
-            DelegateMessage, EndpointAddr, EndpointInterest, EndpointOffline, EndpointOnline,
-            Message, MessageStateUpdate, MessageStatusKind, SetState,
-        },
-        topic::durable_message::{LoadTopic, UnloadTopic},
-    },
+    protocol::endpoint::EndpointAddr,
+    protocol::message::*,
 };
 
 use super::state_machine::topic::wait_ack::WaitAckResult;
-
+pub(crate) mod ep_online;
+pub use ep_online::EndpointOnline;
+pub(crate) mod ep_offline;
+pub use ep_offline::EndpointOffline;
+pub(crate) mod ep_interest;
+pub use ep_interest::EndpointInterest;
+pub(crate) mod set_state;
+pub use set_state::*;
+pub(crate) mod load_topic;
+pub use load_topic::LoadTopic;
+pub(crate) mod unload_topic;
+pub use unload_topic::UnloadTopic;
+pub(crate) mod delegate_message;
+pub use delegate_message::DelegateMessage;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Proposal {

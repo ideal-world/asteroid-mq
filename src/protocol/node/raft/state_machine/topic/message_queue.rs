@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     prelude::DurableMessage,
     protocol::{
-        endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind},
+        endpoint::EndpointAddr,
+        message::*,
         node::raft::{
             proposal::ProposalContext,
             state_machine::topic::wait_ack::{WaitAckError, WaitAckSuccess},
@@ -60,7 +61,7 @@ impl HoldMessage {
     }
     pub(crate) fn is_resolved(&self) -> bool {
         match self.message.header.target_kind {
-            crate::protocol::endpoint::MessageTargetKind::Durable => {
+            MessageTargetKind::Durable => {
                 let Some(durability_config) = self.message.header.durability.as_ref() else {
                     return true;
                 };
@@ -75,13 +76,12 @@ impl HoldMessage {
                 }
                 false
             }
-            crate::protocol::endpoint::MessageTargetKind::Online
-            | crate::protocol::endpoint::MessageTargetKind::Available
-            | crate::protocol::endpoint::MessageTargetKind::Push => self
-                .wait_ack
-                .status
-                .values()
-                .all(|status| status.is_resolved(self.wait_ack.expect)),
+            MessageTargetKind::Online | MessageTargetKind::Available | MessageTargetKind::Push => {
+                self.wait_ack
+                    .status
+                    .values()
+                    .all(|status| status.is_resolved(self.wait_ack.expect))
+            }
         }
     }
     pub(crate) fn resolve(self) -> WaitAckResult {
@@ -115,13 +115,6 @@ pub(crate) struct MessageQueue {
 
 impl MessageQueue {
     pub(crate) const DEFAULT_CAPACITY: usize = 1024;
-    pub(crate) fn clear(&mut self) {
-        self.hold_messages.clear();
-        self.time_id.clear();
-        self.id_time.clear();
-        self.resolved.clear();
-        self.size = 0;
-    }
     pub(crate) fn new(blocking: bool, capacity: usize) -> Self {
         Self {
             blocking,

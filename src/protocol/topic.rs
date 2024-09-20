@@ -14,7 +14,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use crossbeam::sync::ShardedLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use typeshare::typeshare;
@@ -22,15 +21,12 @@ use typeshare::typeshare;
 use crate::protocol::endpoint::LocalEndpointInner;
 
 use super::{
-    endpoint::{
-        DelegateMessage, EndpointAddr, EndpointOffline, EndpointOnline, LocalEndpoint,
-        LocalEndpointRef, Message, MessageAck, MessageId, MessageStateUpdate, MessageStatusKind,
-        SetState,
-    },
+    endpoint::{EndpointAddr, LocalEndpoint, LocalEndpointRef},
     interest::Interest,
+    message::*,
     node::{
         raft::{
-            proposal::Proposal,
+            proposal::*,
             state_machine::topic::wait_ack::{WaitAckHandle, WaitAckResult},
         },
         Node,
@@ -75,7 +71,6 @@ impl std::fmt::Display for TopicCode {
     }
 }
 
-
 #[derive(Debug, Default, Clone)]
 pub struct TopicRef {
     inner: Weak<TopicInner>,
@@ -93,18 +88,7 @@ pub struct TopicInner {
     pub(crate) node: Node,
     pub(crate) ack_waiting_pool:
         Arc<tokio::sync::RwLock<HashMap<MessageId, oneshot::Sender<WaitAckResult>>>>,
-    pub(crate) local_endpoints: Arc<ShardedLock<HashMap<EndpointAddr, LocalEndpointRef>>>,
-}
-
-impl TopicInner {
-    pub(crate) fn new(node: Node, code: TopicCode) -> Self {
-        Self {
-            code,
-            node,
-            ack_waiting_pool: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            local_endpoints: Arc::new(ShardedLock::new(HashMap::new())),
-        }
-    }
+    pub(crate) local_endpoints: Arc<std::sync::RwLock<HashMap<EndpointAddr, LocalEndpointRef>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,22 +108,8 @@ impl TopicInner {
     pub fn code(&self) -> &TopicCode {
         &self.code
     }
-
     pub(crate) fn get_local_ep(&self, ep: &EndpointAddr) -> Option<LocalEndpointRef> {
         self.local_endpoints.read().unwrap().get(ep).cloned()
-    }
-    pub(crate) fn push_message_to_local_ep(
-        &self,
-        ep: &EndpointAddr,
-        message: Message,
-    ) -> Result<(), Message> {
-        if let Some(ep) = self.get_local_ep(ep) {
-            if let Some(sender) = ep.upgrade() {
-                sender.push_message(message);
-                return Ok(());
-            }
-        }
-        Err(message)
     }
 }
 impl Topic {
@@ -242,39 +212,4 @@ impl Topic {
             }))
             .await
     }
-    // pub(crate) fn ep_online(&self, endpoint: EndpointAddr, interests: Vec<Interest>, host: NodeId) {
-    //     let mut message_need_poll = HashSet::new();
-    //     {
-    //         let mut routing_wg = self.ep_routing_table;
-    //         let mut interest_wg = self.ep_interest_map;
-    //         let mut active_wg = self.ep_latest_active;
-
-    //         active_wg.insert(endpoint, TimestampSec::now());
-    //         routing_wg.insert(endpoint, host);
-    //         for interest in &interests {
-    //             interest_wg.insert(interest.clone(), endpoint);
-    //         }
-    //         let queue = self.queue;
-    //         for (id, message) in &queue.hold_messages {
-    //             if message.message.header.target_kind == MessageTargetKind::Durable {
-    //                 let mut status = message.wait_ack.status;
-
-    //                 if !status.contains_key(&endpoint)
-    //                     && message
-    //                         .message
-    //                         .header
-    //                         .subjects
-    //                         .iter()
-    //                         .any(|s| interest_wg.find(s).contains(&endpoint))
-    //                 {
-    //                     status.insert(endpoint, MessageStatusKind::Unsent);
-    //                     message_need_poll.insert(*id);
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     for id in message_need_poll {
-    //         self.update_and_flush(MessageStateUpdate::new_empty(id));
-    //     }
-    // }
 }

@@ -1,6 +1,5 @@
 use std::{borrow::Cow, collections::HashSet};
 
-use bytes::Bytes;
 use codec::CodecKind;
 use packet::Auth;
 use serde::{Deserialize, Serialize};
@@ -12,14 +11,16 @@ use crate::{
     prelude::{
         Interest, MessageAckExpectKind, MessageDurabilityConfig, MessageId, Subject, TopicCode,
     },
-    protocol::endpoint::{
-        EndpointAddr, EndpointInterest, EndpointOffline, EndpointOnline, Message, MessageHeader,
-        MessageStateUpdate, MessageTargetKind, SetState,
-    },
+    protocol::endpoint::EndpointAddr,
+    protocol::message::*,
+    util::MaybeBase64Bytes,
 };
 
 use super::{
-    raft::state_machine::topic::wait_ack::{WaitAckError, WaitAckSuccess},
+    raft::{
+        proposal::{EndpointInterest, SetState},
+        state_machine::topic::wait_ack::{WaitAckError, WaitAckSuccess},
+    },
     NodeId,
 };
 
@@ -165,7 +166,6 @@ pub enum EdgeErrorKind {
     Internal = 0xf0,
 }
 
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[typeshare]
 pub struct EdgeMessageHeader {
@@ -194,13 +194,13 @@ impl EdgeMessageHeader {
 #[typeshare]
 pub struct EdgeMessage {
     pub header: EdgeMessageHeader,
-    pub payload: Bytes,
+    pub payload: MaybeBase64Bytes,
 }
 
 impl EdgeMessage {
     pub fn into_message(self) -> (Message, TopicCode) {
         let (header, topic) = self.header.into_message_header();
-        (Message::new(header, self.payload), topic)
+        (Message::new(header, self.payload.0), topic)
     }
 }
 

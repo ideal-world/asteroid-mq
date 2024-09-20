@@ -1,7 +1,7 @@
 use asteroid_mq::event_handler::json::Json;
 use asteroid_mq::event_handler::EventAttribute;
 use asteroid_mq::prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, Subject, TopicCode};
-use asteroid_mq::protocol::node::raft::cluster::r#static::StaticClusterProvider;
+use asteroid_mq::protocol::node::raft::cluster::StaticClusterProvider;
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelloWorld {

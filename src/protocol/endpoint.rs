@@ -1,12 +1,11 @@
-mod event;
-mod message;
-
 use super::{
-    node::{raft::proposal::Proposal, Node, NodeRef},
+    message::*,
+    node::{
+        raft::proposal::{EndpointInterest, EndpointOffline, Proposal},
+        Node, NodeRef,
+    },
     topic::{Topic, TopicCode, TopicRef},
 };
-pub use event::*;
-pub use message::*;
 use serde::{Deserialize, Serialize};
 use std::{
     ops::Deref,
@@ -213,9 +212,7 @@ impl<'de> Deserialize<'de> for EndpointAddr {
             Ok(Self { bytes: addr })
         } else {
             let bytes = <[u8; 16]>::deserialize(deserializer)?;
-            Ok(Self {
-                bytes
-            })
+            Ok(Self { bytes })
         }
     }
 }

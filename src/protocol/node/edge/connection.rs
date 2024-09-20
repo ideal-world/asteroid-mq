@@ -3,7 +3,8 @@ use std::{borrow::Cow, error::Error, ops::Deref, sync::Arc};
 use tracing::warn;
 
 use crate::protocol::{
-    endpoint::{EndpointAddr, Message},
+    endpoint::EndpointAddr,
+    message::*,
     node::edge::{EdgePayload, EdgeResponse},
 };
 

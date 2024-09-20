@@ -1,12 +1,11 @@
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
-use crate::prelude::{EndpointAddr, Interest, NodeId, TopicCode};
-
+use crate::prelude::{EndpointAddr, Interest, TopicCode};
 #[derive(Debug, Clone, Serialize, Deserialize)]
-
-pub struct EndpointOnline {
+#[typeshare]
+pub struct EndpointInterest {
     pub topic_code: TopicCode,
     pub endpoint: EndpointAddr,
     pub interests: Vec<Interest>,
-    pub host: NodeId,
 }

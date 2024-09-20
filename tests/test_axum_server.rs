@@ -21,7 +21,7 @@ use asteroid_mq::{
             packet::{Auth, EdgePacket},
             EdgeConfig,
         },
-        raft::cluster::r#static::StaticClusterProvider,
+        raft::cluster::StaticClusterProvider,
     },
 };
 

@@ -4,13 +4,14 @@ use crate::{
     protocol::{
         interest::Subject,
         topic::{durable_message::MessageDurabilityConfig, TopicCode},
-    }, util::MaybeBase64Bytes,
+    },
+    util::MaybeBase64Bytes,
 };
-use bytes::{Bytes};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use super::EndpointAddr;
+use super::endpoint::EndpointAddr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[typeshare]
@@ -58,7 +59,6 @@ impl std::fmt::Display for MessageAckExpectKind {
     }
 }
 
-
 impl MessageStatusKind {
     #[inline(always)]
     pub fn is_unsent(&self) -> bool {
@@ -93,28 +93,37 @@ pub struct MessageId {
 
 impl Serialize for MessageId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use base64::Engine;
-        serializer.serialize_str(&base64::engine::general_purpose::URL_SAFE.encode(self.bytes))
+        if serializer.is_human_readable() {
+            use base64::Engine;
+            serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(self.bytes))
+        } else {
+            <[u8; 16]>::serialize(&self.bytes, serializer)
+        }
     }
 }
 
 impl<'de> Deserialize<'de> for MessageId {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use base64::Engine;
-        use serde::de::Error;
-        let s = String::deserialize(deserializer)?;
-        let bytes = base64::engine::general_purpose::URL_SAFE
-            .decode(s.as_bytes())
-            .map_err(D::Error::custom)?;
-        if bytes.len() != 16 {
-            return Err(D::Error::custom("invalid length"));
+        if deserializer.is_human_readable() {
+            use base64::Engine;
+            use serde::de::Error;
+            let s = <&'de str>::deserialize(deserializer)?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(s.as_bytes())
+                .map_err(D::Error::custom)?;
+            if bytes.len() != 16 {
+                return Err(D::Error::custom("invalid length"));
+            }
+            let mut addr = [0; 16];
+            addr.copy_from_slice(&bytes);
+            Ok(Self { bytes: addr })
+        } else {
+            Ok(Self {
+                bytes: <[u8; 16]>::deserialize(deserializer)?,
+            })
         }
-        let mut addr = [0; 16];
-        addr.copy_from_slice(&bytes);
-        Ok(Self { bytes: addr })
     }
 }
-
 
 impl std::fmt::Debug for MessageId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -166,7 +175,6 @@ pub struct Message {
     pub header: MessageHeader,
     pub payload: MaybeBase64Bytes,
 }
-
 
 impl Message {
     pub fn id(&self) -> MessageId {
@@ -258,8 +266,6 @@ pub struct MessageAck {
     pub kind: MessageStatusKind,
 }
 
-
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 #[typeshare]
@@ -270,6 +276,5 @@ pub enum MessageTargetKind {
     #[default]
     Push = 3,
 }
-
 
 impl MessageTargetKind {}

@@ -4,50 +4,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use crate::{
-    protocol::{
-        endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind},
-        node::raft::state_machine::topic::config::TopicConfig,
-    },
-};
-
-use super::TopicCode;
+use crate::protocol::endpoint::EndpointAddr;
+use crate::protocol::message::*;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurableMessage {
     pub message: Message,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
     pub time: DateTime<Utc>,
 }
-
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoadTopic {
-    pub config: TopicConfig,
-    pub queue: Vec<DurableMessage>,
-}
-
-impl LoadTopic {
-    pub fn from_config<C: Into<TopicConfig>>(config: C) -> Self {
-        Self {
-            config: config.into(),
-            queue: Vec::new(),
-        }
-    }
-}
-
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-
-pub struct UnloadTopic {
-    pub code: TopicCode,
-}
-
-impl UnloadTopic {
-    pub fn new(code: TopicCode) -> Self {
-        Self { code }
-    }
-}
-
 
 #[derive(Debug, Clone)]
 pub struct DurableMessageQuery {
@@ -75,7 +39,6 @@ pub struct MessageDurabilityConfig {
     // once it reached the max_receiver, it will be removed
     pub max_receiver: Option<u32>,
 }
-
 
 #[derive(Debug)]
 pub struct DurabilityError {
@@ -157,7 +120,7 @@ pub trait Durability: Send + Sync + 'static {
 mod sealed {
     use std::{future::Future, pin::Pin};
 
-    use crate::protocol::endpoint::MessageId;
+    use crate::protocol::message::*;
 
     use super::{Durability, DurabilityError, DurableMessage, DurableMessageQuery};
 
