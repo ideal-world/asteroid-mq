@@ -1,46 +1,32 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    sync::RwLock,
     task::Poll,
-    time::Instant,
 };
 
-use crate::{impl_codec, protocol::endpoint::{
-    EndpointAddr, Message, MessageAckExpectKind, MessageId, MessageStatusKind,
-}};
+use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
-#[derive(Debug)]
+use crate::protocol::{endpoint::EndpointAddr, message::*};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaitAck {
     pub expect: MessageAckExpectKind,
-    pub status: RwLock<HashMap<EndpointAddr, MessageStatusKind>>,
-    pub timeout: Option<Instant>,
+    pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct WaitAckError {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
     pub exception: Option<WaitAckErrorException>,
 }
 
-impl_codec!(
-    struct WaitAckError {
-        status: HashMap<EndpointAddr, MessageStatusKind>,
-        exception: Option<WaitAckErrorException>,
-    }
-);
-
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct WaitAckSuccess {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
 }
-
-impl_codec!(
-    struct WaitAckSuccess {
-        status: HashMap<EndpointAddr, MessageStatusKind>,
-    }
-);
-
 
 impl WaitAckError {
     pub fn exception(exception: WaitAckErrorException) -> Self {
@@ -52,20 +38,13 @@ impl WaitAckError {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[typeshare]
 pub enum WaitAckErrorException {
     MessageDropped = 0,
     Overflow = 1,
     NoAvailableTarget = 2,
 }
-
-impl_codec!(
-    enum WaitAckErrorException {
-        MessageDropped = 0,
-        Overflow = 1,
-        NoAvailableTarget = 2,
-    }
-);
 
 pub enum AckWaitErrorKind {
     Timeout,
@@ -79,11 +58,7 @@ impl WaitAck {
                 .into_iter()
                 .map(|ep| (ep, MessageStatusKind::Unsent)),
         );
-        Self {
-            status: status.into(),
-            timeout: None,
-            expect,
-        }
+        Self { status, expect }
     }
 }
 
@@ -91,7 +66,7 @@ pin_project_lite::pin_project! {
     pub struct WaitAckHandle {
         pub(crate) message_id: MessageId,
         #[pin]
-        pub(crate) result: flume::r#async::RecvFut<'static, Result<WaitAckSuccess, WaitAckError>>,
+        pub(crate) result: tokio::sync::oneshot::Receiver<WaitAckResult>,
     }
 
 }
@@ -99,6 +74,16 @@ pin_project_lite::pin_project! {
 impl WaitAckHandle {
     pub fn message_id(&self) -> MessageId {
         self.message_id
+    }
+    pub fn new(id: MessageId) -> (tokio::sync::oneshot::Sender<WaitAckResult>, WaitAckHandle) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        (
+            tx,
+            WaitAckHandle {
+                message_id: id,
+                result: rx,
+            },
+        )
     }
 }
 
@@ -114,3 +99,5 @@ impl Future for WaitAckHandle {
             .map_err(|_| WaitAckError::exception(WaitAckErrorException::MessageDropped))?
     }
 }
+
+pub type WaitAckResult = Result<WaitAckSuccess, WaitAckError>;

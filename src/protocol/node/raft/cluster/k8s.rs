@@ -1,8 +1,8 @@
-use std::{borrow::Cow, collections::HashMap, net::SocketAddr, sync::OnceLock};
+use std::{borrow::Cow, collections::BTreeMap, net::SocketAddr, sync::OnceLock};
 
 use k8s_openapi::api::core::v1::{Endpoints, Pod, Service};
 
-use crate::protocol::node::{Node, NodeId, NodeInfo};
+use crate::protocol::node::NodeId;
 
 /// The node id is created by sha256 hash of the pod uid. Use [`NodeId::sha256`] to create a node id.
 ///
@@ -42,14 +42,6 @@ impl K8sClusterProvider {
             port,
         }
     }
-    pub async fn run(self, uid: String) -> Result<Node, crate::Error> {
-        let node = Node::new(NodeInfo::new_cluster_by_id(NodeId::sha256(uid.as_bytes())));
-        let port = self.port;
-        node.create_cluster(self, SocketAddr::new(crate::DEFAULT_TCP_ADDR, port))
-            .await
-            .map_err(crate::Error::contextual("create k8s cluster"))?;
-        Ok(node)
-    }
 }
 
 impl NodeId {
@@ -65,9 +57,9 @@ impl NodeId {
 
 use kube::Api;
 
-use super::TcpClusterProvider;
-impl TcpClusterProvider for K8sClusterProvider {
-    async fn next_update(&mut self) -> super::TcpClusterInfo {
+use super::ClusterProvider;
+impl ClusterProvider for K8sClusterProvider {
+    async fn next_update(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
         tokio::time::sleep_until(self.next_update).await;
         self.next_update += self.poll_interval;
         let service_api: Api<Service> = Api::namespaced(self.client.clone(), &self.namespace);
@@ -122,14 +114,11 @@ impl TcpClusterProvider for K8sClusterProvider {
                 })
             })
             .flatten();
-        let mut nodes = HashMap::new();
+        let mut nodes = BTreeMap::new();
         for (addr, node_id) in socket_addr_list {
             nodes.insert(node_id, addr);
         }
 
-        super::TcpClusterInfo {
-            size: nodes.len() as u64,
-            nodes,
-        }
+        Ok(nodes)
     }
 }

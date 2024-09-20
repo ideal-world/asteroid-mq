@@ -1,6 +1,7 @@
 {
     "cSpell.words": [
         "Bincode",
+        "Cbor",
         "chrono",
         "Deque",
         "kademlia",
@@ -9,10 +10,12 @@
         "Protobuf",
         "Sharded",
         "subsec",
+        "typeshare",
         "Uninit"
     ],
     "rust-analyzer.cargo.features": [
         "cluster-k8s",
-        "json"
+        "typeshare",
+        "cbor"
     ]
 }

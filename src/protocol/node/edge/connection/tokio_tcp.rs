@@ -5,8 +5,11 @@ use futures_util::{Sink, Stream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::protocol::node::{
-    event::{N2NPayloadKind, N2nPacketHeader, N2nPacketId},
-    N2nPacket,
+    edge::{
+        codec::CodecKind,
+        packet::{EdgePacketHeader, EdgePacketId},
+    },
+    EdgePacket,
 };
 
 use super::{NodeConnection, NodeConnectionError, NodeConnectionErrorKind};
@@ -22,7 +25,8 @@ pub enum WriteState {
     WritingPayload,
 }
 
-const HEADER_SIZE: usize = std::mem::size_of::<N2nPacketHeader>();
+const HEADER_SIZE: usize = std::mem::size_of::<EdgePacketHeader>();
+const EXTENDED_HEADER_SIZE: usize = HEADER_SIZE + std::mem::size_of::<u32>();
 pin_project_lite::pin_project! {
     #[derive(Debug)]
     pub struct TokioTcp {
@@ -30,13 +34,14 @@ pin_project_lite::pin_project! {
         inner: tokio::net::TcpStream,
         // read buffers
         read_state: ReadState,
-        read_header_buf: [u8; HEADER_SIZE],
+        read_header_buf: [u8; EXTENDED_HEADER_SIZE],
+        read_payload_size: u32,
         read_payload_buf: BytesMut,
         read_index: usize,
-        read_header: Option<N2nPacketHeader>,
+        read_header: Option<EdgePacketHeader>,
         // write buffers
-        write_item: Option<N2nPacket>,
-        write_header_buf: [u8; HEADER_SIZE],
+        write_item: Option<EdgePacket>,
+        write_header_buf: [u8; EXTENDED_HEADER_SIZE],
         write_payload_buf: Bytes,
         write_state: WriteState,
         write_index: usize,
@@ -53,6 +58,7 @@ impl TokioTcp {
             read_state: ReadState::ExpectingHeader,
             read_header_buf: Default::default(),
             read_payload_buf: BytesMut::new(),
+            read_payload_size: 0,
             read_index: 0,
             read_header: None,
             write_item: None,
@@ -64,7 +70,7 @@ impl TokioTcp {
     }
 }
 
-impl Sink<N2nPacket> for TokioTcp {
+impl Sink<EdgePacket> for TokioTcp {
     type Error = NodeConnectionError;
 
     fn poll_ready(
@@ -78,12 +84,12 @@ impl Sink<N2nPacket> for TokioTcp {
         })
     }
 
-    fn start_send(self: std::pin::Pin<&mut Self>, item: N2nPacket) -> Result<(), Self::Error> {
+    fn start_send(self: std::pin::Pin<&mut Self>, item: EdgePacket) -> Result<(), Self::Error> {
         let this = self.project();
         let header = item.header;
         this.write_header_buf[0..16].copy_from_slice(&header.id.bytes);
-        this.write_header_buf[16] = header.kind as u8;
-        this.write_header_buf[17..21].copy_from_slice(&header.payload_size.to_be_bytes());
+        this.write_header_buf[16] = header.codec.0;
+        this.write_header_buf[17..21].copy_from_slice(&item.payload.len().to_be_bytes());
         *this.write_payload_buf = item.payload;
         Ok(())
     }
@@ -110,7 +116,7 @@ impl Sink<N2nPacket> for TokioTcp {
                         )
                     })?;
                     *this.write_index += written;
-                    if *this.write_index == HEADER_SIZE {
+                    if *this.write_index == EXTENDED_HEADER_SIZE {
                         *this.write_state = WriteState::WritingPayload;
                         *this.write_index = 0;
                     }
@@ -150,7 +156,7 @@ impl Sink<N2nPacket> for TokioTcp {
 }
 
 impl Stream for TokioTcp {
-    type Item = Result<N2nPacket, NodeConnectionError>;
+    type Item = Result<EdgePacket, NodeConnectionError>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -173,39 +179,35 @@ impl Stream for TokioTcp {
                     if remaining == 0 {
                         *this.read_state = ReadState::ExpectingPayload;
                         *this.read_index = 0;
-                        let id = N2nPacketId {
+                        let id = EdgePacketId {
                             bytes: (&this.read_header_buf[0..16])
                                 .try_into()
                                 .expect("have enough bytes"),
                         };
-                        let kind = N2NPayloadKind::from(this.read_header_buf[16]);
+                        let codec = CodecKind(this.read_header_buf[16]);
                         let payload_size = u32::from_be_bytes(
                             (&this.read_header_buf[17..21])
                                 .try_into()
                                 .expect("have enough bytes"),
                         );
-                        let header = N2nPacketHeader {
-                            id,
-                            kind,
-                            payload_size,
-                        };
+                        let header = EdgePacketHeader { id, codec };
+                        *this.read_payload_size = payload_size;
                         this.read_payload_buf.reserve(payload_size as usize);
                         unsafe {
                             this.read_payload_buf.set_len(payload_size as usize);
                         }
                         *this.read_header = Some(header);
                     } else {
-                        let new_index = HEADER_SIZE - remaining;
+                        let new_index = EXTENDED_HEADER_SIZE - remaining;
                         *this.read_index = new_index;
                     }
                 }
                 ReadState::ExpectingPayload => {
-                    let header = this.read_header.as_ref().expect("header is set");
-                    let payload_size = header.payload_size as usize;
+                    let payload_size = *this.read_payload_size as usize;
                     if payload_size == 0 {
                         let header = this.read_header.take().expect("header is set");
                         *this.read_state = ReadState::ExpectingHeader;
-                        return std::task::Poll::Ready(Some(Ok(N2nPacket {
+                        return std::task::Poll::Ready(Some(Ok(EdgePacket {
                             header,
                             payload: Bytes::new(),
                         })));
@@ -223,7 +225,7 @@ impl Stream for TokioTcp {
                         let payload = this.read_payload_buf.split().freeze();
                         *this.read_state = ReadState::ExpectingHeader;
                         *this.read_index = 0;
-                        return std::task::Poll::Ready(Some(Ok(N2nPacket { header, payload })));
+                        return std::task::Poll::Ready(Some(Ok(EdgePacket { header, payload })));
                     } else {
                         let new_index = payload_size - remain;
                         *this.read_index = new_index;

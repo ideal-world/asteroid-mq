@@ -1,16 +1,17 @@
-mod event;
-mod message;
-
 use super::{
-    node::{raft::LogEntry, Node, NodeRef},
+    message::*,
+    node::{
+        raft::proposal::{EndpointInterest, EndpointOffline, Proposal},
+        Node, NodeRef,
+    },
     topic::{Topic, TopicCode, TopicRef},
 };
-pub use event::*;
-pub use message::*;
+use serde::{Deserialize, Serialize};
 use std::{
     ops::Deref,
     sync::{Arc, Weak},
 };
+use typeshare::typeshare;
 
 use crate::protocol::interest::Interest;
 #[derive(Clone, Debug)]
@@ -41,17 +42,17 @@ impl Drop for LocalEndpointInner {
         let endpoint = self.address;
         if let Some(topic) = self.attached_topic.upgrade() {
             tokio::spawn(async move {
-                topic
-                    .node
-                    .commit_log(LogEntry::ep_offline(EndpointOffline {
+                let node = topic.node();
+                let result = node
+                    .proposal(Proposal::EpOffline(EndpointOffline {
                         topic_code: topic.code().clone(),
                         endpoint,
-                        host: topic.node.id(),
+                        host: node.id(),
                     }))
-                    .await
-                    .map_err(|e| {
-                        tracing::warn!("commit ep_offline failed: {:?}", e);
-                    })
+                    .await;
+                if let Err(err) = result {
+                    tracing::error!(?err, "offline endpoint failed");
+                }
             });
         }
     }
@@ -132,16 +133,13 @@ impl LocalEndpoint {
     }
     pub async fn update_interest(&self, interests: Vec<Interest>) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
-            let _ = topic
-                .node
-                .commit_log(LogEntry::ep_interest(EndpointInterest {
-                    topic_code: topic.code().clone(),
-                    endpoint: self.address,
-                    interests,
-                }))
-                .await
-                .map_err(crate::Error::contextual("update_interest"))?;
-            Ok(())
+            let node = topic.node();
+            node.proposal(Proposal::EpInterest(EndpointInterest {
+                topic_code: topic.code().clone(),
+                endpoint: self.address,
+                interests,
+            }))
+            .await
         } else {
             Err(crate::Error::new(
                 "topic not found",
@@ -181,8 +179,42 @@ impl MessageHeader {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[typeshare(serialized_as = "String")]
 pub struct EndpointAddr {
     pub bytes: [u8; 16],
+}
+
+impl Serialize for EndpointAddr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            use base64::Engine;
+            serializer.serialize_str(&base64::engine::general_purpose::URL_SAFE.encode(self.bytes))
+        } else {
+            <[u8; 16]>::serialize(&self.bytes, serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EndpointAddr {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            use base64::Engine;
+            use serde::de::Error;
+            let s = String::deserialize(deserializer)?;
+            let bytes = base64::engine::general_purpose::URL_SAFE
+                .decode(s.as_bytes())
+                .map_err(D::Error::custom)?;
+            if bytes.len() != 16 {
+                return Err(D::Error::custom("invalid length"));
+            }
+            let mut addr = [0; 16];
+            addr.copy_from_slice(&bytes);
+            Ok(Self { bytes: addr })
+        } else {
+            let bytes = <[u8; 16]>::deserialize(deserializer)?;
+            Ok(Self { bytes })
+        }
+    }
 }
 
 impl std::fmt::Debug for EndpointAddr {

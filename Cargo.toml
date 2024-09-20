@@ -4,29 +4,44 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bytes = { version = "1.6.1", features = ["serde"] }
-chrono = "0.4.38"
-crossbeam = "0.8.4"
-flume = "0.11.0"
-futures-util = { version = "0.3.30", features = ["sink"] }
-machine-uid = "0.5.2"
-pin-project-lite = "0.2.14"
-rand = "0.8.5"
-tokio = { version = "1.39.1", features = ["full"] }
-tracing = "0.1.40"
+bytes = { version = "1", features = ["serde"] }
+chrono = "0.4"
+flume = "0.11"
+futures-util = { version = "0.3", features = ["sink"] }
+machine-uid = "0.5.3"
+pin-project-lite = "0.2"
+
+# async runtime
+tokio = { version = "1", features = ["full", "tracing"] }
+
+# tracing
+tracing = "0.1"
+
+# digest
 sha2 = "0.10"
+
 # k8s cluster support
 kube = { version = "0.93.1", features = ["runtime", "derive"], optional = true }
 k8s-openapi = { version = "0.22.0", features = ["latest"], optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
-tokio-tungstenite = "0.23.1"
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+bincode = "1"
+ciborium = { version = "0.2", optional = true }
+typeshare = { version = "1", optional = true }
+base64 = "0.22"
+
+# raft
+openraft = { version = "0.9.16", features = ["serde", "storage-v2"] }
+# openraft = { version = "0.9.16", features = ["serde", "storage-v2"], path="../openraft/openraft" }
+
 [features]
 cluster-k8s = ["kube", "k8s-openapi"]
-json = ["serde", "serde_json"]
+typeshare = ["dep:typeshare"]
+cbor = ["dep:ciborium"]
 [dev-dependencies]
 tracing-subscriber = "0.3.18"
-serde = { version = "1.0.204", features = ["derive"] }
 serde_json = "1.0.120"
 console-subscriber = "*"
-axum = { version = "0.7", features = ["ws"]}
+axum = { version = "0.7", features = ["ws"] }

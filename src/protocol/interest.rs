@@ -7,15 +7,32 @@ use std::{
 };
 
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
-use crate::impl_codec;
-
-#[derive(Debug, Clone, PartialEq ,Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[typeshare(serialized_as = "String")]
 pub struct Subject(pub(crate) Bytes);
 
-impl_codec!(
-    struct Subject(Bytes)
-);
+impl Serialize for Subject {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let string = unsafe { std::str::from_utf8_unchecked(self.0.as_ref()) };
+        serializer.serialize_str(string)
+    }
+}
+
+impl<'de> Deserialize<'de> for Subject {
+    fn deserialize<D>(deserializer: D) -> Result<Subject, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        Ok(Subject(Bytes::from(string)))
+    }
+}
 
 impl Subject {
     pub fn as_bytes(&self) -> &[u8] {
@@ -80,11 +97,29 @@ impl<'a> Iterator for SubjectSegments<'a> {
 /// ## Glob Match Interest
 /// (/)?(<path>|<*>|<**>)/*
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[typeshare(serialized_as = "String")]
 pub struct Interest(Bytes);
 
-impl_codec!(
-    struct Interest(Bytes)
-);
+impl Serialize for Interest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let string = unsafe { std::str::from_utf8_unchecked(self.0.as_ref()) };
+        serializer.serialize_str(string)
+    }
+}
+
+impl<'de> Deserialize<'de> for Interest {
+    fn deserialize<D>(deserializer: D) -> Result<Interest, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        Ok(Interest(Bytes::from(string)))
+    }
+}
+
 impl Interest {
     pub fn new<B: Into<Bytes>>(bytes: B) -> Self {
         Self(bytes.into())
@@ -123,7 +158,7 @@ pub enum OwnedInterestSegment {
     Any,
     RecursiveAny,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterestMap<T> {
     root: InterestRadixTreeNode<T>,
     pub(crate) raw: HashMap<T, HashSet<Interest>>,
@@ -138,7 +173,7 @@ impl<T> Default for InterestMap<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterestRadixTreeNode<T> {
     value: HashSet<T>,
     children: BTreeMap<Vec<u8>, InterestRadixTreeNode<T>>,
@@ -292,6 +327,30 @@ where
     }
 }
 
+impl<T> Serialize for InterestMap<T>
+where
+    T: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.raw.serialize(serializer)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for InterestMap<T>
+where
+    T: Deserialize<'de> + Hash + Eq + Clone,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = HashMap::<T, HashSet<Interest>>::deserialize(deserializer)?;
+        Ok(Self::from_raw(raw))
+    }
+}
 #[test]
 fn test_interest_map() {
     let mut map = InterestMap::new();

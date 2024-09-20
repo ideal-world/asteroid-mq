@@ -1,12 +1,11 @@
-#[cfg(feature = "json")]
 pub mod json;
 use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin};
 
 use bytes::Bytes;
 
 use crate::{
-    prelude::{CodecType, Subject, Topic},
-    protocol::endpoint::{LocalEndpoint, Message, MessageAckExpectKind, MessageHeader},
+    prelude::{Subject, Topic},
+    protocol::{endpoint::LocalEndpoint, message::*},
 };
 
 type InnerEventHandler =
@@ -21,14 +20,12 @@ pub trait EventCodec: Sized {
     fn to_bytes(&self) -> Bytes;
 }
 
-
 pub trait EventAttribute {
     const SUBJECT: Subject;
     const BROADCAST: bool = false;
     const EXPECT_ACK_KIND: MessageAckExpectKind = MessageAckExpectKind::Sent;
 }
 pub trait Event: EventAttribute + EventCodec + Send {}
-
 
 impl<E> Event for E where E: EventAttribute + EventCodec + Send {}
 pub trait Handler<A>: Clone + Sync + Send + 'static {
@@ -81,7 +78,7 @@ impl HandleEventLoop {
                 {
                     ep.ack_received(&message.header).await?;
                 }
-                let event = match H::Event::from_bytes(message.payload) {
+                let event = match H::Event::from_bytes(message.payload.into_inner()) {
                     Some(msg) => msg,
                     None => {
                         if H::Event::EXPECT_ACK_KIND == MessageAckExpectKind::Processed {
@@ -128,9 +125,7 @@ impl LocalEndpoint {
     pub fn create_event_loop(&self) -> HandleEventLoop {
         HandleEventLoop::new(self.clone())
     }
-
 }
-
 
 impl Topic {
     pub async fn send_event<E: Event>(&self, event: E) -> Result<(), crate::Error> {

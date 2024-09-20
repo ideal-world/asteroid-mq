@@ -1,67 +1,17 @@
 use std::{borrow::Cow, collections::HashMap, future::Future, sync::Arc};
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
-use crate::{
-    impl_codec,
-    protocol::endpoint::{EndpointAddr, Message, MessageId, MessageStatusKind},
-};
-
-use super::{config::TopicConfig, TopicCode};
-#[derive(Debug)]
+use crate::protocol::endpoint::EndpointAddr;
+use crate::protocol::message::*;
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurableMessage {
     pub message: Message,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
     pub time: DateTime<Utc>,
 }
-
-impl_codec!(
-    struct DurableMessage {
-        message: Message,
-        status: HashMap<EndpointAddr, MessageStatusKind>,
-        time: DateTime<Utc>,
-    }
-);
-
-#[derive(Debug)]
-
-pub struct LoadTopic {
-    pub config: TopicConfig,
-    pub queue: Vec<DurableMessage>,
-}
-
-impl LoadTopic {
-    pub fn from_config<C: Into<TopicConfig>>(config: C) -> Self {
-        Self {
-            config: config.into(),
-            queue: Vec::new(),
-        }
-    }
-}
-
-impl_codec!(
-    struct LoadTopic {
-        config: TopicConfig,
-        queue: Vec<DurableMessage>,
-    }
-);
-
-#[derive(Debug)]
-pub struct UnloadTopic {
-    pub code: TopicCode,
-}
-
-impl UnloadTopic {
-    pub fn new(code: TopicCode) -> Self {
-        Self { code }
-    }
-}
-
-impl_codec!(
-    struct UnloadTopic {
-        code: TopicCode,
-    }
-);
 
 #[derive(Debug, Clone)]
 pub struct DurableMessageQuery {
@@ -81,7 +31,8 @@ impl DurableMessageQuery {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[typeshare]
 pub struct MessageDurabilityConfig {
     // we should have a expire time
     pub expire: DateTime<Utc>,
@@ -89,12 +40,6 @@ pub struct MessageDurabilityConfig {
     pub max_receiver: Option<u32>,
 }
 
-impl_codec!(
-    struct MessageDurabilityConfig {
-        expire: DateTime<Utc>,
-        max_receiver: Option<u32>,
-    }
-);
 #[derive(Debug)]
 pub struct DurabilityError {
     pub context: Cow<'static, str>,
@@ -175,7 +120,7 @@ pub trait Durability: Send + Sync + 'static {
 mod sealed {
     use std::{future::Future, pin::Pin};
 
-    use crate::protocol::endpoint::MessageId;
+    use crate::protocol::message::*;
 
     use super::{Durability, DurabilityError, DurableMessage, DurableMessageQuery};
 
