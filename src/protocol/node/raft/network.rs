@@ -73,30 +73,29 @@ impl TcpNetwork {
     pub fn new(peer: RaftNodeInfo, source: TcpNetworkService) -> Self {
         Self { peer, source }
     }
-    async fn create_connection(&self) -> Result<(), Unreachable> {
+    async fn create_connection(&self) -> Result<RaftTcpConnection, Unreachable> {
         let stream = TcpStream::connect(self.peer.node.addr.clone())
             .await
             .map_err(|e| Unreachable::new(&e))?;
-        let connections = self.source.connections.clone();
         let connection = RaftTcpConnection::from_tokio_tcp_stream(stream, self.source.clone())
             .await
             .map_err(|e| Unreachable::new(&e))?;
-        let mut connections = connections.write().await;
-        connections.insert(self.peer.id, Arc::new(connection));
-        Ok(())
+        Ok(connection)
     }
+    #[tracing::instrument(skip_all, fields(peer_id = ?self.peer.id))]
     async fn send_request(&mut self, req: Request) -> Result<Receiver<Response>, Unreachable> {
-        let connections = self.source.connections.read().await;
+        let mut connections = self.source.connections.write().await;
         let connection = connections.get(&self.peer.id);
         if connection.is_none() || connection.is_some_and(|c| !c.is_alive()) {
-            drop(connections);
-            self.create_connection().await?;
+            // the node with smaller id will create connection
+            if self.peer.id < self.source.info.id {
+                return Err(Unreachable::new(&ConnectionNotEstablished));
+            }
+            tracing::debug!(peer=?self.peer.id, this=?self.source.info.id, "connection not established, creating new connection");
+            let connection = Arc::new(self.create_connection().await?);
+            connections.insert(connection.peer_id(), connection.clone());
         }
-        let connection = self
-            .source
-            .connections
-            .read()
-            .await
+        let connection = connections
             .get(&self.peer.id)
             .ok_or_else(|| Unreachable::new(&ConnectionNotEstablished))?
             .clone();

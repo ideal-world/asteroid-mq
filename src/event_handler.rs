@@ -105,7 +105,9 @@ impl HandleEventLoop {
 
     pub async fn run(self) {
         loop {
-            let message = self.ep.next_message().await;
+            let Some(message) = self.ep.next_message().await else {
+                break;
+            };
             let subjects = message.header.subjects.clone();
             for subject in subjects.iter() {
                 let Some(handler) = self.handlers.get(subject) else {

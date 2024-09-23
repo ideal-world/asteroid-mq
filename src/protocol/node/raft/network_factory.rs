@@ -57,28 +57,20 @@ impl TcpNetworkService {
                                 .await
                                 {
                                     let peer_id = connection.peer_id();
+                                    // we only accept node with smaller id
+                                    if peer_id >= info.id {
+                                        tracing::debug!(?peer_id, "peer id is greater than self");
+                                        continue;
+                                    }
+                                    let mut connections = tcp_service.connections.write().await;
                                     // let peer_node = connection.peer_node();
-                                    if tcp_service.connections.read().await.contains_key(&peer_id) {
+                                    if let std::collections::hash_map::Entry::Vacant(e) = connections.entry(peer_id) {
+                                        tracing::info!(?connection, "new connection");
+                                        e.insert(Arc::new(connection));
+                                    } else {
                                         tracing::warn!(?connection, "connection already exists");
                                         continue;
-                                    } else {
-                                        tracing::info!(?connection, "new connection");
-                                        tcp_service
-                                            .connections
-                                            .write()
-                                            .await
-                                            .insert(peer_id, Arc::new(connection));
                                     }
-
-                                    // let result = raft.add_learner(peer_id, peer_node, false).await;
-                                    // match result {
-                                    //     Ok(_) => {
-                                    //         tracing::info!("add learner success");
-                                    //     }
-                                    //     Err(e) => {
-                                    //         tracing::error!(?e, "add learner failed");
-                                    //     }
-                                    // }
                                 }
                             }
                             #[allow(unreachable_code)]
@@ -125,6 +117,7 @@ pub struct RaftTcpConnection {
 
 impl Drop for RaftTcpConnection {
     fn drop(&mut self) {
+        tracing::info!("connection dropped");
         self.read_task.abort();
         self.write_task.abort();
         self.alive.store(false, atomic::Ordering::Relaxed);
@@ -194,6 +187,7 @@ impl RaftTcpConnection {
         mut stream: TcpStream,
         service: TcpNetworkService,
     ) -> std::io::Result<Self> {
+        tracing::error!("new connection from tokio tcp stream");
         let raft = service.raft.get().await;
         let info = service.info.clone();
         let packet = bincode::serialize(&info).map_err(|_| std::io::ErrorKind::InvalidData)?;
@@ -204,40 +198,33 @@ impl RaftTcpConnection {
         stream.read_exact(&mut hello_data).await?;
         let peer: RaftNodeInfo =
             bincode::deserialize(&hello_data).map_err(|_| std::io::ErrorKind::InvalidData)?;
-
+        tracing::debug!(?peer, "hello received");
         let (mut read, mut write) = stream.into_split();
-        let wait_poll = Arc::new(tokio::sync::Mutex::new(HashMap::<
+        let wait_pool = Arc::new(tokio::sync::Mutex::new(HashMap::<
             u64,
             oneshot::Sender<Response>,
         >::new()));
-        let wait_poll_clone = wait_poll.clone();
+        let wait_poll_clone = wait_pool.clone();
         let (packet_tx, packet_rx) = flume::bounded::<Packet>(512);
         let write_task = tokio::spawn(
             async move {
-                let task_inner = async move {
-                    let write_loop = async {
-                        while let Ok(packet) = packet_rx.recv_async().await {
-                            let bytes = bincode::serialize(&packet.payload)
-                                .expect("should be valid for bincode");
-                            write.write_u64(packet.seq_id).await?;
-                            write.write_u32(bytes.len() as u32).await?;
-                            write.write_all(&bytes).await?;
-                            write.flush().await?;
-                            tracing::trace!(?packet, "flushed");
-                        }
-                        std::io::Result::<()>::Ok(())
-                    };
-                    match write_loop.await {
-                        Ok(_) => Ok(()),
-                        Err(e) => {
-                            tracing::error!(?e);
-                            Err(e)
-                        }
+                let write_loop = async {
+                    while let Ok(packet) = packet_rx.recv_async().await {
+                        let bytes = bincode::serialize(&packet.payload)
+                            .expect("should be valid for bincode");
+                        write.write_u64(packet.seq_id).await?;
+                        write.write_u32(bytes.len() as u32).await?;
+                        write.write_all(&bytes).await?;
+                        write.flush().await?;
+                        tracing::trace!(?packet, "flushed");
                     }
+                    std::io::Result::<()>::Ok(())
                 };
-                let result = task_inner.await;
-                if let Err(e) = result {
-                    tracing::error!(?e, "write task error");
+                match write_loop.await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!(%e, "write loop error");
+                    }
                 }
             }
             .instrument(tracing::span!(
@@ -305,14 +292,14 @@ impl RaftTcpConnection {
             tokio::spawn(async move {
                 let result: std::io::Result<()> = inner_task.await;
                 if let Err(e) = result {
-                    tracing::error!(?e, "read task error");
+                    tracing::error!(%e, "read task error");
                 }
                 alive.store(false, atomic::Ordering::Relaxed);
             })
         };
         Ok(Self {
             packet_tx,
-            wait_poll,
+            wait_poll: wait_pool,
             peer,
             local_seq: Arc::new(AtomicU64::new(0)),
             alive,

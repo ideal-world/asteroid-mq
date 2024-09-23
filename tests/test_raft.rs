@@ -37,18 +37,21 @@ async fn test_raft() {
         id: node_id(1),
         addr: node_addr(1),
         raft: raft_config(),
+        ..Default::default()
     });
 
     let node_2 = Node::new(NodeConfig {
         id: node_id(2),
         addr: node_addr(2),
         raft: raft_config(),
+        ..Default::default()
     });
 
     let node_3 = Node::new(NodeConfig {
         id: node_id(3),
         addr: node_addr(3),
         raft: raft_config(),
+        ..Default::default()
     });
 
     node_1.init_raft(cluster.clone()).await.unwrap();

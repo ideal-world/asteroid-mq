@@ -1,10 +1,15 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 
 use crate::{
-    prelude::{DurableService, MessageId, Node, TopicCode},
-    protocol::{endpoint::EndpointAddr, message::*},
+    prelude::{DurableMessage, DurableService, MessageId, Node, TopicCode},
+    protocol::{endpoint::EndpointAddr, message::*, topic::durable_message::DurableCommand},
 };
 
 use super::state_machine::topic::wait_ack::WaitAckResult;
@@ -46,6 +51,67 @@ pub struct ProposalContext {
 }
 
 impl ProposalContext {
+    pub fn new(node: Node) -> Self {
+        Self {
+            node,
+            topic_code: None,
+        }
+    }
+    pub fn push_durable_command(&mut self, command: DurableCommand) {
+        self.node.push_durable_commands(Some(command));
+    }
+    pub fn commit_durable_commands(&mut self) {
+        if let Some(service) = self.durable_service() {
+            let topic_code = self.topic_code.clone().expect("topic code not set");
+            let node = self.node.clone();
+            let Some(topic) = node.get_topic(&topic_code) else {
+                tracing::warn!(?topic_code, "topic not found");
+                return;
+            };
+
+            tokio::spawn(
+                async move {
+                    // only one execute task at a time for each topic
+                    let sync_lock = node.get_durable_lock(topic_code.clone()).await;
+                    let _sync_guard = sync_lock.lock().await;
+                    let commands = node.swap_out_durable_commands();
+                    if node.raft().await.ensure_linearizable().await.is_err() {
+                        tracing::trace!("raft not leader, skip durable commands");
+                        return;
+                    } else {
+                        tracing::trace!(?commands, "raft is leader, commit durable commands");
+                    };
+                    for command in commands {
+                        let topic = topic_code.clone();
+                        let result = match command {
+                            DurableCommand::Create(command) => {
+                                service
+                                    .save(
+                                        topic,
+                                        DurableMessage {
+                                            message: command,
+                                            status: Default::default(),
+                                            time: Utc::now(),
+                                        },
+                                    )
+                                    .await
+                            }
+                            DurableCommand::UpdateStatus(command) => {
+                                service.update_status(topic, command).await
+                            }
+                            DurableCommand::Archive(command) => {
+                                service.archive(topic, command).await
+                            }
+                        };
+                        if let Err(err) = result {
+                            tracing::error!(?err, "durable command failed");
+                        }
+                    }
+                }
+                .instrument(tracing::info_span!("flush durable commands")),
+            );
+        }
+    }
     pub fn durable_service(&self) -> Option<DurableService> {
         self.node.config.durable.clone()
     }
@@ -99,5 +165,26 @@ impl ProposalContext {
                 tracing::error!(?err, "set state failed");
             }
         });
+    }
+}
+
+impl Node {
+    pub(self) fn push_durable_commands(&self, commands: impl IntoIterator<Item = DurableCommand>) {
+        self.durable_commands_queue
+            .write()
+            .unwrap()
+            .extend(commands);
+    }
+    pub(self) fn swap_out_durable_commands(&self) -> VecDeque<DurableCommand> {
+        let mut queue = self.durable_commands_queue.write().unwrap();
+        std::mem::take(&mut *queue)
+    }
+    pub(self) async fn get_durable_lock(&self, topic: TopicCode) -> Arc<tokio::sync::Mutex<()>> {
+        self.durable_syncs
+            .lock()
+            .await
+            .entry(topic)
+            .or_default()
+            .clone()
     }
 }

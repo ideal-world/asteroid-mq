@@ -45,6 +45,30 @@ impl TopicCode {
     }
 }
 
+impl From<&'_ str> for TopicCode {
+    fn from(val: &'_ str) -> Self {
+        TopicCode::new(val)
+    }
+}
+
+impl From<String> for TopicCode {
+    fn from(val: String) -> Self {
+        TopicCode::new(val)
+    }
+}
+
+impl From<&'_ [u8] > for TopicCode {
+    fn from(val: &'_ [u8]) -> Self {
+        TopicCode(Bytes::copy_from_slice(val))
+    }
+}
+
+impl From<Vec<u8>> for TopicCode {
+    fn from(val: Vec<u8>) -> Self {
+        TopicCode(Bytes::from(val))
+    }
+}
+
 impl Serialize for TopicCode {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let string = unsafe { std::str::from_utf8_unchecked(self.0.as_ref()) };

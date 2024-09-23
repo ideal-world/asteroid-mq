@@ -125,11 +125,8 @@ impl LocalEndpoint {
             .send(message)
             .expect("ep self hold the receiver");
     }
-    pub async fn next_message(&self) -> Message {
-        self.mail_box
-            .recv_async()
-            .await
-            .expect("ep self hold a sender")
+    pub async fn next_message(&self) -> Option<Message> {
+        self.mail_box.recv_async().await.ok()
     }
     pub async fn update_interest(&self, interests: Vec<Interest>) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {

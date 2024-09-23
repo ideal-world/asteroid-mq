@@ -190,8 +190,7 @@ async fn test_websocket_server() -> asteroid_mq::Result<()> {
         .await
         .unwrap();
     tokio::spawn(async move {
-        loop {
-            let message = receiver_endpoint.next_message().await;
+        while let Some(message) = receiver_endpoint.next_message().await {
             let payload: Value = serde_json::from_slice(&message.payload.0).expect("invalid json");
             tracing::info!(%payload, header=?message.header, "recv message in server node");
             receiver_endpoint

@@ -1,7 +1,7 @@
 pub mod edge;
 pub mod raft;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     net::SocketAddr,
     ops::Deref,
     sync::{self, Arc, RwLock},
@@ -9,9 +9,10 @@ use std::{
 
 use super::{
     endpoint::EndpointAddr,
-    topic::{Topic, TopicCode},
+    topic::{durable_message::DurableCommand, Topic, TopicCode},
 };
 use edge::{
+    auth::EdgeAuthService,
     codec::CodecRegistry,
     connection::{
         ConnectionConfig, EdgeConnectionInstance, EdgeConnectionRef, NodeConnection,
@@ -36,7 +37,10 @@ use raft::{
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use crate::{prelude::{DurableService, DurableMessage}, DEFAULT_TCP_SOCKET_ADDR};
+use crate::{
+    prelude::{DurableMessage, DurableService},
+    DEFAULT_TCP_SOCKET_ADDR,
+};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[typeshare(serialized_as = "string")]
@@ -160,6 +164,7 @@ pub struct NodeConfig {
     pub addr: SocketAddr,
     pub raft: openraft::Config,
     pub durable: Option<DurableService>,
+    pub edge_auth: Option<EdgeAuthService>,
 }
 
 impl Default for NodeConfig {
@@ -169,6 +174,7 @@ impl Default for NodeConfig {
             addr: DEFAULT_TCP_SOCKET_ADDR,
             raft: openraft::Config::default(),
             durable: None,
+            edge_auth: None,
         }
     }
 }
@@ -182,7 +188,8 @@ pub struct NodeInner {
     edge_routing: RwLock<HashMap<EndpointAddr, (NodeId, TopicCode)>>,
     codec_registry: Arc<CodecRegistry>,
     topics: RwLock<HashMap<TopicCode, Topic>>,
-
+    durable_commands_queue: std::sync::RwLock<VecDeque<DurableCommand>>,
+    pub(crate) durable_syncs: tokio::sync::Mutex<HashMap<TopicCode, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -196,9 +203,18 @@ impl NodeRef {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Node {
     pub(crate) inner: Arc<NodeInner>,
+}
+
+impl std::fmt::Debug for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Node")
+            .field("id", &self.id())
+            .field("config", &self.config())
+            .finish()
+    }
 }
 
 impl Deref for Node {
@@ -359,6 +375,8 @@ impl Node {
             raft,
             codec_registry: Arc::new(CodecRegistry::new_preloaded()),
             network,
+            durable_commands_queue: Default::default(),
+            durable_syncs: Default::default(),
         };
         Self {
             inner: Arc::new(inner),
@@ -476,6 +494,16 @@ impl Node {
         from: NodeId,
         edge_request_kind: edge::EdgeRequestEnum,
     ) -> Result<edge::EdgeResponseEnum, edge::EdgeError> {
+        // auth check
+        if let Some(auth) = self.config.edge_auth.as_ref() {
+            if let Err(e) = auth.check(from, &edge_request_kind).await {
+                return Err(EdgeError::with_message(
+                    "auth check failed",
+                    e.to_string(),
+                    EdgeErrorKind::Unauthorized,
+                ));
+            }
+        }
         match edge_request_kind {
             edge::EdgeRequestEnum::SendMessage(edge_message) => {
                 let (message, topic_code) = edge_message.into_message();
@@ -601,6 +629,10 @@ impl Node {
         let topics = self.topics.read().unwrap();
         topics.get(code).cloned()
     }
+    pub async fn is_leader(&self) -> bool {
+        let raft = self.raft().await;
+        raft.ensure_linearizable().await.is_ok()
+    }
     pub async fn load_topic<C: Into<TopicConfig>>(
         &self,
         config: C,
@@ -618,7 +650,11 @@ impl Node {
                 ));
             }
         }
-        tracing::info!(?config, "create new topic");
+        tracing::info!(?config, "load_topic");
+        let raft = self.raft().await;
+        raft.ensure_linearizable()
+            .await
+            .map_err(|_e| crate::Error::new("load_topic", crate::error::ErrorKind::NotLeader))?;
         self.proposal(Proposal::LoadTopic(LoadTopic { config, queue }))
             .await?;
         let topics = self.topics.read().unwrap();

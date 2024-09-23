@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    prelude::{DurableMessage, Topic, TopicCode},
+    prelude::{Topic, TopicCode},
     protocol::{
         node::raft::proposal::{
             DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, LoadTopic,
@@ -30,32 +30,20 @@ impl NodeData {
     ) {
         ctx.set_topic_code(topic.clone());
         if let Some(topic) = self.topics.get_mut(&topic) {
-            topic.hold_new_message(message.clone(), &ctx);
-            if let Some(durable) = ctx.durable_service() {
-                tokio::spawn(async move {
-                    let result = durable
-                        .save(DurableMessage {
-                            message,
-                            status: Default::default(),
-                            time: chrono::Utc::now(),
-                        })
-                        .await;
-                    if let Err(e) = result {
-                        tracing::error!(?e, "save durable message failed");
-                    }
-                });
-            }
+            topic.hold_new_message(message.clone(), &mut ctx);
         } else {
             tracing::error!(?topic, "topic not found");
         }
+        ctx.commit_durable_commands();
     }
     pub(crate) fn apply_load_topic(
         &mut self,
         LoadTopic { config, mut queue }: LoadTopic,
-        ctx: ProposalContext,
+        mut ctx: ProposalContext,
     ) {
         queue.sort_by_key(|m| m.time);
         let code = config.code.clone();
+        ctx.set_topic_code(code.clone());
         let topic = TopicData::from_durable(config, queue);
         self.topics.insert(code.clone(), topic);
         let node = ctx.node.clone();
@@ -67,15 +55,9 @@ impl NodeData {
                 local_endpoints: Default::default(),
             }),
         };
-        node.topics.write().unwrap().insert(code, topic);
-        let keys = node
-            .topics
-            .read()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        tracing::info!(id=?node.id(), "topics: {:?}", keys);
+        node.topics.write().unwrap().insert(code.clone(), topic);
+        ctx.commit_durable_commands();
+
     }
     #[instrument(skip_all, fields(node_id=%ctx.node.id(), topic=%topic, message_id=%update.message_id))]
     pub(crate) fn apply_set_state(
@@ -85,17 +67,11 @@ impl NodeData {
     ) {
         ctx.set_topic_code(topic.clone());
         if let Some(topic) = self.topics.get_mut(&topic) {
-            topic.update_and_flush(update.clone(), &ctx);
-            if let Some(durable) = ctx.durable_service() {
-                tokio::spawn(async move {
-                    let _ = durable.update_status(update).await.inspect_err(|e| {
-                        tracing::error!(?e, "update status failed");
-                    });
-                });
-            }
+            topic.update_and_flush(update.clone(), &mut ctx);
         } else {
             tracing::error!(?topic, "topic not found");
         }
+        ctx.commit_durable_commands();
     }
     pub(crate) fn apply_unload_topic(&mut self, UnloadTopic { code }: UnloadTopic) {
         self.topics.remove(&code);
@@ -114,7 +90,8 @@ impl NodeData {
             return;
         };
         ctx.set_topic_code(topic_code);
-        topic.ep_online(endpoint, interests, host, &ctx);
+        topic.ep_online(endpoint, interests, host, &mut ctx);
+        ctx.commit_durable_commands();
     }
     pub(crate) fn apply_ep_offline(
         &mut self,
@@ -129,7 +106,8 @@ impl NodeData {
             return;
         };
         ctx.set_topic_code(topic_code);
-        topic.ep_offline(host, &endpoint, &ctx);
+        topic.ep_offline(host, &endpoint, &mut ctx);
+        ctx.commit_durable_commands();
     }
     pub(crate) fn apply_ep_interest(
         &mut self,
@@ -144,6 +122,7 @@ impl NodeData {
             return;
         };
         ctx.set_topic_code(topic_code);
-        topic.update_ep_interest(&endpoint, interests, &ctx);
+        topic.update_ep_interest(&endpoint, interests, &mut ctx);
+        ctx.commit_durable_commands();
     }
 }

@@ -20,15 +20,15 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 #[tokio::test()]
 async fn test_nodes() {
-    let console_layer = console_subscriber::spawn();
+    // let console_layer = console_subscriber::spawn();
     tracing_subscriber::registry()
-        .with(console_layer)
+        // .with(console_layer)
         .with(
             tracing_subscriber::fmt::layer().with_filter(
                 tracing_subscriber::filter::EnvFilter::from_default_env()
                     .add_directive(tracing_subscriber::filter::Directive::from_str("info").unwrap())
                     .add_directive(
-                        tracing_subscriber::filter::Directive::from_str("asteroid_mq=debug")
+                        tracing_subscriber::filter::Directive::from_str("asteroid_mq=info")
                             .unwrap(),
                     )
                     .add_directive(
@@ -41,8 +41,8 @@ async fn test_nodes() {
     let raft_config = openraft::Config {
         cluster_name: "test".to_string(),
         heartbeat_interval: 200,
-        election_timeout_max: 1000,
-        election_timeout_min: 500,
+        election_timeout_max: 2000,
+        election_timeout_min: 1000,
         ..Default::default()
     };
     let node_id_1 = NodeId::from(1);
@@ -59,6 +59,7 @@ async fn test_nodes() {
             id,
             addr,
             raft: raft_config.clone(),
+            ..Default::default()
         });
         nodes.insert(id, node.clone());
         let cluster = cluster.clone();
@@ -105,14 +106,34 @@ async fn test_nodes() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let event_topic = node_server.create_new_topic(topic_config()).await.unwrap();
+    let result = node_server.create_new_topic(topic_config()).await;
+    tracing::info!(?result);
+    assert!(
+        result.is_ok()
+            || result
+                .is_err_and(|e| { matches!(e.kind, asteroid_mq::error::ErrorKind::NotLeader) })
+    );
+    let result = node_client.create_new_topic(topic_config()).await;
+    tracing::info!(?result);
+    assert!(
+        result.is_ok()
+            || result
+                .is_err_and(|e| { matches!(e.kind, asteroid_mq::error::ErrorKind::NotLeader) })
+    );
+    // TODO: how to load topic?
+    let event_topic = loop {
+        let Some(event_topic) = node_server.get_topic(&CODE) else {
+            tokio::task::yield_now().await;
+            continue;
+        };
+        break event_topic
+    };
     let node_server_receiver = event_topic
         .create_endpoint(vec![Interest::new("events/**")])
         .await
         .unwrap();
     tokio::spawn(async move {
-        loop {
-            let message = node_server_receiver.next_message().await;
+        while let Some(message) = node_server_receiver.next_message().await {
             tracing::info!(?message, "recv message in server node");
             node_server_receiver
                 .ack_processed(&message.header)
@@ -128,8 +149,7 @@ async fn test_nodes() {
         .unwrap();
 
     tokio::spawn(async move {
-        loop {
-            let message = node_client_receiver.next_message().await;
+        while let Some(message) = node_client_receiver.next_message().await {
             tracing::info!(?message, "recv message");
             node_client_receiver
                 .ack_processed(&message.header)

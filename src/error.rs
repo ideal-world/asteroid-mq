@@ -93,6 +93,7 @@ error_kind! {
         Durability: DurableError,
         Offline,
         TopicAlreadyExists,
+        NotLeader,
         Io: std::io::Error,
         Ack: WaitAckError,
         Custom: Box<dyn std::error::Error + Send + Sync>,

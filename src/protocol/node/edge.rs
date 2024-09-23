@@ -7,6 +7,7 @@ use typeshare::typeshare;
 pub mod codec;
 pub mod connection;
 pub mod packet;
+pub mod auth;
 use crate::{
     prelude::{
         Interest, MessageAckExpectKind, MessageDurableConfig, MessageId, Subject, TopicCode,

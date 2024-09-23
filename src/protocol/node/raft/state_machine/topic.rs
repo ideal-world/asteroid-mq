@@ -7,7 +7,7 @@ use crate::{
         endpoint::EndpointAddr,
         interest::InterestMap,
         message::*,
-        node::raft::proposal::{MessageStateUpdate, ProposalContext},
+        node::raft::proposal::{MessageStateUpdate, ProposalContext}, topic::durable_message::DurableCommand,
     },
 };
 use config::TopicConfig;
@@ -58,7 +58,7 @@ impl TopicData {
         }
         ep_collect
     }
-    pub fn hold_new_message(&mut self, message: Message, ctx: &ProposalContext) {
+    pub fn hold_new_message(&mut self, message: Message, ctx: &mut ProposalContext) {
         let ep_collect = match message.header.target_kind {
             MessageTargetKind::Durable | MessageTargetKind::Online => {
                 self.collect_addr_by_subjects(message.header.subjects.iter())
@@ -121,6 +121,7 @@ impl TopicData {
                 }
             }
             self.queue.push(hold_message);
+            ctx.push_durable_command(DurableCommand::Create(message.clone()));
         }
         self.update_and_flush(MessageStateUpdate::new_empty(message.id()), ctx);
         tracing::debug!(?ep_collect, "hold new message");
@@ -131,8 +132,9 @@ impl TopicData {
             .cloned()
             .unwrap_or_default()
     }
-    pub(crate) fn update_and_flush(&mut self, update: MessageStateUpdate, ctx: &ProposalContext) {
+    pub(crate) fn update_and_flush(&mut self, update: MessageStateUpdate, ctx: &mut ProposalContext) {
         let reachable_eps = self.reachable_eps(&ctx.node.id());
+        ctx.push_durable_command(DurableCommand::UpdateStatus(update.clone()));
         let poll_result = {
             for (from, status) in update.status {
                 self.queue.update_ack(&update.message_id, from, status)
@@ -148,7 +150,7 @@ impl TopicData {
         &mut self,
         ep: &EndpointAddr,
         interests: Vec<Interest>,
-        ctx: &ProposalContext,
+        ctx: &mut ProposalContext,
     ) {
         self.ep_interest_map.delete(ep);
         for interest in interests {
@@ -180,7 +182,7 @@ impl TopicData {
         endpoint: EndpointAddr,
         interests: Vec<Interest>,
         host: NodeId,
-        ctx: &ProposalContext,
+        ctx: &mut ProposalContext,
     ) {
         let mut message_need_poll = HashSet::new();
         {
@@ -218,7 +220,7 @@ impl TopicData {
         &mut self,
         host: NodeId,
         endpoint: &EndpointAddr,
-        ctx: &ProposalContext,
+        ctx: &mut ProposalContext,
     ) {
         self.ep_routing_table
             .entry(host)

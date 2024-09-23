@@ -14,7 +14,7 @@ use crate::{
         node::raft::{
             proposal::ProposalContext,
             state_machine::topic::wait_ack::{WaitAckError, WaitAckSuccess},
-        },
+        }, topic::durable_message::DurableCommand,
     },
     util::Timed,
 };
@@ -287,7 +287,7 @@ impl MessageQueue {
     pub(crate) fn flush(
         &mut self,
         reachable_eps: &HashSet<EndpointAddr>,
-        context: &ProposalContext,
+        context: &mut ProposalContext,
     ) {
         tracing::trace!(blocking = self.blocking, "flushing");
         if self.blocking {
@@ -295,12 +295,14 @@ impl MessageQueue {
                 let id = m.message.id();
                 let result = m.resolve();
                 context.resolve_ack(id, result);
+                context.push_durable_command(DurableCommand::Archive(id));
             }
         } else {
             for id in self.swap_out_resolved() {
                 if let Some(m) = self.remove(id) {
                     let result = m.resolve();
                     context.resolve_ack(id, result);
+                    context.push_durable_command(DurableCommand::Archive(id));
                 }
             }
         }

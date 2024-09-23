@@ -21,6 +21,7 @@ pub mod prelude {
         },
         Topic, TopicCode,
     };
+    pub use crate::protocol::node::raft::state_machine::topic::config::*;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

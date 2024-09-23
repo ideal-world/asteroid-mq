@@ -160,10 +160,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
                         res.push(RaftResponse { result: Err(()) });
                         continue;
                     };
-                    let context = ProposalContext {
-                        node,
-                        topic_code: None,
-                    };
+                    let context = ProposalContext::new(node);
                     match proposal {
                         crate::protocol::node::raft::proposal::Proposal::DelegateMessage(
                             delegate_message,
