@@ -1,18 +1,20 @@
-[package]
-name = "asteroid-mq"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+members = ["server"]
+resolver = "2"
+[workspace.package]
+version = "0.1.0-alpha.1"
+authors = ["4t145 <u4t145@163.com>"]
 
-[dependencies]
-bytes = { version = "1", features = ["serde"] }
+[workspace.dependencies]
+bytes = { version = "1" }
 chrono = "0.4"
 flume = "0.11"
-futures-util = { version = "0.3", features = ["sink"] }
+futures-util = { version = "0.3" }
 machine-uid = "0.5.3"
 pin-project-lite = "0.2"
 
 # async runtime
-tokio = { version = "1", features = ["full", "tracing"] }
+tokio = { version = "1" }
 
 # tracing
 tracing = "0.1"
@@ -21,26 +23,17 @@ tracing = "0.1"
 sha2 = "0.10"
 
 # k8s cluster support
-kube = { version = "0.93.1", features = ["runtime", "derive"], optional = true }
-k8s-openapi = { version = "0.22.0", features = ["latest"], optional = true }
+kube = { version = "0.93.1" }
+k8s-openapi = { version = "0.22.0" }
 
 # serialization
-serde = { version = "1", features = ["derive"] }
+ciborium = { version = "0.2" }
+serde = { version = "1" }
 serde_json = { version = "1" }
 bincode = "1"
-ciborium = { version = "0.2", optional = true }
 typeshare = { version = "1" }
 base64 = "0.22"
 
 # raft
-openraft = { version = "0.9.16", features = ["serde", "storage-v2"] }
+openraft = { version = "0.9.16" }
 # openraft = { version = "0.9.16", features = ["serde", "storage-v2"], path="../openraft/openraft" }
-
-[features]
-cluster-k8s = ["kube", "k8s-openapi"]
-cbor = ["dep:ciborium"]
-[dev-dependencies]
-tracing-subscriber = "0.3.18"
-serde_json = "1.0.120"
-console-subscriber = "*"
-axum = { version = "0.7", features = ["ws"] }

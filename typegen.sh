@@ -1,1 +1,1 @@
-typeshare -l typescript -o ./typescript/index.ts ./src
+typeshare -l typescript -o sdk/typescript/src/types.ts ./src
