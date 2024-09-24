@@ -106,28 +106,8 @@ async fn test_nodes() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let result = node_server.create_new_topic(topic_config()).await;
-    tracing::info!(?result);
-    assert!(
-        result.is_ok()
-            || result
-                .is_err_and(|e| { matches!(e.kind, asteroid_mq::error::ErrorKind::NotLeader) })
-    );
-    let result = node_client.create_new_topic(topic_config()).await;
-    tracing::info!(?result);
-    assert!(
-        result.is_ok()
-            || result
-                .is_err_and(|e| { matches!(e.kind, asteroid_mq::error::ErrorKind::NotLeader) })
-    );
-    // TODO: how to load topic?
-    let event_topic = loop {
-        let Some(event_topic) = node_server.get_topic(&CODE) else {
-            tokio::task::yield_now().await;
-            continue;
-        };
-        break event_topic
-    };
+    let event_topic = node_server.create_new_topic(topic_config()).await.unwrap();
+
     let node_server_receiver = event_topic
         .create_endpoint(vec![Interest::new("events/**")])
         .await

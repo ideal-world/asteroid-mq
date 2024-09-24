@@ -64,7 +64,7 @@ impl ProposalContext {
         if let Some(service) = self.durable_service() {
             let topic_code = self.topic_code.clone().expect("topic code not set");
             let node = self.node.clone();
-            let Some(topic) = node.get_topic(&topic_code) else {
+            let Some(_topic) = node.get_topic(&topic_code) else {
                 tracing::warn!(?topic_code, "topic not found");
                 return;
             };

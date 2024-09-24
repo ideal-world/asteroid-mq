@@ -41,11 +41,21 @@ impl NodeData {
         LoadTopic { config, mut queue }: LoadTopic,
         mut ctx: ProposalContext,
     ) {
-        queue.sort_by_key(|m| m.time);
+        use std::collections::hash_map::Entry;
         let code = config.code.clone();
-        ctx.set_topic_code(code.clone());
-        let topic = TopicData::from_durable(config, queue);
-        self.topics.insert(code.clone(), topic);
+        let entry = self.topics.entry(code.clone());
+        match entry {
+            Entry::Vacant(entry) => {
+                queue.sort_by_key(|m| m.time);
+                ctx.set_topic_code(code.clone());
+                let topic = TopicData::from_durable(config, queue);
+                entry.insert(topic);
+            }
+            _ => {
+                tracing::warn!(?code, "topic already loaded");
+                return;
+            }
+        }
         let node = ctx.node.clone();
         let topic = Topic {
             inner: Arc::new(TopicInner {

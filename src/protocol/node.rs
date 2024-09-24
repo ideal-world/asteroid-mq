@@ -2,6 +2,7 @@ pub mod edge;
 pub mod raft;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    hash::Hash,
     net::SocketAddr,
     ops::Deref,
     sync::{self, Arc, RwLock},
@@ -651,10 +652,6 @@ impl Node {
             }
         }
         tracing::info!(?config, "load_topic");
-        let raft = self.raft().await;
-        raft.ensure_linearizable()
-            .await
-            .map_err(|_e| crate::Error::new("load_topic", crate::error::ErrorKind::NotLeader))?;
         self.proposal(Proposal::LoadTopic(LoadTopic { config, queue }))
             .await?;
         let topics = self.topics.read().unwrap();

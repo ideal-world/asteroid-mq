@@ -269,6 +269,9 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         state_machine.last_applied_log = new_snapshot.meta.last_log_id;
         state_machine.node = new_data;
 
+        // TODO: Apply the side effects
+
+        
         // Lock the current snapshot before releasing the lock on the state machine, to avoid a race
         // condition on the written snapshot
         let mut current_snapshot = self.current_snapshot.write().await;
