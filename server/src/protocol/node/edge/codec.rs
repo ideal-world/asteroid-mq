@@ -26,6 +26,7 @@ impl std::fmt::Display for CodecKind {
 }
 
 impl CodecKind {
+    #[cfg(feature = "cbor")]
     pub const CBOR: Self = Self(0x00);
     pub const BINCODE: Self = Self(0x01);
     pub const JSON: Self = Self(0x40);
@@ -77,6 +78,7 @@ impl CodecRegistry {
     }
     pub fn new_preloaded() -> Self {
         let mut registry = Self::new_empty();
+        #[cfg(feature = "cbor")]
         registry.register(CodecKind::CBOR, cbor::Cbor);
         registry.register(CodecKind::BINCODE, bincode::Bincode);
         registry.register(CodecKind::JSON, json::Json);

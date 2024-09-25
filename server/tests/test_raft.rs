@@ -30,7 +30,7 @@ async fn test_raft() {
         )
     }
     let cluster = common::TestClusterProvider::new(map!(
-        node_id(1) => node_addr(1),
+        node_id(2) => node_addr(2),
     ));
 
     let node_1 = Node::new(NodeConfig {
@@ -54,7 +54,7 @@ async fn test_raft() {
         ..Default::default()
     });
 
-    node_1.init_raft(cluster.clone()).await.unwrap();
+    node_2.init_raft(cluster.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     cluster
         .update(map!(
@@ -62,8 +62,12 @@ async fn test_raft() {
             node_id(2) => node_addr(2),
         ))
         .await;
-    node_2.init_raft(cluster.clone()).await.unwrap();
+    node_1.init_raft(cluster.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
+    node_1.raft().await.with_raft_state(|rs| {
+        tracing::error!(?rs.server_state);
+    }).await.unwrap();
+
     cluster
         .update(map!(
             node_id(1) => node_addr(1),
@@ -72,14 +76,17 @@ async fn test_raft() {
         ))
         .await;
     node_3.init_raft(cluster.clone()).await.unwrap();
+    node_3.raft().await.with_raft_state(|f|{
+        tracing::error!(?f.membership_state);
+    }).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
+    drop(node_2);
     cluster
         .update(map!(
             node_id(1) => node_addr(1),
             node_id(3) => node_addr(3),
         ))
         .await;
-    drop(node_2);
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let result_1 = node_1
@@ -96,7 +103,7 @@ async fn test_raft() {
             tracing::error!(?s.membership_state);
         })
         .await;
-
+    
     result_1.unwrap();
     result_3.unwrap();
 }

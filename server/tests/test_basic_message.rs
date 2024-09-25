@@ -87,7 +87,7 @@ async fn test_nodes() {
     fn topic_config() -> TopicConfig {
         TopicConfig {
             code: CODE,
-            blocking: true,
+            blocking: false,
             overflow_config: Some(TopicOverflowConfig {
                 policy: TopicOverflowPolicy::RejectNew,
                 size: NonZeroU32::new(500).unwrap(),
@@ -101,7 +101,17 @@ async fn test_nodes() {
         .raft()
         .await
         .with_raft_state(|s| {
-            tracing::error!(?s.membership_state);
+            let state = s.server_state;
+            tracing::error!(?state, "node server");
+        })
+        .await
+        .unwrap();
+    node_client
+        .raft()
+        .await
+        .with_raft_state(|s| {
+            let state = s.server_state;
+            tracing::error!(?state, "node client");
         })
         .await
         .unwrap();

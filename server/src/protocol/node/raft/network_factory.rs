@@ -187,7 +187,6 @@ impl RaftTcpConnection {
         mut stream: TcpStream,
         service: TcpNetworkService,
     ) -> std::io::Result<Self> {
-        tracing::error!("new connection from tokio tcp stream");
         let raft = service.raft.get().await;
         let info = service.info.clone();
         let packet = bincode::serialize(&info).map_err(|_| std::io::ErrorKind::InvalidData)?;
@@ -281,7 +280,7 @@ impl RaftTcpConnection {
                         Payload::Response(resp) => {
                             let sender = wait_poll_clone.lock().await.remove(&seq_id);
                             if let Some(sender) = sender {
-                                sender.send(resp).unwrap();
+                                let _result = sender.send(resp);
                             } else {
                                 tracing::warn!(?seq_id, "responder not found");
                             }

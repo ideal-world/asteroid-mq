@@ -90,35 +90,28 @@ impl ClusterProvider for K8sClusterProvider {
             .get(&self.service)
             .await
             .expect("endpoints not found");
-        let socket_addr_list = ep_list
-            .subsets
-            .as_ref()
-            .expect("should have subsets")
-            .iter()
-            .flat_map(|subset| {
-                subset.addresses.as_ref().map(|addresses| {
-                    addresses.iter().map(|address| {
-                        let addr: SocketAddr = format!("{}:{}", address.ip, port_mapped)
-                            .parse()
-                            .expect("should be valid socket addr");
-                        let uid = address
-                            .target_ref
-                            .as_ref()
-                            .expect("should have target ref")
-                            .uid
-                            .as_ref()
-                            .expect("should have uid");
-                        let node_id = NodeId::sha256(uid.as_bytes());
-                        (addr, node_id)
-                    })
+        tracing::trace!(?ep_list, "k8s endpoints list");
+        let subsets = ep_list.subsets.unwrap_or_default();
+        let socket_addr_list = subsets.into_iter().flat_map(|subset| {
+            subset
+                .not_ready_addresses
+                .into_iter()
+                .flatten()
+                .chain(subset.addresses.into_iter().flatten())
+                .map(|address| {
+                    let target = address.target_ref.expect("should have target ref");
+                    let addr: SocketAddr = format!("{}:{}", address.ip, port_mapped)
+                        .parse()
+                        .expect("should be valid socket addr");
+                    let node_id = NodeId::sha256(target.uid.expect("should have uid").as_bytes());
+                    (addr, node_id)
                 })
-            })
-            .flatten();
+        });
         let mut nodes = BTreeMap::new();
         for (addr, node_id) in socket_addr_list {
             nodes.insert(node_id, addr);
         }
-
+        tracing::debug!(?nodes, "update k8s cluster");
         Ok(nodes)
     }
 }

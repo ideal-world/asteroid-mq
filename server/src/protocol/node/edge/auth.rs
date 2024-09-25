@@ -91,7 +91,7 @@ mod sealed {
             from: NodeId,
             request: &'r EdgeRequestEnum,
         ) -> BoxFuture<'r, Result<(), EdgeAuthError>> {
-            Box::pin(async move { self.check(from, &request).await })
+            Box::pin(async move { self.check(from, request).await })
         }
     }
 }

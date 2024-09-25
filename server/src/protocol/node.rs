@@ -1,7 +1,7 @@
 pub mod edge;
 pub mod raft;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     hash::Hash,
     net::SocketAddr,
     ops::Deref,
@@ -278,6 +278,7 @@ impl Node {
             tokio::spawn(async move {
                 loop {
                     let members = cluster_provider.next_update().await;
+
                     let members = match members {
                         Ok(members) => members,
                         Err(e) => {
@@ -285,6 +286,7 @@ impl Node {
                             continue;
                         }
                     };
+
                     let members = members
                         .into_iter()
                         .map(|(id, addr)| {
@@ -292,40 +294,27 @@ impl Node {
                             (id, node)
                         })
                         .collect::<BTreeMap<_, _>>();
-                    let now_ids = members.keys().cloned().collect::<HashSet<_>>();
-                    let added_ids = now_ids
-                        .difference(&prev_members)
-                        .cloned()
-                        .collect::<BTreeSet<_>>();
-                    let deleted_ids = prev_members
-                        .difference(&now_ids)
-                        .cloned()
-                        .collect::<BTreeSet<_>>();
-                    let mut added_members = BTreeMap::new();
-                    for node_id in added_ids {
-                        let node = members.get(&node_id).unwrap().clone();
-                        let result = raft.add_learner(node_id, node.clone(), true).await;
-                        if let Err(e) = result {
-                            tracing::error!(?e, "add learner error");
-                        }
-                        added_members.insert(node_id, node);
-                    }
-                    if !deleted_ids.is_empty() {
-                        let remove = ChangeMembers::RemoveNodes(deleted_ids);
+                    let now_members = members.keys().cloned().collect::<HashSet<_>>();
+                    let is_modified = now_members != prev_members;
+                    if is_modified {
+                        let added_nodes = now_members.difference(&prev_members).cloned().collect();
+                        let replace_all_nodes = ChangeMembers::ReplaceAllNodes(members);
+                        tracing::info!(nodes=?replace_all_nodes, "change membership");
+                        let raft = maybe_loading_raft.get().await;
                         let _ = raft
-                            .change_membership(remove, false)
+                            .change_membership(replace_all_nodes, false)
                             .await
                             .inspect_err(|e| {
-                                tracing::error!(?e, "remove nodes error");
+                                tracing::error!(?e, "change membership error");
                             });
+                        let _ = raft
+                            .change_membership(ChangeMembers::AddVoterIds(added_nodes), false)
+                            .await
+                            .inspect_err(|e| {
+                                tracing::error!(?e, "add voters error");
+                            });
+                        prev_members = now_members.clone();
                     }
-                    if !added_members.is_empty() {
-                        let add = ChangeMembers::AddNodes(added_members);
-                        let _ = raft.change_membership(add, false).await.inspect_err(|e| {
-                            tracing::error!(?e, "add voters error");
-                        });
-                    }
-                    prev_members = now_ids.clone();
                 }
             });
         }
@@ -333,12 +322,17 @@ impl Node {
     }
     pub(crate) async fn proposal(&self, proposal: Proposal) -> Result<(), crate::Error> {
         let raft = self.raft().await;
-        let Some(leader) = raft.current_leader().await else {
-            return Err(crate::Error::new(
-                "no leader",
-                crate::error::ErrorKind::Offline,
-            ));
-        };
+        let metric = raft
+            .wait(None)
+            .metrics(
+                |rm| rm.current_leader.is_some(),
+                "wait for leader to be elected",
+            )
+            .await
+            .map_err(crate::Error::contextual_custom(
+                "wait for leader when proposal",
+            ))?;
+        let leader = metric.current_leader.expect("leader should be elected");
         let this = self.id();
         let client_write_result = if this == leader {
             raft.client_write(proposal)
