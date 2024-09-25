@@ -16,6 +16,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::oneshot,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::{
@@ -34,6 +35,7 @@ pub struct TcpNetworkService {
     pub raft: MaybeLoadingRaft,
     pub connections: RaftTcpConnectionMap,
     pub service_task: Arc<OnceLock<tokio::task::JoinHandle<()>>>,
+    pub ct: CancellationToken,
 }
 
 impl TcpNetworkService {
@@ -43,13 +45,23 @@ impl TcpNetworkService {
             let info = self.info.clone();
             let info_for_tracing = info.clone();
             let create_task = move || {
+                let ct = tcp_service.ct.clone();
                 tokio::spawn(
                     async move {
                         let inner_task = async move {
-                            // let raft = tcp_service.raft.get().await;
                             let tcp_listener = TcpListener::bind(info.node.addr.clone()).await?;
                             loop {
-                                let (stream, _) = tcp_listener.accept().await?;
+                                let accepted = tokio::select! {
+                                    _ = ct.cancelled() => {
+                                        return Ok(());
+                                    }
+                                    accepted = tcp_listener.accept() => {
+                                        accepted
+                                    }
+                                };
+                                let Ok((stream, _)) = accepted else {
+                                    continue;
+                                };
                                 if let Ok(connection) = RaftTcpConnection::from_tokio_tcp_stream(
                                     stream,
                                     tcp_service.clone(),
@@ -64,7 +76,9 @@ impl TcpNetworkService {
                                     }
                                     let mut connections = tcp_service.connections.write().await;
                                     // let peer_node = connection.peer_node();
-                                    if let std::collections::hash_map::Entry::Vacant(e) = connections.entry(peer_id) {
+                                    if let std::collections::hash_map::Entry::Vacant(e) =
+                                        connections.entry(peer_id)
+                                    {
                                         tracing::info!(?connection, "new connection");
                                         e.insert(Arc::new(connection));
                                     } else {
@@ -205,10 +219,19 @@ impl RaftTcpConnection {
         >::new()));
         let wait_poll_clone = wait_pool.clone();
         let (packet_tx, packet_rx) = flume::bounded::<Packet>(512);
+        let write_task_ct = service.ct.child_token();
         let write_task = tokio::spawn(
             async move {
                 let write_loop = async {
-                    while let Ok(packet) = packet_rx.recv_async().await {
+                    loop {
+                        let packet = tokio::select! {
+                            _ = write_task_ct.cancelled() => {
+                                return std::io::Result::<()>::Ok(());
+                            }
+                            packet = packet_rx.recv_async() => {
+                                packet.map_err(|e| std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))?
+                            }
+                        };
                         let bytes = bincode::serialize(&packet.payload)
                             .expect("should be valid for bincode");
                         write.write_u64(packet.seq_id).await?;
@@ -217,7 +240,6 @@ impl RaftTcpConnection {
                         write.flush().await?;
                         tracing::trace!(?packet, "flushed");
                     }
-                    std::io::Result::<()>::Ok(())
                 };
                 match write_loop.await {
                     Ok(_) => {}
@@ -234,6 +256,7 @@ impl RaftTcpConnection {
             )),
         );
         let alive = Arc::new(AtomicBool::new(true));
+        let read_task_ct = service.ct.child_token();
         let read_task = {
             let packet_tx = packet_tx.clone();
             let alive = alive.clone();
@@ -245,9 +268,10 @@ impl RaftTcpConnection {
                     if len > buffer.capacity() {
                         buffer.reserve(len - buffer.capacity());
                     }
-                    unsafe {
-                        buffer.set_len(len);
-                    }
+                    buffer.resize(len, 0);
+                    // unsafe {
+                    //     buffer.set_len(len);
+                    // }
                     let data = &mut buffer[..len];
                     read.read_exact(data).await?;
                     let Ok(payload) = bincode::deserialize::<Payload>(data).inspect_err(|e| {
@@ -309,12 +333,13 @@ impl RaftTcpConnection {
 }
 
 impl TcpNetworkService {
-    pub fn new(info: RaftNodeInfo, raft: MaybeLoadingRaft) -> Self {
+    pub fn new(info: RaftNodeInfo, raft: MaybeLoadingRaft, ct: CancellationToken) -> Self {
         Self {
             info,
             raft,
             connections: RaftTcpConnectionMap::default(),
             service_task: Arc::new(OnceLock::new()),
+            ct,
         }
     }
     pub fn set_raft(&self, raft: Raft<TypeConfig>) {

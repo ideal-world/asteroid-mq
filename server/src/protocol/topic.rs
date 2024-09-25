@@ -140,7 +140,7 @@ impl Topic {
     pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, crate::Error> {
         let handle = self.wait_ack(message.id()).await;
         self.node()
-            .proposal(Proposal::DelegateMessage(DelegateMessage {
+            .propose(Proposal::DelegateMessage(DelegateMessage {
                 topic: self.code().clone(),
                 message,
             }))
@@ -179,7 +179,7 @@ impl Topic {
             }),
         };
         self.node()
-            .proposal(Proposal::EpOnline(EndpointOnline {
+            .propose(Proposal::EpOnline(EndpointOnline {
                 topic_code: topic_code.clone(),
                 endpoint: ep.address,
                 interests: ep.interest.clone(),
@@ -200,7 +200,7 @@ impl Topic {
             host: self.node.id(),
             topic_code: self.code().clone(),
         };
-        node.proposal(Proposal::EpOffline(ep_offline)).await?;
+        node.propose(Proposal::EpOffline(ep_offline)).await?;
         Ok(())
     }
 
@@ -230,7 +230,7 @@ impl Topic {
     }
     pub(crate) async fn single_ack(&self, ack: MessageAck) -> Result<(), crate::Error> {
         self.node()
-            .proposal(Proposal::SetState(SetState {
+            .propose(Proposal::SetState(SetState {
                 topic: self.code().clone(),
                 update: MessageStateUpdate::new(ack.ack_to, HashMap::from([(ack.from, ack.kind)])),
             }))

@@ -153,7 +153,7 @@ impl ProposalContext {
                 .await
                 .unwrap_or(MessageStatusKind::Unreachable);
             let proposal_result = node
-                .proposal(Proposal::SetState(SetState {
+                .propose(Proposal::SetState(SetState {
                     topic: code,
                     update: MessageStateUpdate::new(
                         message_id,

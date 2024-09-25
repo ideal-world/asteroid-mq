@@ -44,7 +44,7 @@ impl Drop for LocalEndpointInner {
             tokio::spawn(async move {
                 let node = topic.node();
                 let result = node
-                    .proposal(Proposal::EpOffline(EndpointOffline {
+                    .propose(Proposal::EpOffline(EndpointOffline {
                         topic_code: topic.code().clone(),
                         endpoint,
                         host: node.id(),
@@ -131,7 +131,7 @@ impl LocalEndpoint {
     pub async fn update_interest(&self, interests: Vec<Interest>) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
             let node = topic.node();
-            node.proposal(Proposal::EpInterest(EndpointInterest {
+            node.propose(Proposal::EpInterest(EndpointInterest {
                 topic_code: topic.code().clone(),
                 endpoint: self.address,
                 interests,

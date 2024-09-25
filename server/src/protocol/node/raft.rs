@@ -12,6 +12,7 @@ use network_factory::{RaftNodeInfo, TcpNetworkService};
 use openraft::{BasicNode, Raft};
 use proposal::Proposal;
 use response::RaftResponse;
+use tokio_util::sync::CancellationToken;
 
 use super::NodeId;
 
@@ -75,7 +76,7 @@ impl MaybeLoadingRaft {
     pub fn get_opt(&self) -> Option<Raft<TypeConfig>> {
         self.loading.get().cloned()
     }
-    pub fn net_work_service(&self, id: NodeId, node: BasicNode) -> TcpNetworkService {
-        TcpNetworkService::new(RaftNodeInfo { id, node }, self.clone())
+    pub fn net_work_service(&self, id: NodeId, node: BasicNode, ct: CancellationToken) -> TcpNetworkService {
+        TcpNetworkService::new(RaftNodeInfo { id, node }, self.clone(), ct)
     }
 }
