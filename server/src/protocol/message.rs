@@ -49,6 +49,17 @@ pub enum MessageAckExpectKind {
     Processed = 0x02,
 }
 
+impl MessageAckExpectKind {
+    pub fn try_from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(MessageAckExpectKind::Sent),
+            0x01 => Some(MessageAckExpectKind::Received),
+            0x02 => Some(MessageAckExpectKind::Processed),
+            _ => None,
+        }
+    }
+}
+
 impl std::fmt::Display for MessageAckExpectKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -60,6 +71,18 @@ impl std::fmt::Display for MessageAckExpectKind {
 }
 
 impl MessageStatusKind {
+    pub fn try_from_u8(v: u8) -> Option<Self> {
+        match v {
+            0xfe => Some(MessageStatusKind::Sending),
+            0xff => Some(MessageStatusKind::Unsent),
+            0x00 => Some(MessageStatusKind::Sent),
+            0x01 => Some(MessageStatusKind::Received),
+            0x02 => Some(MessageStatusKind::Processed),
+            0x80 => Some(MessageStatusKind::Failed),
+            0x81 => Some(MessageStatusKind::Unreachable),
+            _ => None,
+        }
+    }
     #[inline(always)]
     pub fn is_unsent(&self) -> bool {
         *self == MessageStatusKind::Unsent
@@ -91,11 +114,27 @@ pub struct MessageId {
     pub bytes: [u8; 16],
 }
 
+impl MessageId {
+    pub fn to_base64(&self) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(self.bytes)
+    }
+    pub fn from_base64(s: &str) -> Result<Self, base64::DecodeError> {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(s.as_bytes())?;
+        if bytes.len() != 16 {
+            return Err(base64::DecodeError::InvalidLength(bytes.len()));
+        }
+        let mut addr = [0; 16];
+        addr.copy_from_slice(&bytes);
+        Ok(Self { bytes: addr })
+    }
+}
+
 impl Serialize for MessageId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            use base64::Engine;
-            serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(self.bytes))
+            serializer.serialize_str(&self.to_base64())
         } else {
             <[u8; 16]>::serialize(&self.bytes, serializer)
         }
@@ -105,18 +144,9 @@ impl Serialize for MessageId {
 impl<'de> Deserialize<'de> for MessageId {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         if deserializer.is_human_readable() {
-            use base64::Engine;
             use serde::de::Error;
             let s = <&'de str>::deserialize(deserializer)?;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(s.as_bytes())
-                .map_err(D::Error::custom)?;
-            if bytes.len() != 16 {
-                return Err(D::Error::custom("invalid length"));
-            }
-            let mut addr = [0; 16];
-            addr.copy_from_slice(&bytes);
-            Ok(Self { bytes: addr })
+            Self::from_base64(s).map_err(D::Error::custom)
         } else {
             Ok(Self {
                 bytes: <[u8; 16]>::deserialize(deserializer)?,
@@ -276,5 +306,17 @@ pub enum MessageTargetKind {
     #[default]
     Push = 3,
 }
+
+impl From<u8> for MessageTargetKind{
+    fn from(kind: u8) -> MessageTargetKind {
+        match kind {
+            0 => MessageTargetKind::Durable,
+            1 => MessageTargetKind::Online,
+            2 => MessageTargetKind::Available,
+            _ => MessageTargetKind::Push,
+        }
+    }
+}
+
 
 impl MessageTargetKind {}

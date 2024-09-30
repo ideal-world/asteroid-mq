@@ -18,10 +18,10 @@ pub struct DurableMessage {
     pub time: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct DurableMessageQuery {
-    limit: u32,
-    offset: u32,
+    pub limit: u32,
+    pub offset: u32,
 }
 
 impl DurableMessageQuery {
@@ -170,6 +170,13 @@ impl DurableService {
     pub async fn delete_topic(&self, topic: TopicCode) -> Result<(), DurableError> {
         self.inner.delete_topic(topic).await
     }
+    #[inline(always)]
+    pub async fn topic_code_list(&self) -> Result<Vec<TopicCode>, DurableError> {
+        self.inner.topic_code_list().await
+    }
+    pub async fn topic_list(&self) -> Result<Vec<TopicConfig>, DurableError> {
+        self.inner.topic_list().await
+    }
 }
 
 pub trait Durable: Send + Sync + 'static {
@@ -207,6 +214,8 @@ pub trait Durable: Send + Sync + 'static {
         &self,
         topic: TopicCode,
     ) -> impl Future<Output = Result<(), DurableError>> + Send;
+    fn topic_code_list(&self) -> impl Future<Output = Result<Vec<TopicCode>, DurableError>> + Send;
+    fn topic_list(&self) -> impl Future<Output = Result<Vec<TopicConfig>, DurableError>> + Send;
 }
 
 mod sealed {
@@ -256,6 +265,8 @@ mod sealed {
             &self,
             topic: TopicCode,
         ) -> Pin<Box<dyn Future<Output = Result<(), DurableError>> + Send + '_>>;
+        fn topic_code_list(&self) -> Pin<Box<dyn Future<Output = Result<Vec<TopicCode>, DurableError>> + Send + '_>>;
+        fn topic_list(&self) -> Pin<Box<dyn Future<Output = Result<Vec<TopicConfig>, DurableError>> + Send + '_>>;
     }
 
     impl<T> DurabilityObjectTrait for T
@@ -323,6 +334,14 @@ mod sealed {
             topic: TopicCode,
         ) -> Pin<Box<dyn Future<Output = Result<(), DurableError>> + Send + '_>> {
             Box::pin(self.delete_topic(topic))
+        }
+
+        fn topic_code_list(&self) -> Pin<Box<dyn Future<Output = Result<Vec<TopicCode>, DurableError>> + Send + '_>> {
+            Box::pin(self.topic_code_list())
+        }
+
+        fn topic_list(&self) -> Pin<Box<dyn Future<Output = Result<Vec<TopicConfig>, DurableError>> + Send + '_>> {
+            Box::pin(self.topic_list())
         }
     }
 }

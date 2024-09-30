@@ -37,7 +37,8 @@ pub struct TcpNetworkService {
     pub service_task: Arc<OnceLock<tokio::task::JoinHandle<()>>>,
     pub ct: CancellationToken,
 }
-
+/// 4KB for each connection, this should be enough
+const BUFFER_CAPACITY: usize = 4096;
 impl TcpNetworkService {
     pub fn run(&self) {
         {
@@ -155,7 +156,7 @@ impl RaftTcpConnection {
     fn next_seq(&self) -> u64 {
         self.local_seq.fetch_add(1, atomic::Ordering::Relaxed)
     }
-    pub(crate) async fn proposal(
+    pub(crate) async fn propose(
         &self,
         proposal: Proposal,
     ) -> crate::Result<ClientWriteResponse<TypeConfig>> {
@@ -261,9 +262,17 @@ impl RaftTcpConnection {
             let packet_tx = packet_tx.clone();
             let alive = alive.clone();
             let inner_task = async move {
-                let mut buffer = Vec::with_capacity(1024);
+                let mut buffer = Vec::with_capacity(BUFFER_CAPACITY);
                 loop {
-                    let seq_id = read.read_u64().await?;
+                    let seq_id = tokio::select! {
+                        seq_id = read.read_u64() => {
+                            seq_id
+                        }
+                        _ = read_task_ct.cancelled() => {
+                            return Ok(())
+                        }
+                    };
+                    let seq_id = seq_id?;
                     let len = read.read_u32().await? as usize;
                     if len > buffer.capacity() {
                         buffer.reserve(len - buffer.capacity());

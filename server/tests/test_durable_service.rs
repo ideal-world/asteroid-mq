@@ -1,5 +1,9 @@
 mod common;
-use std::{collections::HashMap, process::id, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashMap},
+    process::id,
+    str::FromStr,
+};
 
 use asteroid_mq::{
     prelude::{
@@ -12,8 +16,8 @@ use tokio::sync::RwLock;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 #[derive(Debug, Default)]
 pub struct MemoryDurable {
-    pub messages: RwLock<HashMap<TopicCode, HashMap<MessageId, DurableMessage>>>,
-    pub archived: RwLock<HashMap<TopicCode, HashMap<MessageId, DurableMessage>>>,
+    pub messages: RwLock<HashMap<TopicCode, BTreeMap<MessageId, DurableMessage>>>,
+    pub archived: RwLock<HashMap<TopicCode, BTreeMap<MessageId, DurableMessage>>>,
     pub topics: RwLock<HashMap<TopicCode, TopicConfig>>,
 }
 
@@ -34,7 +38,7 @@ impl Durable for MemoryDurable {
         let mut archived = self.archived.write().await;
         archived
             .entry(topic.clone())
-            .or_insert_with(HashMap::new)
+            .or_insert_with(BTreeMap::new)
             .insert(message_id, message);
         messages.get_mut(&topic).unwrap().remove(&message_id);
         Ok(())
@@ -46,7 +50,7 @@ impl Durable for MemoryDurable {
     ) -> Result<(), asteroid_mq::prelude::DurableError> {
         let mut messages = self.messages.write().await;
         let message_id = update.message_id;
-        let topic_messages = messages.entry(topic.clone()).or_insert_with(HashMap::new);
+        let topic_messages = messages.entry(topic.clone()).or_insert_with(BTreeMap::new);
         if let Some(message) = topic_messages.get_mut(&message_id) {
             for (ep, status) in update.status {
                 message.status.insert(ep, status);
@@ -63,7 +67,7 @@ impl Durable for MemoryDurable {
             .write()
             .await
             .entry(topic)
-            .or_insert_with(HashMap::new)
+            .or_insert_with(BTreeMap::new)
             .insert(message.message.id(), message);
         Ok(())
     }
@@ -86,7 +90,16 @@ impl Durable for MemoryDurable {
         topic: TopicCode,
         query: asteroid_mq::protocol::topic::durable_message::DurableMessageQuery,
     ) -> Result<Vec<DurableMessage>, asteroid_mq::prelude::DurableError> {
-        unimplemented!("batch_retrieve")
+        if let Some(queue) = self.messages.read().await.get(&topic) {
+            Ok(queue
+                .values()
+                .skip(query.offset as usize)
+                .take(query.limit as usize)
+                .cloned()
+                .collect::<Vec<_>>())
+        } else {
+            Ok(Vec::new())
+        }
     }
     async fn retrieve(
         &self,
@@ -103,6 +116,18 @@ impl Durable for MemoryDurable {
         topic_messages.get(&message_id).cloned().ok_or(
             asteroid_mq::prelude::DurableError::new_local("message not found"),
         )
+    }
+    async fn topic_code_list(&self) -> Result<Vec<TopicCode>, asteroid_mq::prelude::DurableError> {
+        Ok(self.topics.read().await.keys().cloned().collect::<Vec<_>>())
+    }
+    async fn topic_list(&self) -> Result<Vec<TopicConfig>, asteroid_mq::prelude::DurableError> {
+        Ok(self
+            .topics
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>())
     }
 }
 
@@ -124,6 +149,18 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
     let durable = MemoryDurable::default();
+    const PRELOAD_TOPIC_CODE: TopicCode = TopicCode::const_new("preload-test");
+    durable.topics.write().await.insert(
+        PRELOAD_TOPIC_CODE,
+        TopicConfig {
+            code: PRELOAD_TOPIC_CODE,
+            blocking: false,
+            overflow_config: Some(asteroid_mq::prelude::TopicOverflowConfig {
+                policy: asteroid_mq::prelude::TopicOverflowPolicy::RejectNew,
+                size: std::num::NonZeroU32::new(500).unwrap(),
+            }),
+        },
+    );
     let service = DurableService::new(durable);
     let topic_config = TopicConfig {
         code: "test".into(),
@@ -146,6 +183,9 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
 
     node.init_raft(cluster.clone()).await?;
 
+    node.load_from_durable_service().await?;
+    let topic = node.get_topic(&PRELOAD_TOPIC_CODE);
+    assert!(topic.is_some());
     if let Some(durable) = &node.config().durable {
         durable.create_topic(topic_config.clone()).await?;
     }

@@ -181,6 +181,17 @@ pub struct EndpointAddr {
     pub bytes: [u8; 16],
 }
 
+impl From<[u8; 16]> for EndpointAddr {
+    fn from(bytes: [u8; 16]) -> Self {
+        Self { bytes }
+    }
+}
+impl From<EndpointAddr> for [u8; 16] {
+    fn from(val: EndpointAddr) -> Self {
+        val.bytes
+    }
+}
+
 impl Serialize for EndpointAddr {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {

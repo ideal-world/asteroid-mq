@@ -6,6 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub use bytes;
 pub use error::Error;
+pub use openraft;
 use serde::{Deserialize, Serialize};
 pub type Result<T> = std::result::Result<T, Error>;
 pub mod prelude {
@@ -22,6 +23,7 @@ pub mod prelude {
         Topic, TopicCode,
     };
     pub use crate::protocol::node::raft::state_machine::topic::config::*;
+    pub use crate::util::MaybeBase64Bytes;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

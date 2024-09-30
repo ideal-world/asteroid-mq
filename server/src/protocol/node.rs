@@ -1,7 +1,7 @@
 pub mod edge;
 pub mod raft;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     hash::Hash,
     net::SocketAddr,
     ops::Deref,
@@ -10,7 +10,10 @@ use std::{
 
 use super::{
     endpoint::EndpointAddr,
-    topic::{durable_message::DurableCommand, Topic, TopicCode},
+    topic::{
+        durable_message::{DurableCommand, DurableMessageQuery},
+        Topic, TopicCode,
+    },
 };
 use edge::{
     auth::EdgeAuthService,
@@ -395,6 +398,63 @@ impl Node {
         };
         Ok(())
     }
+    #[tracing::instrument(skip_all)]
+    pub async fn load_from_durable_service(&self) -> Result<(), crate::Error> {
+        const PAGE_SIZE: u32 = 100;
+        let Some(durable) = self.config.durable.as_ref().cloned() else {
+            return Ok(());
+        };
+        let topics = durable
+            .topic_list()
+            .await
+            .map_err(crate::Error::contextual("load topic list"))?;
+        let mut task_set = tokio::task::JoinSet::new();
+        for topic in topics {
+            let node = self.clone();
+            let durable = durable.clone();
+            let task = async move {
+                let mut query = DurableMessageQuery {
+                    limit: PAGE_SIZE,
+                    offset: 0,
+                };
+                let mut queue = Vec::new();
+                let code = topic.code.clone();
+                loop {
+                    let page = durable
+                        .batch_retrieve(code.clone(), query)
+                        .await
+                        .map_err(crate::Error::contextual_custom("batch retrieve"))?;
+                    let page_len = page.len();
+                    queue.extend(page);
+                    if page_len < PAGE_SIZE as usize {
+                        break;
+                    } else {
+                        query = query.next_page()
+                    }
+                }
+                let result = node.load_topic(topic, queue).await;
+                if let Err(e) = result {
+                    match e.kind {
+                        crate::error::ErrorKind::TopicAlreadyExists
+                        | crate::error::ErrorKind::NotLeader => {
+                            // do nothing
+                        }
+                        _ => {
+                            return Err(e);
+                        }
+                    }
+                    tracing::error!(?e, "load topic error");
+                }
+                tracing::info!(topic = %code, "load topic done");
+                crate::Result::Ok(())
+            };
+            task_set.spawn(task);
+        }
+        while let Some(task) = task_set.join_next().await {
+            task.map_err(|e| crate::Error::custom("runtime join error", e))??;
+        }
+        Ok(())
+    }
     pub(crate) async fn propose(&self, proposal: Proposal) -> Result<(), crate::Error> {
         let raft = self.raft().await;
         let metric = raft
@@ -421,7 +481,7 @@ impl Node {
                     crate::error::ErrorKind::Offline,
                 ));
             };
-            connection.proposal(proposal).await?
+            connection.propose(proposal).await?
         };
         let id = client_write_result.log_id();
         raft.wait(None)

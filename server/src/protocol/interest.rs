@@ -3,7 +3,10 @@
 //! (/)?(<path>|<*>|<**>)/*
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    convert::Infallible,
+    fmt::Display,
     hash::Hash,
+    str::FromStr,
 };
 
 use bytes::Bytes;
@@ -34,15 +37,38 @@ impl<'de> Deserialize<'de> for Subject {
     }
 }
 
+impl FromStr for Subject {
+    type Err = Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Subject(Bytes::from(s.to_owned())))
+    }
+}
+
+impl Display for Subject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let string = unsafe { std::str::from_utf8_unchecked(self.0.as_ref()) };
+        write!(f, "{}", string)
+    }
+}
+
+impl AsRef<str> for Subject {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 impl Subject {
+    pub fn as_str(&self) -> &str {
+        unsafe { std::str::from_utf8_unchecked(self.0.as_ref()) }
+    }
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_ref()
     }
     pub fn new<B: Into<Bytes>>(bytes: B) -> Self {
         Self(bytes.into())
     }
-    pub const fn const_new(bytes: &'static [u8]) -> Self {
-        Self(Bytes::from_static(bytes))
+    pub const fn const_new(bytes: &'static str) -> Self {
+        Self(Bytes::from_static(bytes.as_bytes()))
     }
     pub fn segments(&self) -> SubjectSegments<'_> {
         SubjectSegments {

@@ -15,12 +15,12 @@ pub struct ByeWorld {
 }
 
 impl EventAttribute for HelloWorld {
-    const SUBJECT: Subject = Subject::const_new(b"hello-world");
+    const SUBJECT: Subject = Subject::const_new("hello-world");
     const EXPECT_ACK_KIND: MessageAckExpectKind = MessageAckExpectKind::Processed;
 }
 
 impl EventAttribute for ByeWorld {
-    const SUBJECT: Subject = Subject::const_new(b"bye-world");
+    const SUBJECT: Subject = Subject::const_new("bye-world");
 }
 
 async fn hello_world_handler(Json(hello_world): Json<HelloWorld>) -> asteroid_mq::Result<()> {
