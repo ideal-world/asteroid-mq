@@ -159,6 +159,7 @@ dependencies = [
  "machine-uid",
  "openraft",
  "pin-project-lite",
+ "rand",
  "serde",
  "serde_json",
  "sha2",

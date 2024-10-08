@@ -17,8 +17,11 @@ use openraft::{
 use tokio::sync::RwLock;
 
 use crate::{
-    prelude::NodeId,
-    protocol::node::{raft::proposal::ProposalContext, NodeRef},
+    prelude::{NodeId, Topic},
+    protocol::{
+        node::{raft::proposal::ProposalContext, NodeRef},
+        topic::TopicInner,
+    },
 };
 
 use super::{response::RaftResponse, TypeConfig};
@@ -269,9 +272,8 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         state_machine.last_applied_log = new_snapshot.meta.last_log_id;
         state_machine.node = new_data;
 
-        // TODO: Apply the side effects
-
-        
+        // Apply the side effects
+        self.sync_node_from_snapshot(&state_machine.node);
         // Lock the current snapshot before releasing the lock on the state machine, to avoid a race
         // condition on the written snapshot
         let mut current_snapshot = self.current_snapshot.write().await;
@@ -280,5 +282,27 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         // Update current snapshot.
         *current_snapshot = Some(new_snapshot);
         Ok(())
+    }
+}
+
+impl StateMachineStore {
+    pub fn sync_node_from_snapshot(&self, data: &NodeData) {
+        let Some(node) = self.node_ref.upgrade() else {
+            return;
+        };
+        let mut topic_write_wg = node.topics.write().unwrap();
+        for code in data.topics.keys() {
+            topic_write_wg.insert(
+                code.clone(),
+                Topic {
+                    inner: Arc::new(TopicInner {
+                        code: code.clone(),
+                        node: node.clone(),
+                        ack_waiting_pool: Default::default(),
+                        local_endpoints: Default::default(),
+                    }),
+                },
+            );
+        }
     }
 }
