@@ -127,7 +127,7 @@ async fn test_big_message() {
         .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let event_topic_sender = node_sender.create_new_topic(topic_config()).await.unwrap();
-    
+
     let event_topic_receiver = node_receiver.get_topic(&CODE).unwrap();
     let node_receiver_ep = event_topic_receiver
         .create_endpoint(vec![Interest::new("events/big-message/*")])
@@ -188,7 +188,7 @@ async fn test_big_message() {
                     .ack_kind(MessageAckExpectKind::Processed)
                     .mode_online()
                     .build(),
-                    BIG_MESSAGE_5MB,
+                BIG_MESSAGE_5MB,
             ))
             .await
             .unwrap();

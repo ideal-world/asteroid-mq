@@ -1,0 +1,15 @@
+[package]
+name = "asteroid-mq-sdk"
+edition = "2021"
+version.workspace = true
+authors.workspace = true
+
+[dependencies]
+asteroid-mq-model = { path = "../../model" }
+futures-util = { workspace = true, features = ["sink"] }
+tokio-tungstenite = "0.24"
+tokio-util = "0.7.12"
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

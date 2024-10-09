@@ -3,7 +3,6 @@ use std::{borrow::Cow, collections::HashMap, future::Future, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use typeshare::typeshare;
 
 use crate::protocol::message::*;
 use crate::protocol::{
@@ -36,14 +35,7 @@ impl DurableMessageQuery {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[typeshare]
-pub struct MessageDurableConfig {
-    // we should have a expire time
-    pub expire: DateTime<Utc>,
-    // once it reached the max_receiver, it will be removed
-    pub max_receiver: Option<u32>,
-}
+pub use asteroid_mq_model::MessageDurableConfig;
 
 #[derive(Debug)]
 pub struct DurableError {
@@ -265,8 +257,12 @@ mod sealed {
             &self,
             topic: TopicCode,
         ) -> Pin<Box<dyn Future<Output = Result<(), DurableError>> + Send + '_>>;
-        fn topic_code_list(&self) -> Pin<Box<dyn Future<Output = Result<Vec<TopicCode>, DurableError>> + Send + '_>>;
-        fn topic_list(&self) -> Pin<Box<dyn Future<Output = Result<Vec<TopicConfig>, DurableError>> + Send + '_>>;
+        fn topic_code_list(
+            &self,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<TopicCode>, DurableError>> + Send + '_>>;
+        fn topic_list(
+            &self,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<TopicConfig>, DurableError>> + Send + '_>>;
     }
 
     impl<T> DurabilityObjectTrait for T
@@ -336,11 +332,17 @@ mod sealed {
             Box::pin(self.delete_topic(topic))
         }
 
-        fn topic_code_list(&self) -> Pin<Box<dyn Future<Output = Result<Vec<TopicCode>, DurableError>> + Send + '_>> {
+        fn topic_code_list(
+            &self,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<TopicCode>, DurableError>> + Send + '_>>
+        {
             Box::pin(self.topic_code_list())
         }
 
-        fn topic_list(&self) -> Pin<Box<dyn Future<Output = Result<Vec<TopicConfig>, DurableError>> + Send + '_>> {
+        fn topic_list(
+            &self,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<TopicConfig>, DurableError>> + Send + '_>>
+        {
             Box::pin(self.topic_list())
         }
     }
