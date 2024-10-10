@@ -4,8 +4,8 @@ use std::{
     task::Poll,
 };
 
+pub use asteroid_mq_model::{WaitAckError, WaitAckErrorException, WaitAckResult, WaitAckSuccess};
 use serde::{Deserialize, Serialize};
-use typeshare::typeshare;
 
 use crate::protocol::{endpoint::EndpointAddr, message::*};
 
@@ -13,42 +13,6 @@ use crate::protocol::{endpoint::EndpointAddr, message::*};
 pub struct WaitAck {
     pub expect: MessageAckExpectKind,
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[typeshare]
-pub struct WaitAckError {
-    pub status: HashMap<EndpointAddr, MessageStatusKind>,
-    pub exception: Option<WaitAckErrorException>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[typeshare]
-pub struct WaitAckSuccess {
-    pub status: HashMap<EndpointAddr, MessageStatusKind>,
-}
-
-impl WaitAckError {
-    pub fn exception(exception: WaitAckErrorException) -> Self {
-        Self {
-            status: HashMap::new(),
-            exception: Some(exception),
-        }
-    }
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[typeshare]
-pub enum WaitAckErrorException {
-    MessageDropped = 0,
-    Overflow = 1,
-    NoAvailableTarget = 2,
-}
-
-pub enum AckWaitErrorKind {
-    Timeout,
-    Fail,
 }
 
 impl WaitAck {
@@ -87,8 +51,6 @@ impl WaitAckHandle {
     }
 }
 
-impl Message {}
-
 impl Future for WaitAckHandle {
     type Output = Result<WaitAckSuccess, WaitAckError>;
 
@@ -99,5 +61,3 @@ impl Future for WaitAckHandle {
             .map_err(|_| WaitAckError::exception(WaitAckErrorException::MessageDropped))?
     }
 }
-
-pub type WaitAckResult = Result<WaitAckSuccess, WaitAckError>;

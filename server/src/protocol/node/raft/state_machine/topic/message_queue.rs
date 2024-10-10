@@ -14,7 +14,8 @@ use crate::{
         node::raft::{
             proposal::ProposalContext,
             state_machine::topic::wait_ack::{WaitAckError, WaitAckSuccess},
-        }, topic::durable_message::DurableCommand,
+        },
+        topic::durable_message::DurableCommand,
     },
     util::Timed,
 };

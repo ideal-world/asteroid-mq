@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::BTreeMap, net::SocketAddr, sync::OnceLock};
 
-use k8s_openapi::api::core::v1::{Endpoints, Pod, Service};
+use k8s_openapi::api::core::v1::{Endpoints, Service};
 
 use crate::protocol::node::NodeId;
 
@@ -41,17 +41,6 @@ impl K8sClusterProvider {
             poll_interval: std::time::Duration::from_secs(1),
             port,
         }
-    }
-}
-
-impl NodeId {
-    pub fn from_pod(pod: &Pod) -> Self {
-        let uid = pod
-            .metadata
-            .uid
-            .as_ref()
-            .expect("pod are expected to have a uid");
-        NodeId::sha256(uid.as_bytes())
     }
 }
 

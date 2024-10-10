@@ -7,7 +7,8 @@ use crate::{
         endpoint::EndpointAddr,
         interest::InterestMap,
         message::*,
-        node::raft::proposal::{MessageStateUpdate, ProposalContext}, topic::durable_message::DurableCommand,
+        node::raft::proposal::{MessageStateUpdate, ProposalContext},
+        topic::durable_message::DurableCommand,
     },
 };
 use config::TopicConfig;
@@ -132,7 +133,11 @@ impl TopicData {
             .cloned()
             .unwrap_or_default()
     }
-    pub(crate) fn update_and_flush(&mut self, update: MessageStateUpdate, ctx: &mut ProposalContext) {
+    pub(crate) fn update_and_flush(
+        &mut self,
+        update: MessageStateUpdate,
+        ctx: &mut ProposalContext,
+    ) {
         let reachable_eps = self.reachable_eps(&ctx.node.id());
         ctx.push_durable_command(DurableCommand::UpdateStatus(update.clone()));
         let poll_result = {

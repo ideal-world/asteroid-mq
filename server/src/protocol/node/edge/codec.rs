@@ -12,25 +12,8 @@ pub(crate) mod cbor;
 #[cfg(feature = "cbor")]
 pub use cbor::*;
 pub(crate) mod json;
+pub use asteroid_mq_model::CodecKind;
 pub use json::*;
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct CodecKind(pub(crate) u8);
-
-impl std::fmt::Display for CodecKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:02x}", self.0)
-    }
-}
-
-impl CodecKind {
-    #[cfg(feature = "cbor")]
-    pub const CBOR: Self = Self(0x00);
-    pub const BINCODE: Self = Self(0x01);
-    pub const JSON: Self = Self(0x40);
-}
 
 #[derive(Debug)]
 pub struct CodecError {

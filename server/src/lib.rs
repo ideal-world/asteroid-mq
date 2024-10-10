@@ -15,14 +15,14 @@ pub mod prelude {
     pub use crate::protocol::endpoint::{EndpointAddr, LocalEndpoint, LocalEndpointRef};
     pub use crate::protocol::interest::{Interest, Subject};
     pub use crate::protocol::message::*;
+    pub use crate::protocol::node::raft::state_machine::topic::config::*;
     pub use crate::protocol::node::{Node, NodeConfig, NodeId};
     pub use crate::protocol::topic::{
         durable_message::{
-            Durable, DurableError, DurableService, DurableMessage, MessageDurableConfig,
+            Durable, DurableError, DurableMessage, DurableService, MessageDurableConfig,
         },
         Topic, TopicCode,
     };
-    pub use crate::protocol::node::raft::state_machine::topic::config::*;
     pub use crate::util::MaybeBase64Bytes;
 }
 

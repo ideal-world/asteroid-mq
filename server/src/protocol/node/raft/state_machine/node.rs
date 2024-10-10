@@ -67,7 +67,6 @@ impl NodeData {
         };
         node.topics.write().unwrap().insert(code.clone(), topic);
         ctx.commit_durable_commands();
-
     }
     #[instrument(skip_all, fields(node_id=%ctx.node.id(), topic=%topic, message_id=%update.message_id))]
     pub(crate) fn apply_set_state(

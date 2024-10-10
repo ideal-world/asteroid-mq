@@ -137,6 +137,7 @@ async fn handler(
     state: State<Node>,
 ) -> Response {
     use base64::Engine;
+    tracing::info!(?query, "new connection");
     let id = base64::engine::general_purpose::URL_SAFE
         .decode(query.0.node_id)
         .unwrap();

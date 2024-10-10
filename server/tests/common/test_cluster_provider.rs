@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use asteroid_mq::{prelude::NodeId, protocol::node::raft::cluster::ClusterProvider};

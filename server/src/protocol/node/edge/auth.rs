@@ -29,6 +29,23 @@ pub struct EdgeAuthError {
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
+impl EdgeAuthError {
+    pub fn new<E: std::error::Error + Send + Sync + 'static>(
+        reason: impl Into<Cow<'static, str>>,
+        source: E,
+    ) -> Self {
+        Self {
+            reason: reason.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+    pub fn new_local(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            reason: reason.into(),
+            source: None,
+        }
+    }
+}
 impl std::fmt::Display for EdgeAuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "EdgeAuthError: {}", self.reason,)?;
@@ -61,7 +78,7 @@ impl EdgeAuthService {
 
 pub trait EdgeAuth: Send + Sync + 'static {
     fn check<'r>(
-        &self,
+        &'r self,
         from: NodeId,
         request: &'r EdgeRequestEnum,
     ) -> impl Future<Output = Result<(), EdgeAuthError>> + Send + 'r;
