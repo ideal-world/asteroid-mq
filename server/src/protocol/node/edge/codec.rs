@@ -12,8 +12,8 @@ pub(crate) mod cbor;
 #[cfg(feature = "cbor")]
 pub use cbor::*;
 pub(crate) mod json;
-pub use json::*;
 pub use asteroid_mq_model::CodecKind;
+pub use json::*;
 
 #[derive(Debug)]
 pub struct CodecError {

@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
@@ -186,9 +187,69 @@ pub struct EdgeMessage {
     pub payload: MaybeBase64Bytes,
 }
 
+pub struct EdgeMessageBuilder {
+    ack_kind: MessageAckExpectKind,
+    target_kind: MessageTargetKind,
+    durability: Option<MessageDurableConfig>,
+    subjects: Vec<Subject>,
+    topic: TopicCode,
+    payload: Bytes,
+}
+
 impl EdgeMessage {
+    pub fn builder<T, S, P>(topic_code: T, subjects: S, payload: P) -> EdgeMessageBuilder
+    where
+        T: Into<TopicCode>,
+        S: IntoIterator<Item = Subject>,
+        P: Into<Bytes>,
+    {
+        EdgeMessageBuilder {
+            ack_kind: MessageAckExpectKind::Sent,
+            target_kind: MessageTargetKind::Push,
+            durability: None,
+            subjects: subjects.into_iter().collect(),
+            topic: topic_code.into(),
+            payload: payload.into(),
+        }
+    }
     pub fn into_message(self) -> (Message, TopicCode) {
         let (header, topic) = self.header.into_message_header();
         (Message::new(header, self.payload.0), topic)
+    }
+}
+
+impl EdgeMessageBuilder {
+    pub fn ack_kind(mut self, ack_kind: MessageAckExpectKind) -> Self {
+        self.ack_kind = ack_kind;
+        self
+    }
+    pub fn mode_durable(mut self, durability: MessageDurableConfig) -> Self {
+        self.durability = Some(durability);
+        self.target_kind = MessageTargetKind::Durable;
+        self
+    }
+    pub fn mode_online(mut self) -> Self {
+        self.target_kind = MessageTargetKind::Online;
+        self
+    }
+    pub fn mode_push(mut self) -> Self {
+        self.target_kind = MessageTargetKind::Push;
+        self
+    }
+    pub fn with_subject(mut self, subject: Subject) -> Self {
+        self.subjects.push(subject);
+        self
+    }
+    pub fn build(self) -> EdgeMessage {
+        EdgeMessage {
+            header: EdgeMessageHeader {
+                ack_kind: self.ack_kind,
+                target_kind: self.target_kind,
+                durability: self.durability,
+                subjects: self.subjects,
+                topic: self.topic,
+            },
+            payload: MaybeBase64Bytes(self.payload),
+        }
     }
 }

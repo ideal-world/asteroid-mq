@@ -14,6 +14,7 @@ use super::{
         Topic, TopicCode,
     },
 };
+pub use asteroid_mq_model::NodeId;
 use edge::{
     auth::EdgeAuthService,
     codec::CodecRegistry,
@@ -28,7 +29,6 @@ use edge::{
     EdgeError, EdgeErrorKind,
 };
 use futures_util::TryFutureExt;
-pub use asteroid_mq_model::NodeId;
 use openraft::{BasicNode, ChangeMembers, Raft};
 use raft::{
     cluster::ClusterProvider,

@@ -45,6 +45,15 @@ pub enum MessageAckExpectKind {
     Processed = 0x02,
 }
 
+impl From<MessageAckExpectKind> for MessageStatusKind {
+    fn from(kind: MessageAckExpectKind) -> MessageStatusKind {
+        match kind {
+            MessageAckExpectKind::Sent => MessageStatusKind::Sent,
+            MessageAckExpectKind::Received => MessageStatusKind::Received,
+            MessageAckExpectKind::Processed => MessageStatusKind::Processed,
+        }
+    }
+}
 impl MessageAckExpectKind {
     pub fn try_from_u8(v: u8) -> Option<Self> {
         match v {
@@ -234,7 +243,7 @@ pub struct MessageHeader {
 
 impl MessageHeader {
     #[inline(always)]
-    pub fn ack(
+    pub(crate) fn ack(
         &self,
         topic_code: TopicCode,
         from: EndpointAddr,

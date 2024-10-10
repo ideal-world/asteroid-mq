@@ -1,1 +1,1 @@
-typeshare -l typescript -o sdk/typescript/src/types.ts ./src
+typeshare -l typescript -o sdk/typescript/src/types.ts ./model

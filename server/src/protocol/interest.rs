@@ -6,7 +6,9 @@ use std::{
     hash::Hash,
 };
 
-pub use asteroid_mq_model::{Interest, InterestSegment, OwnedInterestSegment, Subject, SubjectSegments};
+pub use asteroid_mq_model::{
+    Interest, InterestSegment, OwnedInterestSegment, Subject, SubjectSegments,
+};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct InterestMap<T> {
