@@ -4,7 +4,7 @@ import { ReceivedMessage } from "./message";
 export class Endpoint {
     readonly node: Node;
     readonly topic: TopicCode;
-    private interest: Set<Interest>;
+    private interests: Set<Interest>;
     readonly address: EndpointAddr;
     readonly isOnline: boolean = false;
     private messageQueue: ReceivedMessage[] = [];
@@ -19,17 +19,21 @@ export class Endpoint {
         this.node = node;
         this.topic = config.topic;
         this.address = config.address;
-        this.interest = config.interest;
+        this.interests = config.interest;
     }
     public async offline() {
         await this.node.destroyEndpoint(this);
     }
     public getInterest(): Interest[] {
-        return Array.from(this.interest);
+        return Array.from(this.interests);
     }
-    public async updateInterest(interests: Interest[]) {
-        this.interest = new Set(interests);
-        await this.node.updateInterest(this, interests);
+    public async modifyInterests(modify: (interests: Set<Interest>) => Set<Interest>) {
+        const newInterests = modify(new Set(this.interests));
+        await this.node.updateInterests(this, Array.from(newInterests));
+    }
+    public async updateInterests(interests: Interest[]) {
+        await this.node.updateInterests(this, interests);
+        this.interests = new Set(interests);
     }
     public receive(message: ReceivedMessage) {
         if (this.waitingNextMessage !== undefined) {

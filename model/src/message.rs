@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{str::Utf8Error, sync::Arc};
 
 use crate::{
     durable::MessageDurableConfig, interest::Subject, topic::TopicCode, util::MaybeBase64Bytes,
 };
 use bytes::Bytes;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use typeshare::typeshare;
 
 use super::endpoint::EndpointAddr;
@@ -212,6 +212,12 @@ pub struct Message {
 }
 
 impl Message {
+    pub fn new(header: MessageHeader, payload: impl Into<Bytes>) -> Self {
+        Self {
+            header,
+            payload: MaybeBase64Bytes::new(payload.into()),
+        }
+    }
     pub fn id(&self) -> MessageId {
         self.header.message_id
     }
@@ -221,16 +227,15 @@ impl Message {
     pub fn subjects(&self) -> &[Subject] {
         &self.header.subjects
     }
-}
-
-impl Message {
-    pub fn new(header: MessageHeader, payload: impl Into<Bytes>) -> Self {
-        Self {
-            header,
-            payload: MaybeBase64Bytes::new(payload.into()),
-        }
+    pub fn json<T: DeserializeOwned>(&self) -> serde_json::Result<T> {
+        serde_json::from_slice(&self.payload.0)
+    }
+    pub fn text(&self) -> Result<&str, Utf8Error> {
+        std::str::from_utf8(&self.payload.0)
     }
 }
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[typeshare]
 pub struct MessageHeader {

@@ -8,7 +8,10 @@ use asteroid_mq_model::{EndpointAddr, Interest, Message, TopicCode};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::Instrument;
 
-use crate::node::{ClientNodeError, ClientNodeInner};
+use crate::{
+    node::{ClientNodeError, ClientNodeInner},
+    ClientNode,
+};
 #[derive(Debug)]
 pub struct ClientEndpoint {
     pub(crate) addr: EndpointAddr,
@@ -75,6 +78,20 @@ impl ClientReceivedMessage {
 }
 
 impl ClientEndpoint {
+    pub fn node(&self) -> Option<ClientNode> {
+        self.node.upgrade().map(|inner| ClientNode { inner })
+    }
+    pub fn interests(&self) -> &HashSet<Interest> {
+        &self.interests
+    }
+    pub async fn modify_interests(
+        &mut self,
+        modify: impl FnOnce(&mut HashSet<Interest>),
+    ) -> Result<(), ClientNodeError> {
+        let mut new_interest = self.interests.clone();
+        modify(&mut new_interest);
+        self.update_interests(new_interest).await
+    }
     pub async fn update_interests(
         &mut self,
         interests: impl IntoIterator<Item = Interest>,
