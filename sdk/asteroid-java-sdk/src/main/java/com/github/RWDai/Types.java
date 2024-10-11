@@ -179,11 +179,27 @@ public class Types {
   }
 
   public static class SendMessageResponse implements EdgeResponseEnum {
-    public EdgeResult<WaitAckSuccess, WaitAckError> content;
+    EdgeResult<WaitAckSuccess, WaitAckError> content;
+
+    public EdgeResult<WaitAckSuccess, WaitAckError> getContent() {
+      return content;
+    }
+
+    public void setContent(EdgeResult<WaitAckSuccess, WaitAckError> content) {
+      this.content = content;
+    }
   }
 
   public static class EndpointOnlineResponse implements EdgeResponseEnum {
-    public String content;
+    String content;
+
+    public String getContent() {
+      return content;
+    }
+
+    public void setContent(String content) {
+      this.content = content;
+    }
   }
 
   public static class EndpointOfflineResponse implements EdgeResponseEnum {
@@ -196,22 +212,102 @@ public class Types {
   }
 
   public static class EdgeResponse {
-    public int seqId;
-    public EdgeResult<EdgeResponseEnum, EdgeError> result;
+    int seqId;
+    EdgeResult<EdgeResponseEnum, EdgeError> result;
+
+    public int getSeqId() {
+      return seqId;
+    }
+
+    public void setSeqId(int seqId) {
+      this.seqId = seqId;
+    }
+
+    public EdgeResult<EdgeResponseEnum, EdgeError> getResult() {
+      return result;
+    }
+
+    public void setResult(EdgeResult<EdgeResponseEnum, EdgeError> result) {
+      this.result = result;
+    }
   }
 
   public static class EndpointInterest {
-    public String topicCode;
-    public String endpoint;
-    public List<String> interests;
+    String topicCode;
+    String endpoint;
+    List<String> interests;
+
+    public String getTopicCode() {
+      return topicCode;
+    }
+
+    public void setTopicCode(String topicCode) {
+      this.topicCode = topicCode;
+    }
+
+    public String getEndpoint() {
+      return endpoint;
+    }
+
+    public void setEndpoint(String endpoint) {
+      this.endpoint = endpoint;
+    }
+
+    public List<String> getInterests() {
+      return interests;
+    }
+
+    public void setInterests(List<String> interests) {
+      this.interests = interests;
+    }
   }
 
   public static class MessageHeader {
-    public String messageId;
-    public MessageAckExpectKind ackKind;
-    public MessageTargetKind targetKind;
-    public MessageDurabilityConfig durability;
-    public List<String> subjects;
+    String messageId;
+    MessageAckExpectKind ackKind;
+    MessageTargetKind targetKind;
+    MessageDurabilityConfig durability;
+    List<String> subjects;
+
+    public String getMessageId() {
+      return messageId;
+    }
+
+    public void setMessageId(String messageId) {
+      this.messageId = messageId;
+    }
+
+    public MessageAckExpectKind getAckKind() {
+      return ackKind;
+    }
+
+    public void setAckKind(MessageAckExpectKind ackKind) {
+      this.ackKind = ackKind;
+    }
+
+    public MessageTargetKind getTargetKind() {
+      return targetKind;
+    }
+
+    public void setTargetKind(MessageTargetKind targetKind) {
+      this.targetKind = targetKind;
+    }
+
+    public MessageDurabilityConfig getDurability() {
+      return durability;
+    }
+
+    public void setDurability(MessageDurabilityConfig durability) {
+      this.durability = durability;
+    }
+
+    public List<String> getSubjects() {
+      return subjects;
+    }
+
+    public void setSubjects(List<String> subjects) {
+      this.subjects = subjects;
+    }
   }
 
   public static class Message {
@@ -258,26 +354,74 @@ public class Types {
   }
 
   public static class EdgePushPayload implements EdgePayload {
-    public EdgePush content;
+    EdgePush content;
+
+    public EdgePush getContent() {
+      return content;
+    }
+
+    public void setContent(EdgePush content) {
+      this.content = content;
+    }
   }
 
   public static class EdgeResponsePayload implements EdgePayload {
-    public EdgeResponse content;
+    EdgeResponse content;
+
+    public EdgeResponse getContent() {
+      return content;
+    }
+
+    public void setContent(EdgeResponse content) {
+      this.content = content;
+    }
   }
 
   public static class EdgeRequestPayload implements EdgePayload {
-    public EdgeRequest content;
+    EdgeRequest content;
+
+    public EdgeRequest getContent() {
+      return content;
+    }
+
+    public void setContent(EdgeRequest content) {
+      this.content = content;
+    }
   }
 
   public static class EdgeErrorPayload implements EdgePayload {
-    public EdgeError content;
+    EdgeError content;
+
+    public EdgeError getContent() {
+      return content;
+    }
+
+    public void setContent(EdgeError content) {
+      this.content = content;
+    }
   }
 
   public interface EdgePush {
   }
 
   public static class MessagePush implements EdgePush {
-    public List<String> endpoints;
-    public Message message;
+    List<String> endpoints;
+    Message message;
+
+    public List<String> getEndpoints() {
+      return endpoints;
+    }
+
+    public void setEndpoints(List<String> endpoints) {
+      this.endpoints = endpoints;
+    }
+
+    public Message getMessage() {
+      return message;
+    }
+
+    public void setMessage(Message message) {
+      this.message = message;
+    }
   }
 }

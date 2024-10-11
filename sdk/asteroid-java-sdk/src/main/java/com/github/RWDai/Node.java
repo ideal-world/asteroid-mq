@@ -47,19 +47,19 @@ public class Node {
           // 实现 onMessage 逻辑
           try {
             EdgePayload payload = node.objectMapper.readValue(message, EdgePayload.class);
-            if(payload instanceof EdgeResponsePayload){
-              var result = ((EdgeResponsePayload)payload).content.result;
-              var seqId = ((EdgeResponsePayload)payload).content.seqId;
+            if (payload instanceof EdgeResponsePayload) {
+              var result = ((EdgeResponsePayload) payload).getContent().getResult();
+              var seqId = ((EdgeResponsePayload) payload).getContent().getSeqId();
               var channel = node.responseWaitingPool.get(seqId);
               dgeResult<EdgeResponseEnum, EdgeError> result = payload.getContent().getResult();
-int seqId = payload.getContent().getSeqId();
-CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>> future = responseWaitingPool.get(seqId);
-if (future != null) {
-    future.complete(result);
-}
-            }else if (payload instanceof EdgePushPayload) {
-              
-            }else {
+              int seqId = payload.getContent().getSeqId();
+              CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>> future = responseWaitingPool.get(seqId);
+              if (future != null) {
+                future.complete(result);
+              }
+            } else if (payload instanceof EdgePushPayload) {
+
+            } else {
 
             }
           } catch (JsonMappingException e) {
@@ -69,7 +69,7 @@ if (future != null) {
             // TODO Auto-generated catch block
             e.printStackTrace();
           }
-          
+
         }
 
         @Override
@@ -92,6 +92,10 @@ if (future != null) {
   }
 
   private Node() {
+  }
+
+  private void ackMessage() {
+
   }
 
   private void sendPayload(EdgePayload payload) {
