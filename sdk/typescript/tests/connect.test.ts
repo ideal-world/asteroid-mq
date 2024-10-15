@@ -28,7 +28,7 @@ const nodeB = Node.connect({
 const endpointB1 = await nodeB.createEndpoint("test", ["event/*"]);
 const endpointB2 = await nodeB.createEndpoint("test", ["event/**/b2"]);
 console.log(endpointB1.address);
-endpointB1.updateInterest(["event/hello"]);
+endpointB1.updateInterests(["event/hello"]);
 const processTaskB1 = new Promise((resolve) => {
     (
         async () => {
