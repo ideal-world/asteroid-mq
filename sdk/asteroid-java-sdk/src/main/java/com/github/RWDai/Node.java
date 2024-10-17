@@ -2,9 +2,8 @@ package com.github.RWDai;
 
 import java.net.URI;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -16,11 +15,13 @@ import org.java_websocket.handshake.ServerHandshake;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.RWDai.Types.EdgeEndpointOnline;
 import com.github.RWDai.Types.EdgeError;
 import com.github.RWDai.Types.EdgeMessage;
 import com.github.RWDai.Types.EdgePayload;
 import com.github.RWDai.Types.EdgePushPayload;
 import com.github.RWDai.Types.EdgeRequest;
+import com.github.RWDai.Types.EdgeRequestEnum;
 import com.github.RWDai.Types.EdgeRequestPayload;
 import com.github.RWDai.Types.EdgeResponseEnum;
 import com.github.RWDai.Types.EdgeResponsePayload;
@@ -32,7 +33,7 @@ import com.github.RWDai.Types.SendMessageRequest;
 import com.github.RWDai.Types.SetState;
 import com.github.RWDai.Types.SetStateRequest;
 
-public class Node {
+public class Node implements AutoCloseable {
   private static ObjectMapper objectMapper = new ObjectMapper();
 
   private WebSocketClient socket;
@@ -70,6 +71,10 @@ public class Node {
     public void setResponseQueue(BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>> responseQueue) {
       this.responseQueue = responseQueue;
     }
+  }
+
+  protected Map<String, Endpoint> getEndpoints() {
+    return endpoints;
   }
 
   public static Node connect(String url) {
@@ -164,9 +169,13 @@ public class Node {
     if (!alive) {
       throw new RuntimeException("Node is not alive");
     }
+    return sendRequest(new SendMessageRequest(message));
+  }
+
+  private EdgeResult<EdgeResponseEnum, EdgeError> sendRequest(EdgeRequestEnum request) throws InterruptedException {
     var responseQueue = new LinkedBlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>>();
     BoxRequest boxRequest = new BoxRequest();
-    boxRequest.setRequest(new EdgeRequest(nextRequestId(), new SendMessageRequest(message)));
+    boxRequest.setRequest(new EdgeRequest(nextRequestId(), request));
     boxRequest.setResponseQueue(responseQueue);
     requestPool.put(boxRequest);
     var result = responseQueue.take();
@@ -194,31 +203,69 @@ public class Node {
     return requestId.incrementAndGet();
   }
 
-  private CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>> waitResponse(int requestId) {
-    CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>> future = new CompletableFuture<>();
-    responseWaitingPool.put(requestId, future);
-    return future;
-  }
+  // private CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>>
+  // waitResponse(int requestId) {
+  // CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>> future = new
+  // CompletableFuture<>();
+  // responseWaitingPool.put(requestId, future);
+  // return future;
+  // }
 
-  private CompletableFuture<Void> waitSocketOpen() {
-    if (alive) {
-      return CompletableFuture.completedFuture(null);
+  // private CompletableFuture<Void> waitSocketOpen() {
+  // if (alive) {
+  // return CompletableFuture.completedFuture(null);
+  // } else {
+  // CompletableFuture<Void> future = new CompletableFuture<>();
+  // openingWaitingPool.add(future);
+  // return future;
+  // }
+  // }
+
+  private String sendEndpointsOnline(EdgeEndpointOnline request) throws InterruptedException {
+    var response = sendRequest(new Types.EndpointOnlineRequest(request));
+    if (response instanceof Types.Ok) {
+      var content = ((Types.Ok) response).getContent();
+      if (content instanceof Types.EndpointOnlineResponse) {
+        return ((Types.EndpointOnlineResponse) content).getContent();
+      }
     } else {
-      CompletableFuture<Void> future = new CompletableFuture<>();
-      openingWaitingPool.add(future);
-      return future;
+      // TODO handle error
     }
+    return null;
   }
 
+  protected void sendEndpointsOffline(Types.EdgeEndpointOffline request) throws InterruptedException {
+    var response = sendRequest(new Types.EndpointOfflineRequest(request));
+    if (response instanceof Types.Ok) {
+      var content = ((Types.Ok) response).getContent();
+      if (content instanceof Types.EndpointOfflineResponse) {
+        return;
+      }
+    } else {
+      // TODO handle error
+    }
+    return;
+  }
+
+  protected void sendEndpointsInterests(Types.EndpointInterestRequest request) throws InterruptedException {
+    var response = sendRequest(request);
+    if (response instanceof Types.Ok) {
+      var content = ((Types.Ok) response).getContent();
+      if (content instanceof Types.EndpointInterestResponse) {
+        return;
+      }
+    } else {
+      // TODO handle error
+    }
+    return;
+  }
+
+  @Override
   public void close() {
     // 实现关闭逻辑
-  }
-
-  public void destroyEndpoint(Endpoint endpoint) {
-    if (!alive) {
-      return;
+    for (Endpoint ep : this.endpoints.values()) {
+      ep.close();
     }
-    endpoint.closeMessageChannel();
-    // TODO
+    socket.close();
   }
 }

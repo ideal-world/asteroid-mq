@@ -3,14 +3,19 @@ package com.github.RWDai;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
-public class Endpoint {
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class Endpoint implements AutoCloseable {
+  private static final Logger log = LoggerFactory.getLogger(Endpoint.class);
+
   private Node node;
   private String topic;
   private Set<String> interests;
   private String address;
   // private final boolean isOnline;
   // private final List<ReceivedMessage> messageQueue;
-  private CompletableFuture<ReceivedMessage> waitingNextMessage;
+  // private CompletableFuture<ReceivedMessage> waitingNextMessage;
 
   public Endpoint(Node node, String topic, Set<String> interests, String address) {
     this.node = node;
@@ -51,21 +56,26 @@ public class Endpoint {
     this.address = address;
   }
 
-  public CompletableFuture<ReceivedMessage> getWaitingNextMessage() {
-    return waitingNextMessage;
-  }
+  // public CompletableFuture<ReceivedMessage> getWaitingNextMessage() {
+  // return waitingNextMessage;
+  // }
 
-  public void setWaitingNextMessage(CompletableFuture<ReceivedMessage> waitingNextMessage) {
-    this.waitingNextMessage = waitingNextMessage;
-  }
+  // public void setWaitingNextMessage(CompletableFuture<ReceivedMessage>
+  // waitingNextMessage) {
+  // this.waitingNextMessage = waitingNextMessage;
+  // }
 
-  public void offline() {
-    node.destroyEndpoint(this);
-  }
+  // public void offline() {
+  // node.destroyEndpoint(this);
+  // }
 
-  public void closeMessageChannel() {
-    // TODO Auto-generated method stub
-    throw new UnsupportedOperationException("Unimplemented method 'closeMessageChannel'");
+  @Override
+  public void close() {
+    Thread.startVirtualThread(() -> {
+      node.sendEndpointsOffline(topic, address);
+      node.getEndpoints().remove(address);
+      log.info("[Endpoint offline] topic:{},address:{}", topic, address);
+    });
   }
 
 }
