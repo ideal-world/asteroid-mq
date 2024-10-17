@@ -4,6 +4,10 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.annotation.JsonTypeName;
+
 public class Types {
 
   public static class EdgeEndpointOffline {
@@ -49,8 +53,25 @@ public class Types {
   }
 
   public static class MessageDurabilityConfig {
-    public Date expire;
-    public Integer maxReceiver;
+    private Date expire;
+    private Integer maxReceiver;
+
+    public Date getExpire() {
+      return expire;
+    }
+
+    public void setExpire(Date expire) {
+      this.expire = expire;
+    }
+
+    public Integer getMaxReceiver() {
+      return maxReceiver;
+    }
+
+    public void setMaxReceiver(Integer maxReceiver) {
+      this.maxReceiver = maxReceiver;
+    }
+
   }
 
   public static class EdgeMessageHeader {
@@ -140,46 +161,140 @@ public class Types {
   }
 
   public static class SendMessageRequest implements EdgeRequestEnum {
-    public EdgeMessage content;
+    private EdgeMessage content;
+
+    public SendMessageRequest(EdgeMessage content) {
+      this.content = content;
+    }
+
+    public EdgeMessage getContent() {
+      return content;
+    }
   }
 
   public static class EndpointOnlineRequest implements EdgeRequestEnum {
-    public EdgeEndpointOnline content;
+    private EdgeEndpointOnline content;
+
+    public EndpointOnlineRequest(EdgeEndpointOnline content) {
+      this.content = content;
+    }
+
+    public EdgeEndpointOnline getContent() {
+      return content;
+    }
   }
 
   public static class EndpointOfflineRequest implements EdgeRequestEnum {
-    public EdgeEndpointOffline content;
+    private EdgeEndpointOffline content;
+
+    public EndpointOfflineRequest(EdgeEndpointOffline content) {
+      this.content = content;
+    }
+
+    public EdgeEndpointOffline getContent() {
+      return content;
+    }
   }
 
   public static class EndpointInterestRequest implements EdgeRequestEnum {
-    public EndpointInterest content;
+    private EndpointInterest content;
+
+    public EndpointInterestRequest(EndpointInterest content) {
+      this.content = content;
+    }
+
+    public EndpointInterest getContent() {
+      return content;
+    }
   }
 
   public static class SetStateRequest implements EdgeRequestEnum {
-    public SetState content;
+    private SetState content;
+
+    public SetStateRequest(SetState content) {
+      this.content = content;
+    }
+
+    public SetState getContent() {
+      return content;
+    }
   }
 
   public static class EdgeRequest {
-    public int seqId;
-    public EdgeRequestEnum request;
+    private int seqId;
+    private EdgeRequestEnum request;
+
+    public EdgeRequest(int seqId, EdgeRequestEnum request) {
+      this.seqId = seqId;
+      this.request = request;
+    }
+
+    public int getSeqId() {
+      return seqId;
+    }
+
+    public void setSeqId(int seqId) {
+      this.seqId = seqId;
+    }
+
+    public EdgeRequestEnum getRequest() {
+      return request;
+    }
+
+    public void setRequest(EdgeRequestEnum request) {
+      this.request = request;
+    }
+
   }
 
   public interface EdgeResult<T, E> {
   }
 
   public static class Ok<T, E> implements EdgeResult<T, E> {
-    public T content;
+    private T content;
+
+    public T getContent() {
+      return content;
+    }
+
+    public void setContent(T content) {
+      this.content = content;
+    }
   }
 
   public static class Err<T, E> implements EdgeResult<T, E> {
-    public E content;
+    private E content;
+
+    public E getContent() {
+      return content;
+    }
+
+    public void setContent(E content) {
+      this.content = content;
+    }
+
   }
 
-  public interface EdgeResponseEnum {
+  @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "kind")
+  public static abstract class EdgeResponseEnum {
+    protected String kind;
+
+    public void setKind(String kind) {
+      this.kind = kind;
+    }
   }
 
-  public static class SendMessageResponse implements EdgeResponseEnum {
-    EdgeResult<WaitAckSuccess, WaitAckError> content;
+  @JsonTypeName("SendMessage")
+  public static class SendMessageResponse extends EdgeResponseEnum {
+    private EdgeResult<WaitAckSuccess, WaitAckError> content;
+
+    public SendMessageResponse(EdgeResult<WaitAckSuccess, WaitAckError> content) {
+      this.content = content;
+    }
+
+    public String getKind() {
+      return "SendMessage";
+    }
 
     public EdgeResult<WaitAckSuccess, WaitAckError> getContent() {
       return content;
@@ -190,8 +305,9 @@ public class Types {
     }
   }
 
-  public static class EndpointOnlineResponse implements EdgeResponseEnum {
-    String content;
+  @JsonTypeName("EndpointOnline")
+  public static class EndpointOnlineResponse extends EdgeResponseEnum {
+    private String content;
 
     public String getContent() {
       return content;
@@ -202,18 +318,21 @@ public class Types {
     }
   }
 
-  public static class EndpointOfflineResponse implements EdgeResponseEnum {
+  @JsonTypeName("EndpointOffline")
+  public static class EndpointOfflineResponse extends EdgeResponseEnum {
   }
 
-  public static class EndpointInterestResponse implements EdgeResponseEnum {
+  @JsonTypeName("EndpointInterest")
+  public static class EndpointInterestResponse extends EdgeResponseEnum {
   }
 
-  public static class SetStateResponse implements EdgeResponseEnum {
+  @JsonTypeName("SetState")
+  public static class SetStateResponse extends EdgeResponseEnum {
   }
 
   public static class EdgeResponse {
-    int seqId;
-    EdgeResult<EdgeResponseEnum, EdgeError> result;
+    private int seqId;
+    private EdgeResult<EdgeResponseEnum, EdgeError> result;
 
     public int getSeqId() {
       return seqId;
@@ -233,9 +352,9 @@ public class Types {
   }
 
   public static class EndpointInterest {
-    String topicCode;
-    String endpoint;
-    List<String> interests;
+    private String topicCode;
+    private String endpoint;
+    private List<String> interests;
 
     public String getTopicCode() {
       return topicCode;
@@ -263,11 +382,11 @@ public class Types {
   }
 
   public static class MessageHeader {
-    String messageId;
-    MessageAckExpectKind ackKind;
-    MessageTargetKind targetKind;
-    MessageDurabilityConfig durability;
-    List<String> subjects;
+    private String messageId;
+    private MessageAckExpectKind ackKind;
+    private MessageTargetKind targetKind;
+    private MessageDurabilityConfig durability;
+    private List<String> subjects;
 
     public String getMessageId() {
       return messageId;
@@ -326,13 +445,57 @@ public class Types {
   }
 
   public static class MessageStateUpdate {
-    public String messageId;
-    public Map<String, MessageStatusKind> status;
+    private String messageId;
+    private Map<String, MessageStatusKind> status;
+
+    public MessageStateUpdate(String messageId, Map<String, MessageStatusKind> status) {
+      this.messageId = messageId;
+      this.status = status;
+    }
+
+    public String getMessageId() {
+      return messageId;
+    }
+
+    public void setMessageId(String messageId) {
+      this.messageId = messageId;
+    }
+
+    public Map<String, MessageStatusKind> getStatus() {
+      return status;
+    }
+
+    public void setStatus(Map<String, MessageStatusKind> status) {
+      this.status = status;
+    }
+
   }
 
   public static class SetState {
-    public String topic;
-    public MessageStateUpdate update;
+    private String topic;
+    private MessageStateUpdate update;
+
+    public SetState(String topic, MessageStateUpdate update) {
+      this.topic = topic;
+      this.update = update;
+    }
+
+    public String getTopic() {
+      return topic;
+    }
+
+    public void setTopic(String topic) {
+      this.topic = topic;
+    }
+
+    public MessageStateUpdate getUpdate() {
+      return update;
+    }
+
+    public void setUpdate(MessageStateUpdate update) {
+      this.update = update;
+    }
+
   }
 
   public enum WaitAckErrorException {
@@ -350,11 +513,26 @@ public class Types {
     public Map<String, MessageStatusKind> status;
   }
 
-  public interface EdgePayload {
+  @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "kind")
+  public static abstract class EdgePayload {
+    protected String kind;
+
+    public void setKind(String kind) {
+      this.kind = kind;
+    }
   }
 
-  public static class EdgePushPayload implements EdgePayload {
-    EdgePush content;
+  @JsonTypeName("Push")
+  public static class EdgePushPayload extends EdgePayload {
+    private EdgePush content;
+
+    public EdgePushPayload(EdgePush content) {
+      this.content = content;
+    }
+
+    public String getKind() {
+      return "Push";
+    }
 
     public EdgePush getContent() {
       return content;
@@ -365,8 +543,17 @@ public class Types {
     }
   }
 
-  public static class EdgeResponsePayload implements EdgePayload {
-    EdgeResponse content;
+  @JsonTypeName("Response")
+  public static class EdgeResponsePayload extends EdgePayload {
+    private EdgeResponse content;
+
+    public EdgeResponsePayload(EdgeResponse content) {
+      this.content = content;
+    }
+
+    public String getKind() {
+      return "Response";
+    }
 
     public EdgeResponse getContent() {
       return content;
@@ -377,8 +564,17 @@ public class Types {
     }
   }
 
-  public static class EdgeRequestPayload implements EdgePayload {
-    EdgeRequest content;
+  @JsonTypeName("Request")
+  public static class EdgeRequestPayload extends EdgePayload {
+    private EdgeRequest content;
+
+    public EdgeRequestPayload(EdgeRequest content) {
+      this.content = content;
+    }
+
+    public String getKind() {
+      return "Request";
+    }
 
     public EdgeRequest getContent() {
       return content;
@@ -389,8 +585,17 @@ public class Types {
     }
   }
 
-  public static class EdgeErrorPayload implements EdgePayload {
-    EdgeError content;
+  @JsonTypeName("Error")
+  public static class EdgeErrorPayload extends EdgePayload {
+    private EdgeError content;
+
+    public EdgeErrorPayload(EdgeError content) {
+      this.content = content;
+    }
+
+    public String getKind() {
+      return "Error";
+    }
 
     public EdgeError getContent() {
       return content;
@@ -401,12 +606,28 @@ public class Types {
     }
   }
 
-  public interface EdgePush {
+  @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "kind")
+  public static abstract class EdgePush {
+    protected String kind;
+
+    public void setKind(String kind) {
+      this.kind = kind;
+    }
   }
 
-  public static class MessagePush implements EdgePush {
-    List<String> endpoints;
-    Message message;
+  @JsonTypeName("Message")
+  public static class MessagePush extends EdgePush {
+    private List<String> endpoints;
+    private Message message;
+
+    public MessagePush(List<String> endpoints, Message message) {
+      this.endpoints = endpoints;
+      this.message = message;
+    }
+
+    public String getKind() {
+      return "Message";
+    }
 
     public List<String> getEndpoints() {
       return endpoints;

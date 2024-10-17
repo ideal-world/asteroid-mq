@@ -1,12 +1,13 @@
 package com.github.RWDai;
 
 import java.net.URI;
-import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.java_websocket.client.WebSocketClient;
@@ -16,49 +17,101 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.RWDai.Types.EdgeError;
+import com.github.RWDai.Types.EdgeMessage;
 import com.github.RWDai.Types.EdgePayload;
 import com.github.RWDai.Types.EdgePushPayload;
+import com.github.RWDai.Types.EdgeRequest;
+import com.github.RWDai.Types.EdgeRequestPayload;
 import com.github.RWDai.Types.EdgeResponseEnum;
 import com.github.RWDai.Types.EdgeResponsePayload;
 import com.github.RWDai.Types.EdgeResult;
+import com.github.RWDai.Types.MessagePush;
+import com.github.RWDai.Types.MessageStateUpdate;
+import com.github.RWDai.Types.MessageStatusKind;
+import com.github.RWDai.Types.SendMessageRequest;
+import com.github.RWDai.Types.SetState;
+import com.github.RWDai.Types.SetStateRequest;
 
 public class Node {
+  private static ObjectMapper objectMapper = new ObjectMapper();
+
   private WebSocketClient socket;
   private AtomicInteger requestId = new AtomicInteger(0);
-  private Map<Integer, CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>>> responseWaitingPool = new HashMap<>();
-  private Set<CompletableFuture<Void>> openingWaitingPool = new HashSet<>();
+  // private Map<Integer, CompletableFuture<EdgeResult<EdgeResponseEnum,
+  // EdgeError>>> responseWaitingPool = new HashMap<>();
+  // private Set<CompletableFuture<Void>> openingWaitingPool = new HashSet<>();
+  private BlockingQueue<BoxRequest> requestPool = new LinkedBlockingQueue<>();
   private boolean alive = false;
   private Map<String, Endpoint> endpoints = new HashMap<>();
-  private ObjectMapper objectMapper = new ObjectMapper();
+
+  private Node() {
+  }
+
+  protected BlockingQueue<BoxRequest> getRequestPool() {
+    return this.requestPool;
+  }
+
+  public static class BoxRequest {
+    private EdgeRequest request;
+    private BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>> responseQueue;
+
+    public EdgeRequest getRequest() {
+      return request;
+    }
+
+    public void setRequest(EdgeRequest request) {
+      this.request = request;
+    }
+
+    public BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>> getResponseQueue() {
+      return responseQueue;
+    }
+
+    public void setResponseQueue(BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>> responseQueue) {
+      this.responseQueue = responseQueue;
+    }
+  }
 
   public static Node connect(String url) {
     Node node = new Node();
+    var responsePool = new HashMap<Integer, BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>>>();
     try {
       WebSocketClient socket = new WebSocketClient(new URI(url)) {
         @Override
         public void onOpen(ServerHandshake handshakedata) {
           node.alive = true;
           // Todo
-          node.openingWaitingPool.forEach(null);
+
         }
 
         @Override
         public void onMessage(String message) {
           // 实现 onMessage 逻辑
           try {
-            EdgePayload payload = node.objectMapper.readValue(message, EdgePayload.class);
+            EdgePayload payload = objectMapper.readValue(message, EdgePayload.class);
             if (payload instanceof EdgeResponsePayload) {
               var result = ((EdgeResponsePayload) payload).getContent().getResult();
               var seqId = ((EdgeResponsePayload) payload).getContent().getSeqId();
-              var channel = node.responseWaitingPool.get(seqId);
-              dgeResult<EdgeResponseEnum, EdgeError> result = payload.getContent().getResult();
-              int seqId = payload.getContent().getSeqId();
-              CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>> future = responseWaitingPool.get(seqId);
-              if (future != null) {
-                future.complete(result);
+              var responseQueue = responsePool.get(seqId);
+              if (responseQueue != null) {
+                responseQueue.add(result);
               }
             } else if (payload instanceof EdgePushPayload) {
+              var content = ((EdgePushPayload) payload).getContent();
+              if (content instanceof MessagePush) {
+                var contentMessage = ((MessagePush) content).getMessage();
+                var contentEndpoints = ((MessagePush) content).getEndpoints();
 
+                for (String endpointName : contentEndpoints) {
+                  var endpoint = node.endpoints.get(endpointName);
+                  if (endpoint == null) {
+                    continue;
+                  }
+                  // TODO
+                }
+              } else {
+
+              }
             } else {
 
             }
@@ -81,9 +134,25 @@ public class Node {
         public void onError(Exception ex) {
           // 实现 onError 逻辑
           node.alive = false;
+          ex.printStackTrace();
         }
       };
       socket.connect();
+
+      Thread.startVirtualThread(() -> {
+        while (true) {
+          try {
+            var boxRequest = node.getRequestPool().take();
+            var seq_id = boxRequest.getRequest().getSeqId();
+            var message = objectMapper.writeValueAsString(new Types.EdgeRequestPayload(boxRequest.getRequest()));
+            socket.send(message);
+            responsePool.put(seq_id, boxRequest.getResponseQueue());
+          } catch (InterruptedException | JsonProcessingException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+          }
+        }
+      });
       node.socket = socket;
       return node;
     } catch (Exception e) {
@@ -91,20 +160,34 @@ public class Node {
     }
   }
 
-  private Node() {
-  }
-
-  private void ackMessage() {
-
-  }
-
-  private void sendPayload(EdgePayload payload) {
-    try {
-      String json = objectMapper.writeValueAsString(payload);
-      socket.send(json);
-    } catch (Exception e) {
-      throw new RuntimeException("Failed to send payload", e);
+  public EdgeResult<EdgeResponseEnum, EdgeError> sendMessage(EdgeMessage message) throws InterruptedException {
+    if (!alive) {
+      throw new RuntimeException("Node is not alive");
     }
+    var responseQueue = new LinkedBlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>>();
+    BoxRequest boxRequest = new BoxRequest();
+    boxRequest.setRequest(new EdgeRequest(nextRequestId(), new SendMessageRequest(message)));
+    boxRequest.setResponseQueue(responseQueue);
+    requestPool.put(boxRequest);
+    var result = responseQueue.take();
+    return result;
+  }
+
+  private void ackMessage(Endpoint endpoint, String messageId, MessageStatusKind state) throws JsonProcessingException {
+    if (alive) {
+      // TODO
+    }
+    var requestId = nextRequestId();
+    var request = new EdgeRequest(requestId, new SetStateRequest(
+        new SetState(endpoint.getTopic(), new MessageStateUpdate(messageId, Map.of(endpoint.getAddress(), state)))));
+    var message = new EdgeRequestPayload(request);
+    this.sendPayload(message);
+    return;
+  }
+
+  private void sendPayload(EdgePayload payload) throws JsonProcessingException {
+    String json = objectMapper.writeValueAsString(payload);
+    socket.send(json.getBytes());
   }
 
   private int nextRequestId() {
@@ -127,13 +210,15 @@ public class Node {
     }
   }
 
-  // ... 其他方法的实现 ...
-
-  public boolean isAlive() {
-    return alive;
-  }
-
   public void close() {
     // 实现关闭逻辑
+  }
+
+  public void destroyEndpoint(Endpoint endpoint) {
+    if (!alive) {
+      return;
+    }
+    endpoint.closeMessageChannel();
+    // TODO
   }
 }
