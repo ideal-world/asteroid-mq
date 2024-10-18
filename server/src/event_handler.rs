@@ -91,7 +91,7 @@ impl HandleEventLoop {
                 if H::Event::EXPECT_ACK_KIND == MessageAckExpectKind::Processed {
                     if let Err(e) = handle_result {
                         tracing::warn!("failed to handle event: {:?}", e);
-                        ep.ack_received(&message.header).await?;
+                        ep.ack_failed(&message.header).await?;
                     } else {
                         ep.ack_processed(&message.header).await?;
                     }

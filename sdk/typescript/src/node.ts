@@ -206,7 +206,7 @@ export class Node {
         }
         this.endpoints.delete(endpoint.address);
     }
-    public async updateInterest(endpoint: Endpoint, interests: Interest[]): Promise<void> {
+    public async updateInterests(endpoint: Endpoint, interests: Interest[]): Promise<void> {
         if (!this.alive) {
             return;
         }

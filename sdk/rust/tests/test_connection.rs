@@ -46,7 +46,6 @@ async fn test_connection() -> Result<(), Box<dyn std::error::Error>> {
     endpoint_b1
         .update_interests([Interest::new("event/hello")])
         .await?;
-
     let task_b1 = tokio::spawn(async move {
         while let Some(message) = endpoint_b1.next_message().await {
             tracing::info!("Received message in b1: {:?}", &message.payload.0);

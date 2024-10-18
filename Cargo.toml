@@ -35,5 +35,5 @@ typeshare = { version = "1" }
 base64 = "0.22"
 
 # raft
-openraft = { version = "0.9.16" }
+openraft = { version = "0.9.17" }
 # openraft = { version = "0.9.16", features = ["serde", "storage-v2"], path="../openraft/openraft" }

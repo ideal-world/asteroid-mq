@@ -57,11 +57,11 @@ impl ClientNode {
             message_rx,
         })
     }
-    pub async fn connect<R>(url: R) -> Result<Self, ClientNodeError>
+    pub async fn connect<R>(request: R) -> Result<Self, ClientNodeError>
     where
         R: tokio_tungstenite::tungstenite::client::IntoClientRequest + Unpin,
     {
-        let inner = ClientNodeInner::connect(url).await?;
+        let inner = ClientNodeInner::connect(request).await?;
         Ok(ClientNode {
             inner: Arc::new(inner),
         })
