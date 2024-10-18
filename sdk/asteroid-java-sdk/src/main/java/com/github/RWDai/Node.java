@@ -1,20 +1,27 @@
 package com.github.RWDai;
 
 import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.ByteBuffer;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.github.RWDai.EdgeException.NodeException;
 import com.github.RWDai.Types.EdgeEndpointOnline;
 import com.github.RWDai.Types.EdgeError;
 import com.github.RWDai.Types.EdgeMessage;
@@ -22,30 +29,43 @@ import com.github.RWDai.Types.EdgePayload;
 import com.github.RWDai.Types.EdgePushPayload;
 import com.github.RWDai.Types.EdgeRequest;
 import com.github.RWDai.Types.EdgeRequestEnum;
-import com.github.RWDai.Types.EdgeRequestPayload;
 import com.github.RWDai.Types.EdgeResponseEnum;
 import com.github.RWDai.Types.EdgeResponsePayload;
 import com.github.RWDai.Types.EdgeResult;
+import com.github.RWDai.Types.MessageAck;
 import com.github.RWDai.Types.MessagePush;
 import com.github.RWDai.Types.MessageStateUpdate;
-import com.github.RWDai.Types.MessageStatusKind;
 import com.github.RWDai.Types.SendMessageRequest;
 import com.github.RWDai.Types.SetState;
 import com.github.RWDai.Types.SetStateRequest;
 
 public class Node implements AutoCloseable {
-  private static ObjectMapper objectMapper = new ObjectMapper();
+  private static ObjectMapper objectMapper = new ObjectMapper()
+      .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+      .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+  private static final Logger log = LoggerFactory.getLogger(Node.class);
 
   private WebSocketClient socket;
+  private CountDownLatch socketConnectLatch = new CountDownLatch(1);;
   private AtomicInteger requestId = new AtomicInteger(0);
-  // private Map<Integer, CompletableFuture<EdgeResult<EdgeResponseEnum,
-  // EdgeError>>> responseWaitingPool = new HashMap<>();
-  // private Set<CompletableFuture<Void>> openingWaitingPool = new HashSet<>();
   private BlockingQueue<BoxRequest> requestPool = new LinkedBlockingQueue<>();
   private boolean alive = false;
   private Map<String, Endpoint> endpoints = new HashMap<>();
 
   private Node() {
+  }
+
+  public boolean isAlive() {
+    try {
+      socketConnectLatch.await();
+    } catch (InterruptedException e) {
+      throw new NodeException("Failed to connect", e);
+    }
+    return alive;
+  }
+
+  private void setAlive(boolean alive) {
+    this.alive = alive;
   }
 
   protected BlockingQueue<BoxRequest> getRequestPool() {
@@ -84,9 +104,13 @@ public class Node implements AutoCloseable {
       WebSocketClient socket = new WebSocketClient(new URI(url)) {
         @Override
         public void onOpen(ServerHandshake handshakedata) {
-          node.alive = true;
-          // Todo
+          node.setAlive(true);
+          node.socketConnectLatch.countDown();
+        }
 
+        public void onMessage(ByteBuffer bytes) {
+          String message = new String(bytes.array());
+          onMessage(message);
         }
 
         @Override
@@ -99,7 +123,7 @@ public class Node implements AutoCloseable {
               var seqId = ((EdgeResponsePayload) payload).getContent().getSeqId();
               var responseQueue = responsePool.get(seqId);
               if (responseQueue != null) {
-                responseQueue.add(result);
+                responseQueue.put(result);
               }
             } else if (payload instanceof EdgePushPayload) {
               var content = ((EdgePushPayload) payload).getContent();
@@ -112,34 +136,30 @@ public class Node implements AutoCloseable {
                   if (endpoint == null) {
                     continue;
                   }
-                  // TODO
+                  endpoint.getMessageQueue().put(contentMessage);
                 }
               } else {
-
+                log.warn("socket onMessage unknown payload:{}", payload);
               }
             } else {
-
+              log.warn("socket onMessage unknown payload:{}", payload);
             }
-          } catch (JsonMappingException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-          } catch (JsonProcessingException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
+          } catch (InterruptedException | JsonProcessingException e) {
+            log.warn("socket onMessage error", e);
           }
 
         }
 
         @Override
         public void onClose(int code, String reason, boolean remote) {
-          node.alive = false;
+          node.setAlive(false);
         }
 
         @Override
         public void onError(Exception ex) {
-          // 实现 onError 逻辑
-          node.alive = false;
-          ex.printStackTrace();
+          this.close();
+          node.setAlive(false);
+          log.warn("socket onError", ex);
         }
       };
       socket.connect();
@@ -150,26 +170,35 @@ public class Node implements AutoCloseable {
             var boxRequest = node.getRequestPool().take();
             var seq_id = boxRequest.getRequest().getSeqId();
             var message = objectMapper.writeValueAsString(new Types.EdgeRequestPayload(boxRequest.getRequest()));
-            socket.send(message);
+            socket.send(message.getBytes());
             responsePool.put(seq_id, boxRequest.getResponseQueue());
           } catch (InterruptedException | JsonProcessingException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
+            log.warn("socket sendRequest error", e);
           }
         }
       });
       node.socket = socket;
       return node;
-    } catch (Exception e) {
-      throw new RuntimeException("Failed to connect", e);
+    } catch (URISyntaxException e) {
+      throw new NodeException("Failed to connect", e);
     }
   }
 
   public EdgeResult<EdgeResponseEnum, EdgeError> sendMessage(EdgeMessage message) throws InterruptedException {
-    if (!alive) {
-      throw new RuntimeException("Node is not alive");
+    if (!isAlive()) {
+      throw new NodeException("Node is not alive");
     }
     return sendRequest(new SendMessageRequest(message));
+  }
+
+  public Endpoint createEndpoint(String topicCode, List<String> interests) throws InterruptedException {
+    if (!isAlive()) {
+      throw new NodeException("Node is not alive");
+    }
+    var address = sendEndpointsOnline(new EdgeEndpointOnline(topicCode, interests));
+    var endpoint = new Endpoint(this, topicCode, new HashSet<>(interests), address);
+    endpoints.put(address, endpoint);
+    return endpoint;
   }
 
   private EdgeResult<EdgeResponseEnum, EdgeError> sendRequest(EdgeRequestEnum request) throws InterruptedException {
@@ -182,44 +211,23 @@ public class Node implements AutoCloseable {
     return result;
   }
 
-  private void ackMessage(Endpoint endpoint, String messageId, MessageStatusKind state) throws JsonProcessingException {
-    if (alive) {
-      // TODO
-    }
-    var requestId = nextRequestId();
-    var request = new EdgeRequest(requestId, new SetStateRequest(
-        new SetState(endpoint.getTopic(), new MessageStateUpdate(messageId, Map.of(endpoint.getAddress(), state)))));
-    var message = new EdgeRequestPayload(request);
-    this.sendPayload(message);
-    return;
-  }
-
-  private void sendPayload(EdgePayload payload) throws JsonProcessingException {
-    String json = objectMapper.writeValueAsString(payload);
-    socket.send(json.getBytes());
-  }
-
   private int nextRequestId() {
     return requestId.incrementAndGet();
   }
 
-  // private CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>>
-  // waitResponse(int requestId) {
-  // CompletableFuture<EdgeResult<EdgeResponseEnum, EdgeError>> future = new
-  // CompletableFuture<>();
-  // responseWaitingPool.put(requestId, future);
-  // return future;
-  // }
-
-  // private CompletableFuture<Void> waitSocketOpen() {
-  // if (alive) {
-  // return CompletableFuture.completedFuture(null);
-  // } else {
-  // CompletableFuture<Void> future = new CompletableFuture<>();
-  // openingWaitingPool.add(future);
-  // return future;
-  // }
-  // }
+  protected void sendSingleAck(MessageAck ack) throws InterruptedException {
+    var response = sendRequest(
+        new SetStateRequest(new SetState(ack.getTopicCode(), new MessageStateUpdate(ack.getAckTo(),
+            Map.of(ack.getFrom(), ack.getKind())))));
+    if (response instanceof Types.Ok) {
+      @SuppressWarnings("rawtypes")
+      var content = ((Types.Ok) response).getContent();
+      if (content instanceof Types.SetStateResponse) {
+        return;
+      }
+    }
+    throw new EdgeException.UnknownResponseException("Unknown response type");
+  }
 
   private String sendEndpointsOnline(EdgeEndpointOnline request) throws InterruptedException {
     var response = sendRequest(new Types.EndpointOnlineRequest(request));
@@ -228,10 +236,8 @@ public class Node implements AutoCloseable {
       if (content instanceof Types.EndpointOnlineResponse) {
         return ((Types.EndpointOnlineResponse) content).getContent();
       }
-    } else {
-      // TODO handle error
     }
-    return null;
+    throw new EdgeException.UnknownResponseException("Unknown response type");
   }
 
   protected void sendEndpointsOffline(Types.EdgeEndpointOffline request) throws InterruptedException {
@@ -241,10 +247,8 @@ public class Node implements AutoCloseable {
       if (content instanceof Types.EndpointOfflineResponse) {
         return;
       }
-    } else {
-      // TODO handle error
     }
-    return;
+    throw new EdgeException.UnknownResponseException("Unknown response type");
   }
 
   protected void sendEndpointsInterests(Types.EndpointInterestRequest request) throws InterruptedException {
@@ -254,10 +258,8 @@ public class Node implements AutoCloseable {
       if (content instanceof Types.EndpointInterestResponse) {
         return;
       }
-    } else {
-      // TODO handle error
     }
-    return;
+    throw new EdgeException.UnknownResponseException("Unknown response type");
   }
 
   @Override
