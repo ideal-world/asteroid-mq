@@ -3,7 +3,22 @@ members = ["model", "server", "sdk/rust"]
 resolver = "2"
 [workspace.package]
 version = "0.1.0-alpha.1"
-authors = ["4t145 <u4t145@163.com>"]
+authors = ["4t145 <u4t145@163.com>", "RWDai <rwdai@foxmail.com>"]
+edition = "2021"
+homepage = "https://github.com/ideal-world/asteroid-mq"
+documentation = "https://docs.rs/spacegate/asteroid-mq"
+repository = "https://github.com/ideal-world/asteroid-mq"
+license = "MIT/Apache-2.0"
+rust-version = "1.80"
+description = "An embeddable message queue system"
+keywords = ["message-queue", "async", "tokio", "openraft"]
+categories = [
+    "network-programming",
+    "asynchronous",
+    "distributed-systems",
+    "raft",
+    "message-queue",
+]
 
 [workspace.dependencies]
 bytes = { version = "1" }
@@ -35,5 +50,5 @@ typeshare = { version = "1" }
 base64 = "0.22"
 
 # raft
-openraft = { version = "0.9.17" }
+openraft = { version = "=0.9.17" }
 # openraft = { version = "0.9.16", features = ["serde", "storage-v2"], path="../openraft/openraft" }

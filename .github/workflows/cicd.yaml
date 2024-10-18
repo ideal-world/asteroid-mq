@@ -1,0 +1,124 @@
+name: CICD
+
+on: 
+  push:
+    branches:
+      - release
+  pull_request:
+    branches:
+      - release
+
+env:
+  ARTIFACT_DIR: release-artifacts
+
+jobs:
+  model:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+
+      - name: Init rust environment
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: davidB/rust-cargo-make@v1
+
+      - name: Cache rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check format
+        run: cargo fmt -p asteroid-mq-model -- --check
+
+      - name: Check clippy
+        run: cargo clippy -p asteroid-mq-model --all-features
+      - name: Package
+        run: cargo package
+      - name: Cargo login
+        run: cargo login ${{ secrets.CRATES_TOKEN }}
+      - name: Publish dry run
+        run: cargo publish --dry-run
+      - name: Publish
+        run: cargo publish
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: false
+
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          docker-images: false
+          swap-storage: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+    
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@v2
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
+
+      - name: Archive code coverage results
+        uses: actions/upload-artifact@v3
+        with:
+          name: code-coverage-report
+          path: cobertura.xml
+  server:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+
+      - name: Init rust environment
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: davidB/rust-cargo-make@v1
+
+      - name: Cache rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check format
+        run: cargo fmt -p asteroid-mq -- --check
+
+      - name: Check clippy
+        run: cargo clippy -p asteroid-mq --all-features
+      - name: Package
+        run: cargo package
+      - name: Cargo login
+        run: cargo login ${{ secrets.CRATES_TOKEN }}
+      - name: Publish dry run
+        run: cargo publish --dry-run
+      - name: Publish
+        run: cargo publish
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: false
+
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          docker-images: false
+          swap-storage: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+    
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@v2
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
+
+      - name: Archive code coverage results
+        uses: actions/upload-artifact@v3
+        with:
+          name: code-coverage-report
+          path: cobertura.xml

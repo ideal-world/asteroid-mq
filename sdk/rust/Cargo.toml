@@ -1,11 +1,18 @@
 [package]
 name = "asteroid-mq-sdk"
-edition = "2021"
+description = "Rust SDK for asteroid-mq"
 version.workspace = true
 authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
 
 [dependencies]
-asteroid-mq-model = { path = "../../model" }
+asteroid-mq-model = { version = "0.1.0-alpha.1", path = "../../model" }
 futures-util = { workspace = true, features = ["sink"] }
 tokio-tungstenite = "0.24"
 tokio-util = "0.7.12"
@@ -16,6 +23,6 @@ serde_json = { workspace = true }
 
 
 [dev-dependencies]
-reqwest = { version = "0.12"}
+reqwest = { version = "0.12" }
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = "0.3.18"
