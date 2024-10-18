@@ -2,6 +2,7 @@ package com.github.RWDai;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -51,7 +52,7 @@ public class Endpoint implements AutoCloseable {
     }
 
     public void ackFailed() {
-      var ack = this.message.getHeader().ackFailed(this.address, this.topic);
+      var ack = this.message.getHeader().ackFailed(this.topic, this.address);
       try {
         this.node.sendSingleAck(ack);
       } catch (InterruptedException e) {
@@ -61,7 +62,7 @@ public class Endpoint implements AutoCloseable {
     }
 
     public void ackProcessed() {
-      var ack = this.message.getHeader().ackProcessed(this.address, this.topic);
+      var ack = this.message.getHeader().ackProcessed(this.topic, this.address);
       try {
         this.node.sendSingleAck(ack);
       } catch (InterruptedException e) {
@@ -71,7 +72,7 @@ public class Endpoint implements AutoCloseable {
     }
 
     public void ackReceived() {
-      var ack = this.message.getHeader().ackReceived(this.address, this.topic);
+      var ack = this.message.getHeader().ackReceived(this.topic, this.address);
       try {
         this.node.sendSingleAck(ack);
       } catch (InterruptedException e) {
@@ -144,10 +145,13 @@ public class Endpoint implements AutoCloseable {
     }
   }
 
-  public EndpointReceivedMessage nextMessage() {
+  public Optional<EndpointReceivedMessage> nextMessage() {
     try {
       Types.Message message = messageQueue.take();
-      return new EndpointReceivedMessage(this, message);
+      if (message instanceof Types.PoisonMessage) {
+        return Optional.empty();
+      }
+      return Optional.of(new EndpointReceivedMessage(this, message));
     } catch (InterruptedException e) {
       log.error("[Endpoint nextMessage] topic:{},address:{},error:{}", topic, address, e);
       throw new EdgeException.EndpointException(e);
@@ -156,10 +160,15 @@ public class Endpoint implements AutoCloseable {
 
   @Override
   public void close() {
-    Thread.startVirtualThread(() -> {
+    closeEndpoint();
+  }
+
+  protected Thread closeEndpoint() {
+    return Thread.startVirtualThread(() -> {
       try {
         node.sendEndpointsOffline(new Types.EdgeEndpointOffline(topic, address));
         node.getEndpoints().remove(address);
+        messageQueue.put(new Types.PoisonMessage());
         log.info("[Endpoint offline] topic:{},address:{}", topic, address);
       } catch (InterruptedException e) {
         log.error("[Endpoint offline] topic:{},address:{},error:{}", topic, address, e);

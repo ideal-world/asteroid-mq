@@ -3,6 +3,7 @@ package com.github.RWDai;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +20,10 @@ import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import com.github.RWDai.Types.MaybeBase64;
+import com.github.RWDai.Types.MessageStatusKind;
+import com.github.RWDai.Types.SetState;
+import com.github.RWDai.Types.WaitAckError;
+import com.github.RWDai.Types.WaitAckSuccess;
 
 public class Types {
 
@@ -293,24 +297,33 @@ public class Types {
 
     public EdgeMessage(EdgeMessageHeader header, String payload) {
       this.header = header;
-      this.payload = new MaybeBase64(payload);
+      this.payload = new Base64String(payload);
     }
 
     public EdgeMessageHeader getHeader() {
       return header;
     }
 
-    public String getPayload() {
-      return payload;
+    public String getPayloadString() {
+      return payload.getValue();
+    }
+
+    public void setPayloadString(String payload) {
+      this.payload = new Base64String(payload);
     }
 
     public void setHeader(EdgeMessageHeader header) {
       this.header = header;
     }
 
-    public void setPayload(String payload) {
+    public Base64String getPayload() {
+      return payload;
+    }
+
+    public void setPayload(Base64String payload) {
       this.payload = payload;
     }
+
   }
 
   @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "kind")
@@ -801,6 +814,11 @@ public class Types {
     }
   }
 
+  /// Poison pill message, used to close node
+  public static class PoisonMessage extends Message {
+
+  }
+
   public enum MessageStatusKind {
     Sending,
     Unsent,
@@ -1033,13 +1051,32 @@ public class Types {
 
   @JsonTypeName("Message")
   public static class MessagePush extends EdgePush {
-    private List<String> endpoints;
-    private Message message;
+    private MessagePushContent content;
 
     public MessagePush() {
     }
 
-    public MessagePush(List<String> endpoints, Message message) {
+    public MessagePush(MessagePushContent content) {
+      this.content = content;
+    }
+
+    public MessagePushContent getContent() {
+      return content;
+    }
+
+    public void setContent(MessagePushContent content) {
+      this.content = content;
+    }
+  }
+
+  public static class MessagePushContent {
+    private List<String> endpoints;
+    private Message message;
+
+    public MessagePushContent() {
+    }
+
+    public MessagePushContent(List<String> endpoints, Message message) {
       this.endpoints = endpoints;
       this.message = message;
     }

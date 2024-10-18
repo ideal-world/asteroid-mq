@@ -24,15 +24,36 @@ public class ConnectionTest {
   @Test
   public void testConnection() throws IOException, InterruptedException {
     Node node_a = Node.connect(getWsUrl());
+    Node node_b = Node.connect(getWsUrl());
 
     Endpoint endpoint_b1 = node_a.createEndpoint("test", Arrays.asList("event/*"));
+    Endpoint endpoint_b2 = node_b.createEndpoint("test", Arrays.asList("event/**/b2"));
     endpoint_b1.updateInterests(new HashSet<>(Arrays.asList("event/hello")));
-    Thread.startVirtualThread(() -> {
+    var task_b1 = Thread.startVirtualThread(() -> {
       while (true) {
         try {
           var message = endpoint_b1.nextMessage();
-          System.out.println("Received message: " + message.getMessage().getPayload());
-          message.ackProcessed();
+          if (message.isPresent()) {
+            System.out.println("Received message in b1: " + message.get().getMessage().getPayload());
+            message.get().ackProcessed();
+          } else {
+            break;
+          }
+        } catch (Exception e) {
+          e.printStackTrace();
+        }
+      }
+    });
+    var task_b2 = Thread.startVirtualThread(() -> {
+      while (true) {
+        try {
+          var message = endpoint_b2.nextMessage();
+          if (message.isPresent()) {
+            System.out.println("Received message in b2: " + message.get().getMessage().getPayload());
+            message.get().ackProcessed();
+          } else {
+            break;
+          }
         } catch (Exception e) {
           e.printStackTrace();
         }
@@ -45,6 +66,10 @@ public class ConnectionTest {
     node_a.sendMessage(new Types.EdgeMessage(header, "alice"));
     node_a.sendMessage(new Types.EdgeMessage(header, "bob"));
     Thread.sleep(1000L);
+
     node_a.close();
+    node_b.close();
+    task_b1.join();
+    task_b2.join();
   }
 }

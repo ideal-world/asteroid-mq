@@ -3,6 +3,7 @@ package com.github.RWDai;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -19,6 +20,7 @@ import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.github.RWDai.EdgeException.NodeException;
@@ -128,8 +130,8 @@ public class Node implements AutoCloseable {
             } else if (payload instanceof EdgePushPayload) {
               var content = ((EdgePushPayload) payload).getContent();
               if (content instanceof MessagePush) {
-                var contentMessage = ((MessagePush) content).getMessage();
-                var contentEndpoints = ((MessagePush) content).getEndpoints();
+                var contentMessage = ((MessagePush) content).getContent().getMessage();
+                var contentEndpoints = ((MessagePush) content).getContent().getEndpoints();
 
                 for (String endpointName : contentEndpoints) {
                   var endpoint = node.endpoints.get(endpointName);
@@ -232,6 +234,7 @@ public class Node implements AutoCloseable {
   private String sendEndpointsOnline(EdgeEndpointOnline request) throws InterruptedException {
     var response = sendRequest(new Types.EndpointOnlineRequest(request));
     if (response instanceof Types.Ok) {
+      @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
       if (content instanceof Types.EndpointOnlineResponse) {
         return ((Types.EndpointOnlineResponse) content).getContent();
@@ -264,9 +267,18 @@ public class Node implements AutoCloseable {
 
   @Override
   public void close() {
+    var threads = new ArrayList<Thread>();
     // 实现关闭逻辑
     for (Endpoint ep : this.endpoints.values()) {
-      ep.close();
+      threads.add(ep.closeEndpoint());
+    }
+    // 等待上面所有线程结束
+    for (Thread thread : threads) {
+      try {
+        thread.join();
+      } catch (InterruptedException e) {
+        log.warn("close endpoint error", e);
+      }
     }
     socket.close();
   }
