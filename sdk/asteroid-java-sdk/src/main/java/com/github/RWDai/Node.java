@@ -124,6 +124,7 @@ public class Node implements AutoCloseable {
               var seqId = ((EdgeResponsePayload) payload).getContent().getSeqId();
               var responseQueue = responsePool.get(seqId);
               if (responseQueue != null) {
+                log.debug("[Node EdgeResponse] response:{}", result);
                 responseQueue.put(result);
               }
             } else if (payload instanceof EdgePushPayload) {
@@ -137,6 +138,7 @@ public class Node implements AutoCloseable {
                   if (endpoint == null) {
                     continue;
                   }
+                  log.debug("[Node EdgePush] Push payload:{}", contentMessage.getPayload());
                   endpoint.getMessageQueue().put(contentMessage);
                 }
               } else {
@@ -165,12 +167,14 @@ public class Node implements AutoCloseable {
       };
       socket.connect();
 
-      Thread.startVirtualThread(() -> {
+      Thread.ofVirtual().name("send-request-thread").start(() -> {
         while (true) {
           try {
             var boxRequest = node.getRequestPool().take();
             var seq_id = boxRequest.getRequest().getSeqId();
+            log.debug("[Node sendRequest] request: {}", boxRequest.getRequest().getRequest());
             var message = objectMapper.writeValueAsString(new Types.EdgeRequestPayload(boxRequest.getRequest()));
+            log.trace("[Node sendRequest] json request: {}", message);
             socket.send(message.getBytes());
             responsePool.put(seq_id, boxRequest.getResponseQueue());
           } catch (InterruptedException | JsonProcessingException e) {
@@ -199,6 +203,7 @@ public class Node implements AutoCloseable {
     var address = sendEndpointsOnline(new EdgeEndpointOnline(topicCode, interests));
     var endpoint = new Endpoint(this, topicCode, new HashSet<>(interests), address);
     endpoints.put(address, endpoint);
+    log.info("[Node createEndpoint] endpoint: {}", endpoint);
     return endpoint;
   }
 

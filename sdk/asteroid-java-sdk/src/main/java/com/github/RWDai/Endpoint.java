@@ -129,6 +129,11 @@ public class Endpoint implements AutoCloseable {
     this.messageQueue = messageQueue;
   }
 
+  @Override
+  public String toString() {
+    return "Endpoint [topic=" + topic + ", interests=" + interests + ", address=" + address + "]";
+  }
+
   public void modifyInterests(Consumer<Set<String>> modify) {
     Set<String> newInterests = new HashSet<>(interests);
     modify.accept(newInterests);
@@ -164,7 +169,7 @@ public class Endpoint implements AutoCloseable {
   }
 
   protected Thread closeEndpoint() {
-    return Thread.startVirtualThread(() -> {
+    return Thread.ofVirtual().name("close-endpoint-thread").start(() -> {
       try {
         node.sendEndpointsOffline(new Types.EdgeEndpointOffline(topic, address));
         node.getEndpoints().remove(address);

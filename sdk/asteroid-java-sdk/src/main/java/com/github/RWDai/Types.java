@@ -50,6 +50,11 @@ public class Types {
       this.endpoint = endpoint;
     }
 
+    @Override
+    public String toString() {
+      return "EdgeEndpointOffline [topicCode=" + topicCode + ", endpoint=" + endpoint + "]";
+    }
+
   }
 
   public static class EdgeEndpointOnline {
@@ -83,6 +88,11 @@ public class Types {
 
     public void setInterests(List<String> interests) {
       this.interests = interests;
+    }
+
+    @Override
+    public String toString() {
+      return "EdgeEndpointOnline [topicCode=" + topicCode + ", interests=" + interests + "]";
     }
 
   }
@@ -319,6 +329,11 @@ public class Types {
       this.payload = payload;
     }
 
+    @Override
+    public String toString() {
+      return "EdgeMessage [header=" + header + ", payload=" + getPayloadString() + "]";
+    }
+
   }
 
   @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "kind")
@@ -333,6 +348,12 @@ public class Types {
 
     public EdgeRequestEnum() {
     }
+
+    @Override
+    public String toString() {
+      return "EdgeRequestEnum []";
+    }
+
   }
 
   @JsonTypeName("SendMessage")
@@ -353,6 +374,12 @@ public class Types {
     public void setContent(EdgeMessage content) {
       this.content = content;
     }
+
+    @Override
+    public String toString() {
+      return "SendMessageRequest [content=" + content + "]";
+    }
+
   }
 
   @JsonTypeName("EndpointOnline")
@@ -373,6 +400,12 @@ public class Types {
     public void setContent(EdgeEndpointOnline content) {
       this.content = content;
     }
+
+    @Override
+    public String toString() {
+      return "EndpointOnlineRequest [content=" + content + "]";
+    }
+
   }
 
   @JsonTypeName("EndpointOffline")
@@ -393,6 +426,12 @@ public class Types {
     public void setContent(EdgeEndpointOffline content) {
       this.content = content;
     }
+
+    @Override
+    public String toString() {
+      return "EndpointOfflineRequest [content=" + content + "]";
+    }
+
   }
 
   @JsonTypeName("EndpointInterest")
@@ -414,6 +453,11 @@ public class Types {
       this.content = content;
     }
 
+    @Override
+    public String toString() {
+      return "EndpointInterestRequest [content=" + content + "]";
+    }
+
   }
 
   @JsonTypeName("SetState")
@@ -433,6 +477,11 @@ public class Types {
 
     public void setContent(SetState content) {
       this.content = content;
+    }
+
+    @Override
+    public String toString() {
+      return "SetStateRequest [content=" + content + "]";
     }
 
   }
@@ -476,6 +525,12 @@ public class Types {
 
     public EdgeResult() {
     }
+
+    @Override
+    public String toString() {
+      return "EdgeResult []";
+    }
+
   }
 
   @JsonTypeName("Ok")
@@ -496,6 +551,12 @@ public class Types {
     public void setContent(T content) {
       this.content = content;
     }
+
+    @Override
+    public String toString() {
+      return "Ok [content=" + content + "]";
+    }
+
   }
 
   @JsonTypeName("Err")
@@ -517,6 +578,11 @@ public class Types {
       this.content = content;
     }
 
+    @Override
+    public String toString() {
+      return "Err [content=" + content + "]";
+    }
+
   }
 
   @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "kind")
@@ -531,6 +597,12 @@ public class Types {
 
     public EdgeResponseEnum() {
     }
+
+    @Override
+    public String toString() {
+      return "EdgeResponseEnum []";
+    }
+
   }
 
   @JsonTypeName("SendMessage")
@@ -551,6 +623,12 @@ public class Types {
     public void setContent(EdgeResult<WaitAckSuccess, WaitAckError> content) {
       this.content = content;
     }
+
+    @Override
+    public String toString() {
+      return "SendMessageResponse [content=" + content + "]";
+    }
+
   }
 
   @JsonTypeName("EndpointOnline")
@@ -571,24 +649,48 @@ public class Types {
     public void setContent(String content) {
       this.content = content;
     }
+
+    @Override
+    public String toString() {
+      return "EndpointOnlineResponse [content=" + content + "]";
+    }
+
   }
 
   @JsonTypeName("EndpointOffline")
   public static class EndpointOfflineResponse extends EdgeResponseEnum {
     public EndpointOfflineResponse() {
     }
+
+    @Override
+    public String toString() {
+      return "EndpointOfflineResponse []";
+    }
+
   }
 
   @JsonTypeName("EndpointInterest")
   public static class EndpointInterestResponse extends EdgeResponseEnum {
     public EndpointInterestResponse() {
     }
+
+    @Override
+    public String toString() {
+      return "EndpointInterestResponse []";
+    }
+
   }
 
   @JsonTypeName("SetState")
   public static class SetStateResponse extends EdgeResponseEnum {
     public SetStateResponse() {
     }
+
+    @Override
+    public String toString() {
+      return "SetStateResponse []";
+    }
+
   }
 
   public static class EdgeResponse {
@@ -652,6 +754,12 @@ public class Types {
     public void setInterests(List<String> interests) {
       this.interests = interests;
     }
+
+    @Override
+    public String toString() {
+      return "EndpointInterest [topicCode=" + topicCode + ", endpoint=" + endpoint + ", interests=" + interests + "]";
+    }
+
   }
 
   public static class MessageHeader {
@@ -852,6 +960,11 @@ public class Types {
       this.status = status;
     }
 
+    @Override
+    public String toString() {
+      return "MessageStateUpdate [messageId=" + messageId + ", status=" + status + "]";
+    }
+
   }
 
   public static class SetState {
@@ -880,6 +993,11 @@ public class Types {
 
     public void setUpdate(MessageStateUpdate update) {
       this.update = update;
+    }
+
+    @Override
+    public String toString() {
+      return "SetState [topic=" + topic + ", update=" + update + "]";
     }
 
   }
