@@ -1,4 +1,4 @@
-package com.github.RWDai;
+package com.github.idealworld;
 
 public class EdgeException {
 
