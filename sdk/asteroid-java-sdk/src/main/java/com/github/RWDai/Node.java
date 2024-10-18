@@ -20,7 +20,6 @@ import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.github.RWDai.EdgeException.NodeException;
@@ -246,6 +245,7 @@ public class Node implements AutoCloseable {
   protected void sendEndpointsOffline(Types.EdgeEndpointOffline request) throws InterruptedException {
     var response = sendRequest(new Types.EndpointOfflineRequest(request));
     if (response instanceof Types.Ok) {
+      @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
       if (content instanceof Types.EndpointOfflineResponse) {
         return;
@@ -257,6 +257,7 @@ public class Node implements AutoCloseable {
   protected void sendEndpointsInterests(Types.EndpointInterestRequest request) throws InterruptedException {
     var response = sendRequest(request);
     if (response instanceof Types.Ok) {
+      @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
       if (content instanceof Types.EndpointInterestResponse) {
         return;
