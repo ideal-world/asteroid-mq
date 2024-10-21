@@ -1,4 +1,4 @@
-package com.github.idealworld;
+package group.idealworld.dew;
 
 public class EdgeException {
 

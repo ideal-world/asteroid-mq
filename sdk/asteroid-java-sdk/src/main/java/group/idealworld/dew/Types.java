@@ -1,4 +1,4 @@
-package com.github.idealworld;
+package group.idealworld.dew;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

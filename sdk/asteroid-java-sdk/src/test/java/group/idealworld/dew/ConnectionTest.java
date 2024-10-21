@@ -1,4 +1,4 @@
-package com.github.idealworld;
+package group.idealworld.dew;
 
 import java.io.IOException;
 import java.net.URI;
@@ -9,6 +9,10 @@ import java.util.Arrays;
 import java.util.HashSet;
 
 import org.junit.jupiter.api.Test;
+
+import group.idealworld.dew.Endpoint;
+import group.idealworld.dew.Node;
+import group.idealworld.dew.Types;
 
 public class ConnectionTest {
   public String getWsUrl() throws IOException, InterruptedException {
