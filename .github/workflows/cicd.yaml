@@ -38,14 +38,14 @@ jobs:
       - name: Package
         if: ${{ github.ref_name == 'release' }}
         run: cargo package
-      - name: Cargo login
+      - name: Cargo login z
         run: cargo login ${{ secrets.CRATES_TOKEN }}
       - name: Publish dry run
         if: ${{ github.ref_name == 'release' }}
-        run: cargo publish --dry-run
+        run: cargo publish -p asteroid-mq-model --dry-run
       - name: Publish
         if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
-        run: cargo publish
+        run: cargo publish -p asteroid-mq-model
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
@@ -101,10 +101,10 @@ jobs:
         run: cargo login ${{ secrets.CRATES_TOKEN }}
       - name: Publish dry run
         if: ${{ github.ref_name == 'release' }}
-        run: cargo publish --dry-run
+        run: cargo publish -p asteroid-mq --dry-run
       - name: Publish
         if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
-        run: cargo publish
+        run: cargo publish -p asteroid-mq
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
@@ -149,10 +149,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Check format
-        run: cargo fmt -p asteroid-sdk -- --check
+        run: cargo fmt -p asteroid-mq-sdk -- --check
 
       - name: Check clippy
-        run: cargo clippy -p asteroid-sdk --all-features
+        run: cargo clippy -p asteroid-mq-sdk --all-features
       - name: Package
         if: ${{ github.ref_name == 'release' }}
         run: cargo package
@@ -160,10 +160,10 @@ jobs:
         run: cargo login ${{ secrets.CRATES_TOKEN }}
       - name: Publish dry run
         if: ${{ github.ref_name == 'release' }}
-        run: cargo publish --dry-run
+        run: cargo publish -p asteroid-mq-sdk --dry-run
       - name: Publish
         if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
-        run: cargo publish
+        run: cargo publish -p asteroid-mq-sdk
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
