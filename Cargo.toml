@@ -15,9 +15,6 @@ keywords = ["message-queue", "async", "tokio", "openraft"]
 categories = [
     "network-programming",
     "asynchronous",
-    "distributed-systems",
-    "raft",
-    "message-queue",
 ]
 
 [workspace.dependencies]
