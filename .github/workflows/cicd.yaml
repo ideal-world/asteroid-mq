@@ -225,4 +225,5 @@ jobs:
             deploy \
             -Dmaven.test.skip=true \
             -DskipTests \
+            -X \
             --file sdk/asteroid-java-sdk/pom.xml
