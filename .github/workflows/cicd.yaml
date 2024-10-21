@@ -197,18 +197,23 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
-
+          server-id: ossrh # Value of the distributionManagement/repository/id field of the pom.xml
+          server-username: OSSRH_USERNAME # env variable for username in deploy
+          server-password: OSSRH_TOKEN # env variable for token in deploy
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
       - name: Build with Maven
-        run: mvn -B package --file sdk/asteroid-java-sdk/pom.xml
+        run: mvn -B package -Dmaven.test.skip=true --file sdk/asteroid-java-sdk/pom.xml
 
       - name: Publish to Maven Central
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
         run: |
           mvn \
@@ -217,5 +222,4 @@ jobs:
             deploy \
             -Dmaven.test.skip=true \
             -DskipTests \
-            -Dgpg.passphrase=${{ secrets.GPG_PASSPHRASE }} \
             --file sdk/asteroid-java-sdk/pom.xml
