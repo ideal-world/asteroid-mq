@@ -165,7 +165,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/release-') }}
         run: cargo publish -p asteroid-mq-sdk --dry-run
       - name: Publish
-        if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/release-') }}
         run: cargo publish -p asteroid-mq-sdk
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -217,7 +217,7 @@ jobs:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/release-java-sdk-') }}
         run: |
           mvn \
             --no-transfer-progress \
