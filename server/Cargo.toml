@@ -3,7 +3,7 @@ name = "asteroid-mq"
 version = "0.1.0"
 edition = "2021"
 [dependencies]
-asteroid-mq-model = { path = "../model" }
+asteroid-mq-model = { version = "0.1.0-alpha.1" }
 bytes = { workspace = true, features = ["serde"] }
 chrono.workspace = true
 flume.workspace = true
