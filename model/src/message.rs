@@ -235,7 +235,6 @@ impl Message {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[typeshare]
 pub struct MessageHeader {
