@@ -37,7 +37,7 @@ jobs:
         run: cargo clippy -p asteroid-mq-model --all-features
       - name: Package
         if: ${{ github.ref_name == 'release' }}
-        run: cargo package
+        run: cargo package -p asteroid-mq-model
       - name: Cargo login z
         run: cargo login ${{ secrets.CRATES_TOKEN }}
       - name: Publish dry run
@@ -96,7 +96,7 @@ jobs:
         run: cargo clippy -p asteroid-mq --all-features
       - name: Package
         if: ${{ github.ref_name == 'release' }}
-        run: cargo package
+        run: cargo package -p asteroid-mq
       - name: Cargo login
         run: cargo login ${{ secrets.CRATES_TOKEN }}
       - name: Publish dry run
@@ -155,7 +155,7 @@ jobs:
         run: cargo clippy -p asteroid-mq-sdk --all-features
       - name: Package
         if: ${{ github.ref_name == 'release' }}
-        run: cargo package
+        run: cargo package -p asteroid-mq-sdk
       - name: Cargo login
         run: cargo login ${{ secrets.CRATES_TOKEN }}
       - name: Publish dry run
