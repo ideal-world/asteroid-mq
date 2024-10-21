@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - release
+      - master
   pull_request:
     branches:
       - release
+      - master
 
 env:
   ARTIFACT_DIR: release-artifacts
@@ -34,12 +36,15 @@ jobs:
       - name: Check clippy
         run: cargo clippy -p asteroid-mq-model --all-features
       - name: Package
+        if: ${{ github.ref_name == 'release' }}
         run: cargo package
       - name: Cargo login
         run: cargo login ${{ secrets.CRATES_TOKEN }}
       - name: Publish dry run
+        if: ${{ github.ref_name == 'release' }}
         run: cargo publish --dry-run
       - name: Publish
+        if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
         run: cargo publish
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -68,6 +73,7 @@ jobs:
           name: code-coverage-report
           path: cobertura.xml
   server:
+    needs: model
     runs-on: ubuntu-22.04
     steps:
       - name: Check out the repo
@@ -89,12 +95,74 @@ jobs:
       - name: Check clippy
         run: cargo clippy -p asteroid-mq --all-features
       - name: Package
+        if: ${{ github.ref_name == 'release' }}
         run: cargo package
       - name: Cargo login
         run: cargo login ${{ secrets.CRATES_TOKEN }}
       - name: Publish dry run
+        if: ${{ github.ref_name == 'release' }}
         run: cargo publish --dry-run
       - name: Publish
+        if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
+        run: cargo publish
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: false
+
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          docker-images: false
+          swap-storage: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+    
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@v2
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
+
+      - name: Archive code coverage results
+        uses: actions/upload-artifact@v3
+        with:
+          name: code-coverage-report
+          path: cobertura.xml
+  rust-sdk:
+    needs: [model]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+
+      - name: Init rust environment
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: davidB/rust-cargo-make@v1
+
+      - name: Cache rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check format
+        run: cargo fmt -p asteroid-sdk -- --check
+
+      - name: Check clippy
+        run: cargo clippy -p asteroid-sdk --all-features
+      - name: Package
+        if: ${{ github.ref_name == 'release' }}
+        run: cargo package
+      - name: Cargo login
+        run: cargo login ${{ secrets.CRATES_TOKEN }}
+      - name: Publish dry run
+        if: ${{ github.ref_name == 'release' }}
+        run: cargo publish --dry-run
+      - name: Publish
+        if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
         run: cargo publish
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -141,6 +209,7 @@ jobs:
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+        if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name == 'release' }}
         run: |
           mvn \
             --no-transfer-progress \
