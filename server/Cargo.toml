@@ -49,6 +49,6 @@ cbor = ["dep:ciborium"]
 [dev-dependencies]
 tracing-subscriber = "0.3.18"
 serde_json = "1.0.120"
-console-subscriber = "*"
+console-subscriber = "0.4"
 axum = { version = "0.7", features = ["ws"] }
-rand = "*"
+rand = "0"
