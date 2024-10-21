@@ -1,4 +1,4 @@
-package com.github.idealworld;
+package group.idealworld.asteroid;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -22,23 +22,24 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
-import com.github.idealworld.EdgeException.NodeException;
-import com.github.idealworld.Types.EdgeEndpointOnline;
-import com.github.idealworld.Types.EdgeError;
-import com.github.idealworld.Types.EdgeMessage;
-import com.github.idealworld.Types.EdgePayload;
-import com.github.idealworld.Types.EdgePushPayload;
-import com.github.idealworld.Types.EdgeRequest;
-import com.github.idealworld.Types.EdgeRequestEnum;
-import com.github.idealworld.Types.EdgeResponseEnum;
-import com.github.idealworld.Types.EdgeResponsePayload;
-import com.github.idealworld.Types.EdgeResult;
-import com.github.idealworld.Types.MessageAck;
-import com.github.idealworld.Types.MessagePush;
-import com.github.idealworld.Types.MessageStateUpdate;
-import com.github.idealworld.Types.SendMessageRequest;
-import com.github.idealworld.Types.SetState;
-import com.github.idealworld.Types.SetStateRequest;
+
+import group.idealworld.asteroid.EdgeException.NodeException;
+import group.idealworld.asteroid.Types.EdgeEndpointOnline;
+import group.idealworld.asteroid.Types.EdgeError;
+import group.idealworld.asteroid.Types.EdgeMessage;
+import group.idealworld.asteroid.Types.EdgePayload;
+import group.idealworld.asteroid.Types.EdgePushPayload;
+import group.idealworld.asteroid.Types.EdgeRequest;
+import group.idealworld.asteroid.Types.EdgeRequestEnum;
+import group.idealworld.asteroid.Types.EdgeResponseEnum;
+import group.idealworld.asteroid.Types.EdgeResponsePayload;
+import group.idealworld.asteroid.Types.EdgeResult;
+import group.idealworld.asteroid.Types.MessageAck;
+import group.idealworld.asteroid.Types.MessagePush;
+import group.idealworld.asteroid.Types.MessageStateUpdate;
+import group.idealworld.asteroid.Types.SendMessageRequest;
+import group.idealworld.asteroid.Types.SetState;
+import group.idealworld.asteroid.Types.SetStateRequest;
 
 public class Node implements AutoCloseable {
   private static ObjectMapper objectMapper = new ObjectMapper()

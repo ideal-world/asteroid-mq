@@ -1,4 +1,4 @@
-package com.github.idealworld;
+package group.idealworld.asteroid;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -11,7 +11,7 @@ import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.github.idealworld.Types.Message;
+import group.idealworld.asteroid.Types.Message;
 
 public class Endpoint implements AutoCloseable {
   private static final Logger log = LoggerFactory.getLogger(Endpoint.class);
