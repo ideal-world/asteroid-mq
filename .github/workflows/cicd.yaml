@@ -227,3 +227,27 @@ jobs:
             -DskipTests \
             -X \
             --file sdk/asteroid-java-sdk/pom.xml
+  release-js-sdk:
+    runs-on: ubuntu-latest
+    name: publish
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: cd sdk/typescript && npm ci
+
+      - name: Build
+        run: cd sdk/typescript && npm run build
+
+      - name: Publish
+        if: ${{ startsWith(github.ref, 'refs/tags/release-typescript-sdk-') }}
+        run: cd sdk/typescript && npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
