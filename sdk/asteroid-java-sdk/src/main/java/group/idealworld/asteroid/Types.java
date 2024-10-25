@@ -1,4 +1,4 @@
-package com.github.idealworld;
+package group.idealworld.asteroid;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

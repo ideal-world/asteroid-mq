@@ -1,9 +1,18 @@
 [package]
 name = "asteroid-mq"
-version = "0.1.0"
-edition = "2021"
+description.workspace = true
+version.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+
 [dependencies]
-asteroid-mq-model = { path = "../model" }
+asteroid-mq-model = { version = "0.1.0-alpha.3", path = "../model" }
 bytes = { workspace = true, features = ["serde"] }
 chrono.workspace = true
 flume.workspace = true
@@ -40,6 +49,6 @@ cbor = ["dep:ciborium"]
 [dev-dependencies]
 tracing-subscriber = "0.3.18"
 serde_json = "1.0.120"
-console-subscriber = "*"
+console-subscriber = "0.4"
 axum = { version = "0.7", features = ["ws"] }
-rand = "*"
+rand = "0"
