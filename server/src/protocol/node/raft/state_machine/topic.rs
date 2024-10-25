@@ -60,6 +60,7 @@ impl TopicData {
         ep_collect
     }
     pub fn hold_new_message(&mut self, message: Message, ctx: &mut ProposalContext) {
+        let durable = message.header.durability.is_some();
         let ep_collect = match message.header.target_kind {
             MessageTargetKind::Durable | MessageTargetKind::Online => {
                 self.collect_addr_by_subjects(message.header.subjects.iter())
@@ -122,7 +123,9 @@ impl TopicData {
                 }
             }
             self.queue.push(hold_message);
-            ctx.push_durable_command(DurableCommand::Create(message.clone()));
+            if durable {
+                ctx.push_durable_command(DurableCommand::Create(message.clone()));
+            }
         }
         self.update_and_flush(MessageStateUpdate::new_empty(message.id()), ctx);
         tracing::debug!(?ep_collect, "hold new message");
