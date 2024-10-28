@@ -134,6 +134,14 @@ impl MessageId {
         addr.copy_from_slice(&bytes);
         Ok(Self { bytes: addr })
     }
+    pub fn to_u128(&self) -> u128 {
+        u128::from_be_bytes(self.bytes)
+    }
+    pub fn from_u128(v: u128) -> Self {
+        Self {
+            bytes: v.to_be_bytes(),
+        }
+    }
 }
 
 impl Serialize for MessageId {

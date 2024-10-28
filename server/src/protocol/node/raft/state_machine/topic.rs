@@ -7,10 +7,11 @@ use crate::{
         endpoint::EndpointAddr,
         interest::InterestMap,
         message::*,
-        node::raft::proposal::{MessageStateUpdate, ProposalContext},
+        node::raft::proposal::{MessageStateUpdate, Proposal, ProposalContext},
         topic::durable_message::DurableCommand,
     },
 };
+use asteroid_mq_model::SetState;
 use config::TopicConfig;
 use message_queue::{HoldMessage, MessageQueue};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,7 @@ use std::{
     collections::{HashMap, HashSet},
     task::Poll,
 };
+use tsuki_scheduler::{Task, TaskUid};
 use wait_ack::{WaitAck, WaitAckError, WaitAckErrorException};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,7 +62,6 @@ impl TopicData {
         ep_collect
     }
     pub fn hold_new_message(&mut self, message: Message, ctx: &mut ProposalContext) {
-        let durable = message.header.durability.is_some();
         let ep_collect = match message.header.target_kind {
             MessageTargetKind::Durable | MessageTargetKind::Online => {
                 self.collect_addr_by_subjects(message.header.subjects.iter())
@@ -123,7 +124,35 @@ impl TopicData {
                 }
             }
             self.queue.push(hold_message);
-            if durable {
+            if let Some(durable_config) = &message.header.durability {
+                let topic = ctx.topic_code.clone().expect("topic code not set");
+                let node = ctx.node.clone();
+                let message_id = message.id();
+                ctx.node.scheduler.add_task(
+                    TaskUid::new(message.id().to_u128()),
+                    Task::tokio(
+                        tsuki_scheduler::schedule::Once::new(durable_config.expire),
+                        move || {
+                            let node = node.clone();
+                            let topic = topic.clone();
+                            async move {
+                                if node.raft().await.ensure_linearizable().await.is_err() {
+                                    tracing::trace!("raft not leader, skip durable commands");
+                                    return;
+                                }
+                                let result = node
+                                    .propose(Proposal::SetState(SetState {
+                                        topic,
+                                        update: MessageStateUpdate::new_empty(message_id),
+                                    }))
+                                    .await;
+                                if let Err(e) = result {
+                                    tracing::warn!(?e, "proposal expire message failed");
+                                }
+                            }
+                        },
+                    ),
+                );
                 ctx.push_durable_command(DurableCommand::Create(message.clone()));
             }
         }

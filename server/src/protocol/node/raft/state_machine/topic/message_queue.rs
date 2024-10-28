@@ -100,10 +100,6 @@ impl HoldMessage {
     }
 }
 
-pub enum MessageContainer {
-    Durable(),
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct MessageQueue {
     pub(crate) blocking: bool,

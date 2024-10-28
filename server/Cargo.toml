@@ -23,6 +23,9 @@ pin-project-lite.workspace = true
 # async runtime
 tokio = { workspace = true, features = ["full", "tracing"] }
 
+# scheduling
+tsuki-scheduler = { workspace = true, no_default_features = true, features = ["tokio", "async-scheduler"] }
+
 # tracing
 tracing.workspace = true
 

@@ -5,6 +5,7 @@ use std::{
     net::SocketAddr,
     ops::Deref,
     sync::{self, Arc, RwLock},
+    time::Duration,
 };
 
 use super::{
@@ -78,8 +79,10 @@ pub struct NodeInner {
     codec_registry: Arc<CodecRegistry>,
     topics: RwLock<HashMap<TopicCode, Topic>>,
     durable_commands_queue: std::sync::RwLock<VecDeque<DurableCommand>>,
-    ct: CancellationToken,
+    /// ensure operations on the same topic are linearizable
     pub(crate) durable_syncs: tokio::sync::Mutex<HashMap<TopicCode, Arc<tokio::sync::Mutex<()>>>>,
+    pub(crate) scheduler: tsuki_scheduler::AsyncSchedulerClient<tsuki_scheduler::runtime::Tokio>,
+    ct: CancellationToken,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -126,6 +129,12 @@ impl Node {
         let raft = MaybeLoadingRaft::new();
         let network =
             raft.net_work_service(config.id, BasicNode::new(config.addr), ct.child_token());
+        let scheduler_runner = tsuki_scheduler::AsyncSchedulerRunner::tokio()
+            .with_execute_duration(Duration::from_secs(1));
+        let scheduler_client = scheduler_runner.client();
+        let scheduler_running =
+            scheduler_runner.run_with_shutdown_signal(Box::pin(ct.child_token().cancelled_owned()));
+        tokio::spawn(scheduler_running);
         let inner = NodeInner {
             edge_connections: RwLock::new(HashMap::new()),
             edge_routing: RwLock::new(HashMap::new()),
@@ -136,6 +145,7 @@ impl Node {
             network,
             durable_commands_queue: Default::default(),
             durable_syncs: Default::default(),
+            scheduler: scheduler_client,
             ct,
         };
         Self {

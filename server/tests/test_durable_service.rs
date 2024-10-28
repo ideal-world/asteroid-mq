@@ -11,6 +11,8 @@ use asteroid_mq::{
     },
     DEFAULT_TCP_SOCKET_ADDR,
 };
+use asteroid_mq_model::MessageDurableConfig;
+use chrono::Utc;
 use tokio::sync::RwLock;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 #[derive(Debug, Default)]
@@ -197,7 +199,12 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let message = Message::new(
-        MessageHeader::builder([Subject::new("event/all")]).build(),
+        MessageHeader::builder([Subject::new("event/all")])
+            .mode_durable(MessageDurableConfig {
+                expire: Utc::now() + chrono::Duration::seconds(10),
+                max_receiver: Some(2),
+            })
+            .build(),
         "hello",
     );
     let handle = topic.send_message(message).await?;

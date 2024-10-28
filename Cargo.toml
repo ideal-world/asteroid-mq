@@ -28,6 +28,9 @@ pin-project-lite = "0.2"
 # async runtime
 tokio = { version = "1" }
 
+# scheduling
+tsuki-scheduler = { version = "0.1" }
+
 # tracing
 tracing = "0.1"
 
