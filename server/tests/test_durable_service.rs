@@ -202,12 +202,15 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
         MessageHeader::builder([Subject::new("event/all")])
             .mode_durable(MessageDurableConfig {
                 expire: Utc::now() + chrono::Duration::seconds(10),
-                max_receiver: Some(2),
+                max_receiver: Some(3),
             })
             .build(),
         "hello",
     );
     let handle = topic.send_message(message).await?;
+    let newly_joined_endpoint = topic.create_endpoint([Interest::new("event/**")]).await?;
+    let pushed_message = newly_joined_endpoint.next_message().await;
+    assert!(pushed_message.is_some());
     let result = handle.await;
     assert!(result.is_ok());
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;

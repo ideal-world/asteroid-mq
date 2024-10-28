@@ -440,6 +440,9 @@ impl Node {
             .unwrap()
             .insert(addr, (edge, topic));
     }
+    pub(crate) fn remove_edge_routing(&self, addr: &EndpointAddr) {
+        self.edge_routing.write().unwrap().remove(addr);
+    }
     pub fn get_edge_connection(&self, to: NodeId) -> Option<EdgeConnectionRef> {
         let connections = self.edge_connections.read().unwrap();
         let conn = connections.get(&to)?;
@@ -544,21 +547,24 @@ impl Node {
                 })?;
                 let node = topic.node();
                 let endpoint = EndpointAddr::new_snowflake();
-                node.propose(Proposal::EpOnline(EndpointOnline {
-                    topic_code: topic_code.clone(),
-                    interests: online.interests,
-                    endpoint,
-                    host: node.id(),
-                }))
-                .await
-                .map_err(|e| {
-                    EdgeError::with_message(
+                self.set_edge_routing(endpoint, from, topic_code.clone());
+                let result = node
+                    .propose(Proposal::EpOnline(EndpointOnline {
+                        topic_code,
+                        interests: online.interests,
+                        endpoint,
+                        host: node.id(),
+                    }))
+                    .await;
+                if let Err(e) = result {
+                    // rollback edge routing change
+                    self.remove_edge_routing(&endpoint);
+                    return Err(EdgeError::with_message(
                         "endpoint online",
                         e.to_string(),
                         EdgeErrorKind::Internal,
-                    )
-                })?;
-                self.set_edge_routing(endpoint, from, topic_code);
+                    ));
+                }
                 Ok(edge::EdgeResponseEnum::EndpointOnline(endpoint))
             }
             edge::EdgeRequestEnum::EndpointOffline(offline) => {
@@ -584,7 +590,7 @@ impl Node {
                         EdgeErrorKind::Internal,
                     )
                 })?;
-                self.edge_routing.write().unwrap().remove(&offline.endpoint);
+                self.remove_edge_routing(&offline.endpoint);
                 Ok(edge::EdgeResponseEnum::EndpointOffline)
             }
             edge::EdgeRequestEnum::EndpointInterest(interest) => {
