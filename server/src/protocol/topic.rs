@@ -114,6 +114,10 @@ impl Topic {
                 attached_topic: self.reference(),
             }),
         };
+        self.local_endpoints
+            .write()
+            .unwrap()
+            .insert(ep.address, ep.reference());
         self.node()
             .propose(Proposal::EpOnline(EndpointOnline {
                 topic_code: topic_code.clone(),
@@ -121,11 +125,11 @@ impl Topic {
                 interests: ep.interest.clone(),
                 host: self.node.id(),
             }))
-            .await?;
-        self.local_endpoints
-            .write()
-            .unwrap()
-            .insert(ep.address, ep.reference());
+            .await
+            .inspect_err(|err| {
+                self.local_endpoints.write().unwrap().remove(&ep.address);
+                tracing::error!(?err, "create endpoint failed");
+            })?;
         Ok(ep)
     }
     pub async fn delete_endpoint(&self, addr: EndpointAddr) -> Result<(), crate::Error> {
@@ -152,9 +156,8 @@ impl Topic {
         } else {
             // message is edge
             let node = self.node();
-            tracing::debug!(?ep, "dispatch message to edge");
             let node_id = node.get_edge_routing(ep)?;
-            tracing::debug!(?node_id, "dispatch message to edge");
+            tracing::debug!(%node_id, ?ep, "dispatch message to edge");
             let edge = node.get_edge_connection(node_id)?;
             let result = edge.push_message(ep, message);
             if let Err(err) = result {

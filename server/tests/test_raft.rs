@@ -1,15 +1,30 @@
 use asteroid_mq::protocol::node::{Node, NodeConfig, NodeId};
 use std::{
     net::{Ipv4Addr, SocketAddr},
+    str::FromStr,
     time::Duration,
 };
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 mod common;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_raft() {
     // let console_layer = console_subscriber::spawn();
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+    tracing_subscriber::registry()
+        // .with(console_layer)
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(
+                tracing_subscriber::filter::EnvFilter::from_default_env()
+                    .add_directive(tracing_subscriber::filter::Directive::from_str("warn").unwrap())
+                    .add_directive(
+                        tracing_subscriber::filter::Directive::from_str("asteroid_mq=debug")
+                            .unwrap(),
+                    )
+                    .add_directive(
+                        tracing_subscriber::filter::Directive::from_str("openraft=warn").unwrap(),
+                    ),
+            ),
+        )
         .init();
     fn raft_config() -> openraft::Config {
         openraft::Config {
@@ -64,14 +79,6 @@ async fn test_raft() {
         .await;
     node_1.init_raft(cluster.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
-    node_1
-        .raft()
-        .await
-        .with_raft_state(|rs| {
-            tracing::info!(?rs.server_state);
-        })
-        .await
-        .unwrap();
 
     cluster
         .update(map!(
@@ -81,14 +88,7 @@ async fn test_raft() {
         ))
         .await;
     node_3.init_raft(cluster.clone()).await.unwrap();
-    node_3
-        .raft()
-        .await
-        .with_raft_state(|f| {
-            tracing::info!(?f.membership_state);
-        })
-        .await
-        .unwrap();
+
     tokio::time::sleep(Duration::from_secs(5)).await;
     drop(node_2);
     cluster
