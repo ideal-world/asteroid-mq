@@ -124,7 +124,11 @@ impl TopicData {
                 }
             }
             self.queue.push(hold_message);
-            if let Some(durable_config) = &message.header.durability {
+            if let Some(durable_config) = &message.header.durability
+            {
+                if message.header.target_kind == MessageTargetKind::Durable {
+                    tracing::warn!("durable message should have durable target kind");
+                };
                 let topic = ctx.topic_code.clone().expect("topic code not set");
                 let node = ctx.node.clone();
                 let message_id = message.id();
