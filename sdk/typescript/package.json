@@ -11,7 +11,7 @@
     "typescript": "^5.5.4"
   },
   "name": "asteroid-mq-sdk",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "module": "index.ts",
   "scripts": {
     "test": "jest",

@@ -69,10 +69,10 @@ export interface ReceivedMessage {
 function fromConfig(config: MessageConfig): EdgeMessageHeader {
     const ack_kind = config.ackKind ?? MessageAckExpectKind.Sent;
     const target_kind = config.targetKind ?? MessageTargetKind.Push;
-    const durability = {
-        expire: config.durability?.expire ?? new Date(Date.UTC(9999, 12, 31, 23, 59, 59, 999)),
-        max_receiver: config.durability?.maxReceiver
-    };
+    const durability = config.durability ? {
+        expire: config.durability.expire,
+        max_receiver: config.durability.maxReceiver
+    } : undefined;
     return {
         ack_kind,
         target_kind,
