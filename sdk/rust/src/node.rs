@@ -8,7 +8,7 @@ pub use crate::error::*;
 use asteroid_mq_model::{
     EdgeEndpointOffline, EdgeEndpointOnline, EdgeError, EdgeMessage, EdgePayload, EdgePush,
     EdgeRequest, EdgeRequestEnum, EdgeResponseEnum, EndpointAddr, EndpointInterest, Interest,
-    MessageAck, MessageStateUpdate, SetState, TopicCode, WaitAckSuccess,
+    Message, MessageAck, MessageStateUpdate, SetState, TopicCode, WaitAckSuccess,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{oneshot, RwLock};
@@ -39,8 +39,6 @@ impl ClientNode {
         interests: impl IntoIterator<Item = Interest>,
     ) -> Result<ClientEndpoint, ClientNodeError> {
         let interests = interests.into_iter().collect::<HashSet<_>>();
-        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mailbox = EndpointMailbox { message_tx };
         let addr = self
             .inner
             .send_ep_online(EdgeEndpointOnline {
@@ -48,7 +46,11 @@ impl ClientNode {
                 interests: interests.iter().cloned().collect(),
             })
             .await?;
-        self.inner.endpoint_map.write().await.insert(addr, mailbox);
+        let message_rx = self
+            .inner
+            .ensure_mailbox_and_take_rx(addr)
+            .await
+            .expect("conflict endpoint addr should not happen");
         Ok(ClientEndpoint {
             addr,
             topic_code,
@@ -80,6 +82,17 @@ pub(crate) struct ClientNodeInner {
 }
 
 impl ClientNodeInner {
+    async fn ensure_mailbox_and_take_rx(
+        &self,
+        addr: EndpointAddr,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<Message>> {
+        self.endpoint_map
+            .write()
+            .await
+            .entry(addr)
+            .or_insert_with(EndpointMailbox::new)
+            .take_rx()
+    }
     async fn send_message(&self, message: EdgeMessage) -> Result<WaitAckSuccess, ClientNodeError> {
         let response = self
             .send_request(EdgeRequestEnum::SendMessage(message))
@@ -273,18 +286,24 @@ impl ClientNodeInner {
                     match payload {
                         EdgePayload::Push(EdgePush::Message { endpoints, message }) => {
                             tracing::trace!(endpoints = ?endpoints, ?message, "received message");
-                            let rg = endpoints_map.read().await;
+                            let mut wg = endpoints_map.write().await;
                             for ep in endpoints {
-                                if let Some(mailbox) = rg.get(&ep) {
+                                if let Some(mailbox) = wg.get(&ep) {
                                     let send_result = mailbox.message_tx.send(message.clone());
                                     if send_result.is_err() {
                                         tracing::warn!(addr=?ep, "target endpoint is dropped")
                                     }
                                 } else {
+                                    let mailbox = EndpointMailbox::new();
+                                    mailbox
+                                        .message_tx
+                                        .send(message.clone())
+                                        .expect("a brand new channel must have the receiver");
+                                    wg.insert(ep, mailbox);
                                     tracing::warn!(addr=?ep, "target endpoint not found")
                                 }
                             }
-                            drop(rg);
+                            drop(wg);
                         }
                         EdgePayload::Response(edge_response) => {
                             let seq_id = edge_response.seq_id;

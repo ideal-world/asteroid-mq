@@ -1,7 +1,6 @@
 import { Endpoint } from "./endpoint";
 import { EdgeErrorClass, WaitAckErrorClass } from "./error";
-import { ReceivedMessage } from "./message";
-import { EdgeError, EdgeMessage, EdgePayload, EdgeRequest, EdgeResponseEnum, EdgeResult, EndpointAddr, Interest, MessageStatusKind, TopicCode } from "./types";
+import { EdgeError, EdgeMessage, EdgePayload, EdgeRequest, EdgeResponseEnum, EdgeResult, EndpointAddr, Interest, Message, MessageStatusKind, TopicCode } from "./types";
 
 
 export class Node {
@@ -17,7 +16,8 @@ export class Node {
     }>();
     private alive = false;
     private endpoints = new Map<EndpointAddr, Endpoint>;
-    private textDecoder = new TextDecoder();
+    private tempMailbox = new Map<EndpointAddr, Array<Message>>;
+    public textDecoder = new TextDecoder();
 
     /**
      * Create a new Node by connecting to the given URL
@@ -54,29 +54,14 @@ export class Node {
                                         for (const ep of endpoints) {
                                             const endpoint = node.endpoints.get(ep);
                                             if (endpoint === undefined) {
+                                                if (!node.tempMailbox.has(ep)) {
+                                                    node.tempMailbox.set(ep, []);
+                                                }
+                                                let buf = node.tempMailbox.get(ep);
+                                                buf?.push(message);
                                                 continue;
                                             }
-                                            let receivedMessage: ReceivedMessage = {
-                                                header: message.header,
-                                                payload: new Uint8Array(Buffer.from(atob(message.payload))),
-                                                received: async () => {
-                                                    await node.ackMessage(endpoint, message.header.message_id, MessageStatusKind.Received);
-                                                },
-                                                processed: async () => {
-                                                    await node.ackMessage(endpoint, message.header.message_id, MessageStatusKind.Processed);
-                                                },
-                                                failed: async () => {
-                                                    await node.ackMessage(endpoint, message.header.message_id, MessageStatusKind.Failed);
-                                                },
-                                                json: () => {
-                                                    return JSON.parse(node.textDecoder.decode(receivedMessage.payload));
-                                                },
-                                                text: () => {
-                                                    return node.textDecoder.decode(receivedMessage.payload);
-                                                },
-                                                endpoint
-                                            }
-                                            endpoint.receive(receivedMessage);
+                                            endpoint.receive(message);
                                         }
 
                                     }
@@ -174,6 +159,13 @@ export class Node {
             interest: new Set(interests)
         });
         this.endpoints.set(addr, endpoint);
+        let buf = this.tempMailbox.get(addr);
+        if (buf !== undefined) {
+            for (const message of buf) {
+                endpoint.receive(message);
+            }
+            this.tempMailbox.delete(addr);
+        }
         return endpoint
     }
     public async destroyEndpoint(endpoint: Endpoint): Promise<void> {

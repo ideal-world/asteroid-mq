@@ -35,11 +35,31 @@ export class Endpoint {
         await this.node.updateInterests(this, interests);
         this.interests = new Set(interests);
     }
-    public receive(message: ReceivedMessage) {
+    public receive(message: Message) {
+        let receivedMessage: ReceivedMessage = {
+            header: message.header,
+            payload: new Uint8Array(Buffer.from(atob(message.payload))),
+            received: async () => {
+                await this.node.ackMessage(this, message.header.message_id, MessageStatusKind.Received);
+            },
+            processed: async () => {
+                await this.node.ackMessage(this, message.header.message_id, MessageStatusKind.Processed);
+            },
+            failed: async () => {
+                await this.node.ackMessage(this, message.header.message_id, MessageStatusKind.Failed);
+            },
+            json: () => {
+                return JSON.parse(this.node.textDecoder.decode(receivedMessage.payload));
+            },
+            text: () => {
+                return this.node.textDecoder.decode(receivedMessage.payload);
+            },
+            endpoint: this
+        }
         if (this.waitingNextMessage !== undefined) {
-            this.waitingNextMessage.resolve(message);
+            this.waitingNextMessage.resolve(receivedMessage);
         } else {
-            this.messageQueue.push(message);
+            this.messageQueue.push(receivedMessage);
         }
     }
     public closeMessageChannel() {

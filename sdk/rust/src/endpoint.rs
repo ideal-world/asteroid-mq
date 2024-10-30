@@ -140,4 +140,19 @@ impl Drop for ClientEndpoint {
 #[derive(Debug)]
 pub(crate) struct EndpointMailbox {
     pub(crate) message_tx: UnboundedSender<Message>,
+    pub(crate) message_rx: Option<UnboundedReceiver<Message>>,
+}
+
+impl EndpointMailbox {
+    pub fn new() -> Self {
+        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
+        Self {
+            message_tx,
+            message_rx: Some(message_rx),
+        }
+    }
+
+    pub fn take_rx(&mut self) -> Option<UnboundedReceiver<Message>> {
+        self.message_rx.take()
+    }
 }
