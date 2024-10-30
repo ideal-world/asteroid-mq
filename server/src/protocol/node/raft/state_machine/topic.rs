@@ -124,40 +124,42 @@ impl TopicData {
                 }
             }
             self.queue.push(hold_message);
-            if let Some(durable_config) = &message.header.durability
-            {
-                if message.header.target_kind == MessageTargetKind::Durable {
-                    tracing::warn!("durable message should have durable target kind");
-                };
-                let topic = ctx.topic_code.clone().expect("topic code not set");
-                let node = ctx.node.clone();
-                let message_id = message.id();
-                ctx.node.scheduler.add_task(
-                    TaskUid::new(message.id().to_u128()),
-                    Task::tokio(
-                        tsuki_scheduler::schedule::Once::new(durable_config.expire),
-                        move || {
-                            let node = node.clone();
-                            let topic = topic.clone();
-                            async move {
-                                if node.raft().await.ensure_linearizable().await.is_err() {
-                                    tracing::trace!("raft not leader, skip durable commands");
-                                    return;
+            'durable_task: {
+                if let Some(durable_config) = &message.header.durability {
+                    if message.header.target_kind != MessageTargetKind::Durable {
+                        tracing::warn!("durable message should have durable target kind");
+                        break 'durable_task;
+                    };
+                    let topic = ctx.topic_code.clone().expect("topic code not set");
+                    let node = ctx.node.clone();
+                    let message_id = message.id();
+                    ctx.node.scheduler.add_task(
+                        TaskUid::new(message.id().to_u128()),
+                        Task::tokio(
+                            tsuki_scheduler::schedule::Once::new(durable_config.expire),
+                            move || {
+                                let node = node.clone();
+                                let topic = topic.clone();
+                                async move {
+                                    if node.raft().await.ensure_linearizable().await.is_err() {
+                                        tracing::trace!("raft not leader, skip durable commands");
+                                        return;
+                                    }
+                                    let result = node
+                                        .propose(Proposal::SetState(SetState {
+                                            topic,
+                                            update: MessageStateUpdate::new_empty(message_id),
+                                        }))
+                                        .await;
+                                    if let Err(e) = result {
+                                        tracing::warn!(?e, "proposal expire message failed");
+                                    }
                                 }
-                                let result = node
-                                    .propose(Proposal::SetState(SetState {
-                                        topic,
-                                        update: MessageStateUpdate::new_empty(message_id),
-                                    }))
-                                    .await;
-                                if let Err(e) = result {
-                                    tracing::warn!(?e, "proposal expire message failed");
-                                }
-                            }
-                        },
-                    ),
-                );
-                ctx.push_durable_command(DurableCommand::Create(message.clone()));
+                            },
+                        ),
+                    );
+                    ctx.push_durable_command(DurableCommand::Create(message.clone()));
+                }
             }
         }
         self.update_and_flush(MessageStateUpdate::new_empty(message.id()), ctx);
@@ -252,6 +254,7 @@ impl TopicData {
                 }
             }
         }
+        tracing::trace!(?message_need_poll, ?endpoint, "flush durable messages");
         for id in message_need_poll {
             self.update_and_flush(MessageStateUpdate::new_empty(id), ctx);
         }

@@ -190,6 +190,7 @@ name = "asteroid-mq-sdk"
 version = "0.1.0-alpha.5"
 dependencies = [
  "asteroid-mq-model",
+ "chrono",
  "futures-util",
  "reqwest",
  "serde",

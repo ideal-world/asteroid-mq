@@ -20,7 +20,7 @@ pub struct ClientEndpoint {
     pub(crate) node: Weak<ClientNodeInner>,
     pub(crate) message_rx: UnboundedReceiver<Message>,
 }
-
+#[derive(Debug)]
 pub struct ClientReceivedMessage {
     ep_addr: EndpointAddr,
     topic_code: TopicCode,

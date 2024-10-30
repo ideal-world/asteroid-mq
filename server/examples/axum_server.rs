@@ -176,10 +176,10 @@ async fn get_node_id() -> String {
     node_id
 }
 
-#[tokio::test]
-async fn test_websocket_server() -> asteroid_mq::Result<()> {
+#[tokio::main]
+async fn main() -> asteroid_mq::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter("debug,asteroid_mq=debug,openraft=warn")
+        .with_env_filter("debug,asteroid_mq=trace,openraft=warn")
         .init();
     let node = Node::new(NodeConfig::default());
     let cluster_provider = StaticClusterProvider::singleton(node.config());

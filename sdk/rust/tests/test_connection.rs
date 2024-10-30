@@ -1,5 +1,8 @@
-use asteroid_mq_model::{EdgeMessage, Interest, Subject, TopicCode};
+use asteroid_mq_model::{
+    EdgeMessage, Interest, MessageAckExpectKind, MessageDurableConfig, Subject, TopicCode,
+};
 use asteroid_mq_sdk::ClientNode;
+use chrono::{TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,6 +22,26 @@ async fn test_connection() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
+    let build_serve_result = tokio::process::Command::new("cargo")
+        .arg("build")
+        .arg("-p")
+        .arg("asteroid-mq")
+        .arg("--example")
+        .arg("axum-server")
+        .spawn()?
+        .wait()
+        .await?;
+    if !build_serve_result.success() {
+        return Err("Failed to build axum-server example".into());
+    }
+    let _server_process = tokio::process::Command::new("cargo")
+        .arg("run")
+        .arg("-p")
+        .arg("asteroid-mq")
+        .arg("--example")
+        .arg("axum-server")
+        .spawn()?;
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     let url_a = get_ws_url().await?;
     let url_b = get_ws_url().await?;
     let node_a = ClientNode::connect(url_a).await?;
@@ -62,7 +85,36 @@ async fn test_connection() -> Result<(), Box<dyn std::error::Error>> {
     node_a.send_message(message("alice")).await?;
     node_a.send_message(message("bob")).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    drop(node_a);
+    let send_task = tokio::spawn(async move {
+        let send_result = node_a
+            .send_message(
+                EdgeMessage::builder(
+                    TOPIC_CODE,
+                    [Subject::new("event/hello/durable")],
+                    "durable message",
+                )
+                .mode_durable(
+                    MessageDurableConfig::new(Utc::now() + TimeDelta::minutes(10))
+                        .with_max_receiver(1),
+                )
+                .ack_kind(MessageAckExpectKind::Received)
+                .build(),
+            )
+            .await;
+        tracing::info!("Send result: {:?}", send_result);
+        send_result
+    });
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    let mut ep_durable_recv = node_b
+        .create_endpoint(TOPIC_CODE, [Interest::new("event/hello/durable")])
+        .await?;
+    let message = ep_durable_recv
+        .next_message()
+        .await
+        .expect("No message received");
+    message.ack_received().await?;
+    tracing::info!("Received durable message: {:?}", message);
+    send_task.await??;
     drop(node_b);
     task_b1.await?;
     task_b2.await?;

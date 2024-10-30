@@ -71,7 +71,13 @@ impl HoldMessage {
                     return true;
                 }
                 if let Some(max_receiver) = durability_config.max_receiver {
-                    if self.wait_ack.status.len() >= max_receiver as usize {
+                    let resolved_count = self
+                        .wait_ack
+                        .status
+                        .values()
+                        .filter(|status| status.is_resolved(self.wait_ack.expect))
+                        .count();
+                    if resolved_count >= max_receiver as usize {
                         return true;
                     }
                 }
