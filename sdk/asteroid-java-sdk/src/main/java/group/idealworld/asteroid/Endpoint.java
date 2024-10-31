@@ -20,7 +20,7 @@ public class Endpoint implements AutoCloseable {
   private String topic;
   private Set<String> interests;
   private String address;
-  private BlockingQueue<Types.Message> messageQueue = new LinkedBlockingQueue<>();
+  private final BlockingQueue<Types.Message> messageQueue = new LinkedBlockingQueue<>();
 
   public static class EndpointReceivedMessage {
     private String address;
@@ -123,10 +123,6 @@ public class Endpoint implements AutoCloseable {
 
   public BlockingQueue<Types.Message> getMessageQueue() {
     return messageQueue;
-  }
-
-  public void setMessageQueue(BlockingQueue<Types.Message> messageQueue) {
-    this.messageQueue = messageQueue;
   }
 
   @Override

@@ -166,6 +166,9 @@ public class Types {
     }
 
     public MessageDurabilityConfig(Date expire, Integer maxReceiver) {
+      if (expire == null) {
+        throw new IllegalArgumentException("expire is required");
+      }
       this.expire = expire;
       this.maxReceiver = maxReceiver;
     }

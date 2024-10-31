@@ -53,6 +53,7 @@ public class Node implements AutoCloseable {
   private BlockingQueue<BoxRequest> requestPool = new LinkedBlockingQueue<>();
   private boolean alive = false;
   private Map<String, Endpoint> endpoints = new HashMap<>();
+  private static Map<String, BlockingQueue<Types.Message>> tempMessageQueue = new HashMap<>();
 
   private Node() {
   }
@@ -134,9 +135,15 @@ public class Node implements AutoCloseable {
                 var contentMessage = ((MessagePush) content).getContent().getMessage();
                 var contentEndpoints = ((MessagePush) content).getContent().getEndpoints();
 
-                for (String endpointName : contentEndpoints) {
-                  var endpoint = node.endpoints.get(endpointName);
+                for (String endpointAddress : contentEndpoints) {
+                  var endpoint = node.endpoints.get(endpointAddress);
                   if (endpoint == null) {
+                    var tempQueue = tempMessageQueue.get(endpointAddress);
+                    if (tempQueue == null) {
+                      tempQueue = new LinkedBlockingQueue<>();
+                      tempMessageQueue.put(endpointAddress, tempQueue);
+                    }
+                    tempQueue.put(contentMessage);
                     continue;
                   }
                   log.debug("[Node EdgePush] Push payload:{}", contentMessage.getPayload());
@@ -204,6 +211,12 @@ public class Node implements AutoCloseable {
     var address = sendEndpointsOnline(new EdgeEndpointOnline(topicCode, interests));
     var endpoint = new Endpoint(this, topicCode, new HashSet<>(interests), address);
     endpoints.put(address, endpoint);
+    if (tempMessageQueue.containsKey(address)) {
+      var tempQueue = tempMessageQueue.remove(address);
+      while (!tempQueue.isEmpty()) {
+        endpoint.getMessageQueue().put(tempQueue.take());
+      }
+    }
     log.info("[Node createEndpoint] endpoint: {}", endpoint);
     return endpoint;
   }

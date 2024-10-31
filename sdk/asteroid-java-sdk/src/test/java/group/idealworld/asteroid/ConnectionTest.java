@@ -1,6 +1,8 @@
 package group.idealworld.asteroid;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -9,8 +11,12 @@ import java.util.Arrays;
 import java.util.HashSet;
 
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ConnectionTest {
+  private static final Logger log = LoggerFactory.getLogger(ConnectionTest.class);
+
   public String getWsUrl() throws IOException, InterruptedException {
     HttpClient client = HttpClient.newHttpClient();
     HttpRequest request = HttpRequest.newBuilder()
@@ -21,8 +27,37 @@ public class ConnectionTest {
     return "ws://localhost:8080/connect?node_id=" + response.body();
   }
 
+  public Process startServer() throws IOException, InterruptedException {
+    ProcessBuilder cargoBuild = new ProcessBuilder();
+    cargoBuild.command("cargo", "build", "-p", "asteroid-mq", "--example", "axum-server");
+    Process cargoBuildProcess = cargoBuild.start();
+    var result = cargoBuildProcess.waitFor();
+    log.info("cargo build result: {}", result);
+    if (result != 0) {
+      throw new RuntimeException("Failed to build axum-server example");
+    }
+    ProcessBuilder cargoRun = new ProcessBuilder();
+    cargoRun.command("cargo", "run", "-p", "asteroid-mq", "--example", "axum-server");
+    var cargoRunProcess = cargoRun.start();
+    // read the output from the server in virtual thread
+    Thread.startVirtualThread(() -> {
+      BufferedReader reader = new BufferedReader(new InputStreamReader(cargoRunProcess.getInputStream()));
+      String line;
+      try {
+        while ((line = reader.readLine()) != null) {
+          log.info("server output: {}", line);
+        }
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    });
+    return cargoRunProcess;
+  }
+
   @Test
   public void testConnection() throws IOException, InterruptedException {
+    startServer();
+    Thread.sleep(1000L);
     Node node_a = Node.connect(getWsUrl());
     Node node_b = Node.connect(getWsUrl());
 
