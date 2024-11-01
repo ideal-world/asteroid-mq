@@ -24,10 +24,10 @@ use crate::{
     },
 };
 
-use super::{response::RaftResponse, TypeConfig};
+use super::{raft_node::TcpNode, response::RaftResponse, TypeConfig};
 #[derive(Debug)]
 pub struct StoredSnapshot {
-    pub meta: SnapshotMeta<NodeId, BasicNode>,
+    pub meta: SnapshotMeta<NodeId, TcpNode>,
 
     /// The data of the state machine at the time of this snapshot.
     pub data: NodeData,

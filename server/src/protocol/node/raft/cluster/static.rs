@@ -15,9 +15,9 @@ impl StaticClusterProvider {
     pub fn new(nodes: BTreeMap<NodeId, SocketAddr>) -> Self {
         Self { nodes }
     }
-    pub fn singleton(node_config: &NodeConfig) -> Self {
+    pub fn singleton(id: NodeId, socket_addr: SocketAddr) -> Self {
         let mut nodes = BTreeMap::new();
-        nodes.insert(node_config.id, node_config.addr);
+        nodes.insert(id, socket_addr);
         Self { nodes }
     }
 }

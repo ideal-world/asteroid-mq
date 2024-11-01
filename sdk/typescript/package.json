@@ -1,7 +1,7 @@
 {
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
   "license": "MIT/Apache-2.0",
   "devDependencies": {
     "@types/bun": "^1.1.8",
