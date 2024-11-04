@@ -32,7 +32,7 @@ use edge::{
 use futures_util::TryFutureExt;
 use openraft::{BasicNode, ChangeMembers, Raft};
 use raft::{
-    cluster::{ClusterProvider, DynClusterProvider},
+    cluster::{ClusterProvider, ClusterService, DynClusterProvider},
     log_storage::LogStorage,
     network_factory::TcpNetworkService,
     proposal::{EndpointOffline, EndpointOnline, LoadTopic, Proposal},
@@ -159,7 +159,7 @@ impl Node {
         if self.raft_opt().is_some() {
             return Ok(());
         }
-        let membership_change_listener_task_ct = self.ct.child_token();
+        let cluster_service_ct = self.ct.child_token();
         let node_ref = self.node_ref();
         let id = self.id();
         let maybe_loading_raft = self.raft.clone();
@@ -173,9 +173,7 @@ impl Node {
             .map_err(crate::Error::contextual_custom("validate raft config"))?;
         tcp_service.run_service();
         // ensure connection layer
-        tokio::spawn(async move {
-
-        });
+        tokio::spawn(async move {});
         let raft = Raft::<TypeConfig>::new(
             id,
             Arc::new(raft_config),
@@ -213,129 +211,9 @@ impl Node {
             .await
             .map_err(crate::Error::contextual_custom("init raft node"))?;
         maybe_loading_raft.set(raft.clone());
-        let _membership_change_listener_task = {
-            let mut prev_members = members.keys().cloned().collect::<BTreeSet<_>>();
-            let ct = membership_change_listener_task_ct;
-            tokio::spawn(
-                async move {
-                    loop {
-                        let members = tokio::select! {
-                            _ = ct.cancelled() => {
-                                if let Err(e) = raft.shutdown().await {
-                                    tracing::error!(?e, "raft shutdown error");
-                                } else {
-                                    tracing::info!("raft shutdown");
-                                }
-                                break;
-                            }
-                            members = cluster_provider.next_update() => {
-                                match members {
-                                    Ok(members) => members,
-                                    Err(e) => {
-                                        tracing::error!(?e, "cluster provider error");
-                                        continue;
-                                    }
-                                }
-                            }
-                        };
-                        let current_leader = raft.current_leader().await;
-                        tracing::info!(?current_leader);
-                        let members = members
-                            .into_iter()
-                            .map(|(id, addr)| {
-                                let node = TcpNode::new(addr);
-                                (id, node)
-                            })
-                            .collect::<BTreeMap<_, _>>();
-                        let now_members = members.keys().cloned().collect::<BTreeSet<_>>();
-                        let is_modified = now_members != prev_members;
-                        let is_leader = current_leader == Some(id);
-                        if is_modified && is_leader {
-                            let added_nodes: BTreeSet<NodeId> =
-                                now_members.difference(&prev_members).cloned().collect();
-                            let removed_nodes: BTreeSet<NodeId> =
-                                prev_members.difference(&now_members).cloned().collect();
-                            tracing::info!(
-                                ?added_nodes,
-                                ?removed_nodes,
-                                ?current_leader,
-                                "membership change"
-                            );
-                            if !added_nodes.is_empty() {
-                                let raft = raft.clone();
-                                let members = members.clone();
-                                tokio::spawn(async move {
-                                    let _ = raft
-                                        .change_membership(
-                                            ChangeMembers::AddNodes(
-                                                added_nodes
-                                                    .iter()
-                                                    .map(|id| (*id, members[id].clone()))
-                                                    .collect(),
-                                            ),
-                                            false,
-                                        )
-                                        .await
-                                        .inspect_err(|e| {
-                                            tracing::error!(?e, "add learners error");
-                                        });
-                                    let _ = raft
-                                        .change_membership(
-                                            ChangeMembers::AddVoterIds(added_nodes),
-                                            false,
-                                        )
-                                        .await
-                                        .inspect_err(|e| {
-                                            tracing::error!(?e, "add voters error");
-                                        });
-                                });
-                            }
-                            if !removed_nodes.is_empty() {
-                                let raft = raft.clone();
-
-                                tokio::spawn(async move {
-                                    let _ = raft
-                                        .change_membership(
-                                            ChangeMembers::RemoveVoters(removed_nodes.clone()),
-                                            false,
-                                        )
-                                        .await
-                                        .inspect_err(|e| {
-                                            tracing::error!(?e, "remove voters error");
-                                        });
-                                    let _ = raft
-                                        .change_membership(
-                                            ChangeMembers::RemoveNodes(removed_nodes),
-                                            false,
-                                        )
-                                        .await
-                                        .inspect_err(|e| {
-                                            tracing::error!(?e, "remove voters error");
-                                        });
-                                });
-                            }
-                        }
-                        if is_modified {
-                            // ensure connections
-                            let tcp_service = tcp_service.clone();
-                            tokio::spawn(async move {
-                                for (peer_id, peer_node) in members.iter() {
-                                    if id == *peer_id {
-                                        continue;
-                                    }
-                                    tracing::debug!(peer=%peer_id, local=%id, "ensure connection");
-                                    let _ = tcp_service
-                                        .ensure_connection(*peer_id, peer_node.addr)
-                                        .await;
-                                }
-                            });
-                            prev_members = now_members;
-                        }
-                    }
-                }
-                .instrument(tracing::info_span!("membership change", id = ?id)),
-            )
-        };
+        let cluster_service =
+            ClusterService::new(cluster_provider, tcp_service, cluster_service_ct);
+        cluster_service.spawn();
         Ok(())
     }
     #[tracing::instrument(skip_all)]

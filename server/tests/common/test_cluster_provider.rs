@@ -32,16 +32,9 @@ impl TestClusterProvider {
 
 impl ClusterProvider for TestClusterProvider {
     async fn next_update(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, SocketAddr>> {
-        loop {
-            let latest = self.latest.load(std::sync::atomic::Ordering::Relaxed);
-            if latest != self.version {
-                self.version = latest;
-                break;
-            } else {
-                tokio::task::yield_now().await;
-            }
-        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let nodes = self.nodes.lock().await.clone();
+        tracing::warn!(?nodes, "updated");
         Ok(nodes)
     }
     async fn pristine_nodes(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, SocketAddr>> {

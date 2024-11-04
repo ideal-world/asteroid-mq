@@ -1,4 +1,9 @@
-use std::{borrow::Cow, collections::{BTreeMap, HashMap}, future::Future, net::SocketAddr};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, HashMap},
+    future::Future,
+    net::SocketAddr,
+};
 
 use crate::prelude::NodeId;
 #[cfg(feature = "cluster-k8s")]
@@ -9,6 +14,7 @@ pub(crate) mod r#static;
 use openraft::{ChangeMembers, Membership};
 pub use r#static::StaticClusterProvider;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 
 use super::{network_factory::TcpNetworkService, raft_node::TcpNode};
 pub trait ClusterProvider: Send + 'static {
@@ -21,14 +27,6 @@ pub trait ClusterProvider: Send + 'static {
         &mut self,
     ) -> impl Future<Output = crate::Result<BTreeMap<NodeId, SocketAddr>>> + Send;
 }
-
-
-
-
-
-
-
-
 
 pub struct DynClusterProvider {
     inner: Box<dyn sealed::ClusterProviderObjectTrait + Send>,
@@ -98,81 +96,84 @@ mod sealed {
 pub struct ClusterService {
     provider: DynClusterProvider,
     tcp_network_service: TcpNetworkService,
-    ct: CancellationToken
+    ct: CancellationToken,
 }
 
 impl ClusterService {
-    pub fn new<C>(provider: impl ClusterProvider, tcp_network_service: TcpNetworkService, ct: CancellationToken) -> Self {
+    pub fn new(
+        provider: impl ClusterProvider,
+        tcp_network_service: TcpNetworkService,
+        ct: CancellationToken,
+    ) -> Self {
         Self {
             provider: DynClusterProvider::new(provider),
             tcp_network_service,
             ct,
         }
     }
-    pub async fn run(mut self) -> Result<(), crate::Error> {
-        let Self{
+    #[instrument(name="cluster_service", skip(self), fields(cluster_provider_name=%self.provider.name(), local_id=%self.tcp_network_service.info.id))]
+    pub async fn run(self) -> Result<(), crate::Error> {
+        tracing::info!("cluster service started");
+        let Self {
             mut provider,
             tcp_network_service,
-            mut ct,
+            ct,
         } = self;
-        let pristine_nodes = provider.pristine_nodes().await?;
-        // 1. ensure connections to all pristine nodes
-        {
-            let pristine_nodes = pristine_nodes.clone();
-            let tcp_network_service = tcp_network_service.clone();
-            tokio::spawn(async move {
-                for (peer_id, peer_addr) in pristine_nodes {
-                    let ensure_result = tcp_network_service.ensure_connection(peer_id, peer_addr).await;
-                    if let Err(e) = ensure_result {
-                        tracing::warn!("failed to ensure connection to {}: {}", peer_id, e);
-                    }
-                }
-            });
-        }
-        // 2. raft init members
-        let raft =  tcp_network_service.raft.get().await;
         let local_id = tcp_network_service.info.id;
 
-        let pristine_members = pristine_nodes.clone().into_iter().map(|(id, addr)| {
-            (id, TcpNode::new(addr))
-        }).collect::<BTreeMap<_,_>>();
-        raft.initialize(pristine_members).await.map_err(crate::Error::contextual_custom("raft init members failed"))?;
+        let prev_nodes = provider.pristine_nodes().await?;
         // 3. listen cluster update
         loop {
             let nodes = tokio::select! {
                 _ = ct.cancelled() => break,
                 nodes = provider.next_update() => {
-                    provider.next_update().await?
+                    nodes?
                 }
             };
+
             // ensure connections to all nodes
             let mut ensured_nodes = BTreeMap::new();
             for (peer_id, peer_addr) in nodes.clone() {
                 if local_id == peer_id {
                     ensured_nodes.insert(peer_id, TcpNode::new(peer_addr));
                 } else {
-                    let ensure_result = tcp_network_service.ensure_connection(peer_id, peer_addr).await;
+                    tracing::trace!("ensuring connection to {}", peer_id);
+                    let ensure_result = tcp_network_service
+                        .ensure_connection(peer_id, peer_addr)
+                        .await;
                     if let Err(e) = ensure_result {
                         tracing::warn!("failed to ensure connection to {}: {}", peer_id, e);
                     } else {
+                        tracing::trace!("connection to {} ensured", peer_id);
                         ensured_nodes.insert(peer_id, TcpNode::new(peer_addr));
                     }
                 }
             }
+            tracing::debug!("ensured nodes: {:?}", ensured_nodes);
             // raft update members
             let raft = tcp_network_service.raft.get().await;
-
-            let add_nodes_result = raft.change_membership(ChangeMembers::AddNodes(ensured_nodes.clone()), false).await;
-            if let Err(e) = add_nodes_result {
-                tracing::warn!("failed to add nodes: {}", e);
-                continue;
-            }
-            let add_voters_result = raft.change_membership(ChangeMembers::AddVoters(ensured_nodes.clone()), false).await;            
-            if let Err(e) = add_voters_result {
-                tracing::warn!("failed to add voters: {}", e);
-                continue;
-            }
+            
+            tokio::spawn(async move {
+                if raft.ensure_linearizable().await.is_ok() {
+                    let add_nodes_result = raft
+                        .change_membership(ChangeMembers::AddNodes(ensured_nodes.clone()), false)
+                        .await;
+                    if let Err(e) = add_nodes_result {
+                        tracing::warn!("failed to add nodes: {}", e);
+                    }
+                    let add_voters_result = raft
+                        .change_membership(ChangeMembers::AddVoters(ensured_nodes.clone()), false)
+                        .await;
+                    if let Err(e) = add_voters_result {
+                        tracing::warn!("failed to add voters: {}", e);
+                    }
+                }
+            });
+            tracing::trace!("waiting for next update")
         }
         Ok(())
+    }
+    pub fn spawn(self) {
+        tokio::spawn(self.run());
     }
 }
