@@ -180,6 +180,10 @@ impl ClusterService {
             let leader_node = raft.current_leader().await;
             let Some(leader_node) = leader_node else {
                 tracing::warn!("no leader node found");
+                let elect_result = raft.trigger().elect().await;
+                if let Err(e) = elect_result {
+                    tracing::error!("failed to trigger election: {}", e);
+                }
                 continue;
             };
             if to_remove.contains(&leader_node) {

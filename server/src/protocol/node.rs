@@ -193,31 +193,22 @@ impl Node {
         )
         .await
         .map_err(crate::Error::contextual_custom("create raft node"))?;
-        let members = cluster_provider
-            .pristine_nodes()
-            .await?
-            .into_iter()
-            .map(|(id, addr)| {
-                let node = TcpNode::new(addr);
-                (id, node)
-            })
-            .collect::<BTreeMap<_, _>>();
-        {
-            let tcp_service = tcp_service.clone();
-            let members = members.clone();
-            tokio::spawn(async move {
-                for (peer_id, peer_node) in members.iter() {
-                    if id == *peer_id {
-                        continue;
-                    }
-                    tracing::debug!(peer=%peer_id, local=%id, "ensure connection");
-                    let _ = tcp_service
-                        .ensure_connection(*peer_id, peer_node.addr)
-                        .await;
+        // waiting for members contain self
+        let nodes: BTreeMap<NodeId, TcpNode> = loop {
+            let next_update = cluster_provider.next_update().await;
+            if let Ok(nodes) = next_update {
+                if nodes.contains_key(&id) {
+                    tracing::info!("this node is included in the cluster");
+                    break nodes
+                        .into_iter()
+                        .map(|(k, v)| (k, TcpNode::new(v)))
+                        .collect();
+                } else {
+                    tracing::info!(?nodes, "this node is not included in the cluster");
                 }
-            });
-        }
-        raft.initialize(members.clone())
+            }
+        };
+        raft.initialize(nodes)
             .await
             .map_err(crate::Error::contextual_custom("init raft node"))?;
         maybe_loading_raft.set(raft.clone());

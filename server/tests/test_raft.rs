@@ -29,9 +29,9 @@ async fn test_raft() {
     fn raft_config() -> openraft::Config {
         openraft::Config {
             cluster_name: "test".to_string(),
-            heartbeat_interval: 400,
-            election_timeout_max: 1000,
-            election_timeout_min: 500,
+            heartbeat_interval: 200,
+            election_timeout_max: 600,
+            election_timeout_min: 300,
             ..Default::default()
         }
     }
@@ -87,15 +87,22 @@ async fn test_raft() {
             node_id(3) => node_addr(3),
         ))
         .await;
-    node_3.init_raft(cluster.clone()).await.unwrap();
-
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    let node_3_init_task = {
+        let node_3 = node_3.clone();
+        let cluster = cluster.clone();
+        tokio::spawn(async move {
+            node_3.init_raft(cluster).await
+        })
+    };
     cluster
         .update(map!(
             node_id(1) => node_addr(1),
             node_id(3) => node_addr(3),
         ))
         .await;
+    node_3_init_task.await.unwrap().unwrap();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
     tracing::warn!("now shutdown node_2");
     node_2.shutdown().await;
 
@@ -112,10 +119,10 @@ async fn test_raft() {
         .raft()
         .await
         .with_raft_state(|s| {
-            tracing::info!("node_1 state: {:#?}", s.membership_state);
+            tracing::warn!("node_1 state: {:#?}", s.membership_state);
         })
         .await;
-    tracing::info!(
+    tracing::warn!(
         "node_1 leader: {:#?}",
         node_1.raft().await.current_leader().await
     );
@@ -123,10 +130,10 @@ async fn test_raft() {
         .raft()
         .await
         .with_raft_state(|s| {
-            tracing::info!("node_3 state: {:#?}", s.membership_state);
+            tracing::warn!("node_3 state: {:#?}", s.membership_state);
         })
         .await;
-    tracing::info!(
+    tracing::warn!(
         "node_3 state: {:#?}",
         node_3.raft().await.current_leader().await
     );

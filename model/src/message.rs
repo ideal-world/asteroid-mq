@@ -349,6 +349,7 @@ pub struct MessageAck {
 pub enum MessageTargetKind {
     Durable = 0,
     Online = 1,
+    #[deprecated(note = "not supported yet")]
     Available = 2,
     #[default]
     Push = 3,
@@ -359,6 +360,7 @@ impl From<u8> for MessageTargetKind {
         match kind {
             0 => MessageTargetKind::Durable,
             1 => MessageTargetKind::Online,
+            #[allow(deprecated)]
             2 => MessageTargetKind::Available,
             _ => MessageTargetKind::Push,
         }
