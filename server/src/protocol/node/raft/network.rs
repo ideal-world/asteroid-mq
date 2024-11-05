@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use openraft::{
     error::{
         ClientWriteError, InstallSnapshotError, RPCError, RaftError, RemoteError, Unreachable,
@@ -8,16 +6,17 @@ use openraft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
         InstallSnapshotResponse, VoteRequest, VoteResponse,
     },
-    BasicNode, RaftNetwork,
+    RaftNetwork,
 };
 use serde::{Deserialize, Serialize};
-use tokio::{net::TcpStream, sync::oneshot::Receiver};
+use tokio::sync::oneshot::Receiver;
 
 use crate::prelude::NodeId;
 
 use super::{
-    network_factory::{RaftNodeInfo, RaftTcpConnection, TcpNetworkService},
+    network_factory::{RaftNodeInfo, TcpNetworkService},
     proposal::Proposal,
+    raft_node::TcpNode,
     TypeConfig,
 };
 
@@ -44,7 +43,7 @@ pub(super) enum Response {
     Proposal(
         Result<
             ClientWriteResponse<TypeConfig>,
-            RaftError<NodeId, ClientWriteError<NodeId, BasicNode>>,
+            RaftError<NodeId, ClientWriteError<NodeId, TcpNode>>,
         >,
     ),
 }
@@ -73,32 +72,14 @@ impl TcpNetwork {
     pub fn new(peer: RaftNodeInfo, source: TcpNetworkService) -> Self {
         Self { peer, source }
     }
-    async fn create_connection(&self) -> Result<RaftTcpConnection, Unreachable> {
-        let stream = TcpStream::connect(self.peer.node.addr.clone())
-            .await
-            .map_err(|e| Unreachable::new(&e))?;
-        let connection = RaftTcpConnection::from_tokio_tcp_stream(stream, self.source.clone())
-            .await
-            .map_err(|e| Unreachable::new(&e))?;
-        Ok(connection)
-    }
+
     #[tracing::instrument(skip_all, fields(peer_id = ?self.peer.id))]
     async fn send_request(&mut self, req: Request) -> Result<Receiver<Response>, Unreachable> {
-        let mut connections = self.source.connections.write().await;
-        let connection = connections.get(&self.peer.id);
-        if connection.is_none() || connection.is_some_and(|c| !c.is_alive()) {
-            // the node with smaller id will create connection
-            if self.peer.id < self.source.info.id {
-                return Err(Unreachable::new(&ConnectionNotEstablished));
-            }
-            tracing::debug!(peer=?self.peer.id, this=?self.source.info.id, "connection not established, creating new connection");
-            let connection = Arc::new(self.create_connection().await?);
-            connections.insert(connection.peer_id(), connection.clone());
-        }
-        let connection = connections
-            .get(&self.peer.id)
-            .ok_or_else(|| Unreachable::new(&ConnectionNotEstablished))?
-            .clone();
+        let connection = self
+            .source
+            .ensure_connection(self.peer.id, self.peer.node.addr)
+            .await
+            .map_err(|e| Unreachable::new(&e))?;
         connection.send_request(req).await
     }
 }

@@ -1,7 +1,7 @@
 pub mod edge;
 pub mod raft;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     net::SocketAddr,
     ops::Deref,
     sync::{self, Arc, RwLock},
@@ -30,18 +30,18 @@ use edge::{
     EdgeError, EdgeErrorKind,
 };
 use futures_util::TryFutureExt;
-use openraft::{BasicNode, ChangeMembers, Raft};
+use openraft::Raft;
 use raft::{
-    cluster::ClusterProvider,
+    cluster::{ClusterProvider, ClusterService},
     log_storage::LogStorage,
     network_factory::TcpNetworkService,
     proposal::{EndpointOffline, EndpointOnline, LoadTopic, Proposal},
+    raft_node::TcpNode,
     state_machine::{topic::config::TopicConfig, StateMachineStore},
     MaybeLoadingRaft, TypeConfig,
 };
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
-use tracing::Instrument;
 
 use crate::{
     prelude::{DurableMessage, DurableService},
@@ -85,6 +85,17 @@ pub struct NodeInner {
     ct: CancellationToken,
 }
 
+impl NodeInner {
+    pub async fn shutdown(&self) {
+        if let Some(raft) = self.raft.get_opt() {
+            let result = raft.shutdown().await;
+            if let Err(e) = result {
+                tracing::error!(?e, "raft shutdown error");
+            }
+        }
+        self.ct.cancel();
+    }
+}
 #[derive(Debug, Clone, Default)]
 pub struct NodeRef {
     inner: std::sync::Weak<NodeInner>,
@@ -127,8 +138,7 @@ impl Node {
     pub fn new(config: NodeConfig) -> Self {
         let ct = CancellationToken::new();
         let raft = MaybeLoadingRaft::new();
-        let network =
-            raft.net_work_service(config.id, BasicNode::new(config.addr), ct.child_token());
+        let network = raft.net_work_service(config.id, TcpNode::new(config.addr), ct.child_token());
         let scheduler_runner = tsuki_scheduler::AsyncSchedulerRunner::tokio()
             .with_execute_duration(Duration::from_secs(1));
         let scheduler_client = scheduler_runner.client();
@@ -159,7 +169,7 @@ impl Node {
         if self.raft_opt().is_some() {
             return Ok(());
         }
-        let membership_change_listener_task_ct = self.ct.child_token();
+        let cluster_service_ct = self.ct.child_token();
         let node_ref = self.node_ref();
         let id = self.id();
         let maybe_loading_raft = self.raft.clone();
@@ -171,7 +181,9 @@ impl Node {
             .clone()
             .validate()
             .map_err(crate::Error::contextual_custom("validate raft config"))?;
-        tcp_service.run();
+        tcp_service.run_service();
+        // ensure connection layer
+        tokio::spawn(async move {});
         let raft = Raft::<TypeConfig>::new(
             id,
             Arc::new(raft_config),
@@ -186,109 +198,32 @@ impl Node {
             .await?
             .into_iter()
             .map(|(id, addr)| {
-                let node = BasicNode::new(addr);
+                let node = TcpNode::new(addr);
                 (id, node)
             })
             .collect::<BTreeMap<_, _>>();
+        {
+            let tcp_service = tcp_service.clone();
+            let members = members.clone();
+            tokio::spawn(async move {
+                for (peer_id, peer_node) in members.iter() {
+                    if id == *peer_id {
+                        continue;
+                    }
+                    tracing::debug!(peer=%peer_id, local=%id, "ensure connection");
+                    let _ = tcp_service
+                        .ensure_connection(*peer_id, peer_node.addr)
+                        .await;
+                }
+            });
+        }
         raft.initialize(members.clone())
             .await
             .map_err(crate::Error::contextual_custom("init raft node"))?;
         maybe_loading_raft.set(raft.clone());
-        let _membership_change_listener_task = {
-            let mut prev_members = members.keys().cloned().collect::<BTreeSet<_>>();
-            let ct = membership_change_listener_task_ct;
-            tokio::spawn(
-                async move {
-                    loop {
-                        let members = tokio::select! {
-                            _ = ct.cancelled() => {
-                                if let Err(e) = raft.shutdown().await {
-                                    tracing::error!(?e, "raft shutdown error");
-                                }
-                                break;
-                            }
-                            members = cluster_provider.next_update() => {
-                                match members {
-                                    Ok(members) => members,
-                                    Err(e) => {
-                                        tracing::error!(?e, "cluster provider error");
-                                        continue;
-                                    }
-                                }
-                            }
-                        };
-
-                        let members = members
-                            .into_iter()
-                            .map(|(id, addr)| {
-                                let node = BasicNode::new(addr);
-                                (id, node)
-                            })
-                            .collect::<BTreeMap<_, _>>();
-                        let now_members = members.keys().cloned().collect::<BTreeSet<_>>();
-                        let is_modified = now_members != prev_members;
-                        let is_leader = raft.current_leader().await == Some(id);
-                        if is_modified && is_leader {
-                            let added_nodes: BTreeSet<NodeId> =
-                                now_members.difference(&prev_members).cloned().collect();
-                            let removed_nodes: BTreeSet<NodeId> =
-                                prev_members.difference(&now_members).cloned().collect();
-                            tracing::info!(?added_nodes, ?removed_nodes, "membership change");
-                            if !added_nodes.is_empty() {
-                                let _ = raft
-                                    .change_membership(
-                                        ChangeMembers::AddNodes(
-                                            added_nodes
-                                                .iter()
-                                                .map(|id| (*id, members[id].clone()))
-                                                .collect(),
-                                        ),
-                                        false,
-                                    )
-                                    .await
-                                    .inspect_err(|e| {
-                                        tracing::error!(?e, "add learners error");
-                                    });
-                                let _ = raft
-                                    .change_membership(
-                                        ChangeMembers::AddVoterIds(added_nodes),
-                                        false,
-                                    )
-                                    .await
-                                    .inspect_err(|e| {
-                                        tracing::error!(?e, "add voters error");
-                                    });
-                            }
-                            if !removed_nodes.is_empty() {
-                                let _ = raft
-                                    .change_membership(
-                                        ChangeMembers::RemoveVoters(removed_nodes.clone()),
-                                        false,
-                                    )
-                                    .await
-                                    .inspect_err(|e| {
-                                        tracing::error!(?e, "remove voters error");
-                                    });
-                                let _ = raft
-                                    .change_membership(
-                                        ChangeMembers::RemoveNodes(removed_nodes),
-                                        false,
-                                    )
-                                    .await
-                                    .inspect_err(|e| {
-                                        tracing::error!(?e, "remove voters error");
-                                    });
-                            }
-                            tracing::info!(nodes=?now_members, "change membership done");
-                        }
-                        if is_modified {
-                            prev_members = now_members;
-                        }
-                    }
-                }
-                .instrument(tracing::info_span!("membership change", id = ?id)),
-            )
-        };
+        let cluster_service =
+            ClusterService::new(cluster_provider, tcp_service, cluster_service_ct);
+        cluster_service.spawn();
         Ok(())
     }
     #[tracing::instrument(skip_all)]
@@ -367,8 +302,7 @@ impl Node {
                 .await
                 .map_err(crate::Error::contextual_custom("client write"))?
         } else {
-            let Some(connection) = self.network.connections.read().await.get(&leader).cloned()
-            else {
+            let Some(connection) = self.network.get_connection(leader).await else {
                 return Err(crate::Error::new(
                     "no connection to leader",
                     crate::error::ErrorKind::Offline,
@@ -686,4 +620,8 @@ pub struct N2nRoutingInfo {
 pub struct Connection {
     pub attached_node: sync::Weak<NodeInner>,
     pub peer_info: NodeConfig,
+}
+
+impl Drop for NodeInner {
+    fn drop(&mut self) {}
 }

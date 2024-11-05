@@ -29,7 +29,7 @@ async fn test_raft() {
     fn raft_config() -> openraft::Config {
         openraft::Config {
             cluster_name: "test".to_string(),
-            heartbeat_interval: 200,
+            heartbeat_interval: 400,
             election_timeout_max: 1000,
             election_timeout_min: 500,
             ..Default::default()
@@ -90,16 +90,17 @@ async fn test_raft() {
     node_3.init_raft(cluster.clone()).await.unwrap();
 
     tokio::time::sleep(Duration::from_secs(5)).await;
-    drop(node_2);
     cluster
         .update(map!(
             node_id(1) => node_addr(1),
             node_id(3) => node_addr(3),
         ))
         .await;
+    tracing::warn!("now shutdown node_2");
+    node_2.shutdown().await;
+
     tokio::time::sleep(Duration::from_secs(2)).await;
-    node_1.raft().await.trigger().heartbeat().await.unwrap();
-    node_3.raft().await.trigger().heartbeat().await.unwrap();
+
     cluster
         .update(map!(
             node_id(1) => node_addr(1),

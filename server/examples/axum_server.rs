@@ -182,7 +182,7 @@ async fn main() -> asteroid_mq::Result<()> {
         .with_env_filter("debug,asteroid_mq=trace,openraft=warn")
         .init();
     let node = Node::new(NodeConfig::default());
-    let cluster_provider = StaticClusterProvider::singleton(node.config());
+    let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
     node.init_raft(cluster_provider).await?;
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
 

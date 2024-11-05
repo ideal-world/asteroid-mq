@@ -9,8 +9,9 @@ pub mod raft_node;
 pub mod response;
 pub mod state_machine;
 use network_factory::{RaftNodeInfo, TcpNetworkService};
-use openraft::{BasicNode, Raft};
+use openraft::Raft;
 use proposal::Proposal;
+use raft_node::TcpNode;
 use response::RaftResponse;
 use tokio_util::sync::CancellationToken;
 
@@ -25,7 +26,7 @@ impl openraft::RaftTypeConfig for TypeConfig {
     type D = Proposal;
     type R = RaftResponse;
     type NodeId = NodeId;
-    type Node = openraft::BasicNode;
+    type Node = TcpNode;
     type Entry = openraft::Entry<TypeConfig>;
     type SnapshotData = std::io::Cursor<Vec<u8>>;
     type AsyncRuntime = openraft::TokioRuntime;
@@ -79,7 +80,7 @@ impl MaybeLoadingRaft {
     pub fn net_work_service(
         &self,
         id: NodeId,
-        node: BasicNode,
+        node: TcpNode,
         ct: CancellationToken,
     ) -> TcpNetworkService {
         TcpNetworkService::new(RaftNodeInfo { id, node }, self.clone(), ct)

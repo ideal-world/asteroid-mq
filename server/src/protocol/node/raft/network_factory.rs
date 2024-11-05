@@ -1,15 +1,14 @@
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     ops::Deref,
     sync::{
-        atomic::{self, AtomicBool, AtomicU64},
+        atomic::{self, AtomicBool, AtomicU64, AtomicUsize},
         Arc, OnceLock,
     },
 };
 
-use openraft::{
-    error::Unreachable, raft::ClientWriteResponse, BasicNode, Raft, RaftNetworkFactory,
-};
+use openraft::{error::Unreachable, raft::ClientWriteResponse, Raft, RaftNetworkFactory};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -17,7 +16,7 @@ use tokio::{
     sync::oneshot,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::Instrument;
+use tracing::{instrument, Instrument};
 
 use crate::{
     prelude::NodeId,
@@ -27,64 +26,219 @@ use crate::{
 use super::{
     network::{Packet, Payload, Request, Response},
     proposal::Proposal,
+    raft_node::TcpNode,
     MaybeLoadingRaft,
 };
 #[derive(Clone, Debug)]
 pub struct TcpNetworkService {
     pub info: RaftNodeInfo,
     pub raft: MaybeLoadingRaft,
-    pub connections: RaftTcpConnectionMap,
-    pub service_task: Arc<OnceLock<tokio::task::JoinHandle<()>>>,
+    pub service_api: Arc<OnceLock<tokio::sync::mpsc::UnboundedSender<TcpNetworkServiceRequest>>>,
     pub ct: CancellationToken,
 }
+
+// TODO: Expose the API rather than the service itself
+// pub struct TcpNetworkServiceApi {
+//     api: tokio::sync::mpsc::UnboundedSender<TcpNetworkServiceRequest>,
+// }
+
 /// 4KB for each connection, this should be enough
 const BUFFER_CAPACITY: usize = 4096;
+#[derive(Debug)]
+
+pub struct GetConnection {
+    peer_id: NodeId,
+    responder: oneshot::Sender<Option<Arc<RaftTcpConnection>>>,
+}
+#[derive(Debug)]
+pub struct EnsureConnection {
+    peer_id: NodeId,
+    peer_addr: SocketAddr,
+    responder: oneshot::Sender<Arc<RaftTcpConnection>>,
+}
+#[derive(Debug)]
+pub enum TcpNetworkServiceRequest {
+    GetConnection(GetConnection),
+    EnsureConnection(EnsureConnection),
+}
+
 impl TcpNetworkService {
-    pub fn run(&self) {
+    pub async fn get_connection(&self, peer_id: NodeId) -> Option<Arc<RaftTcpConnection>> {
+        let sender = self.service_api.get()?;
+        let (responder, receiver) = oneshot::channel();
+        let get_connection = GetConnection { peer_id, responder };
+        let _ = sender
+            .send(TcpNetworkServiceRequest::GetConnection(get_connection))
+            .inspect_err(|_| {
+                tracing::error!("service not running");
+            });
+        receiver.await.ok().flatten()
+    }
+    #[instrument(skip_all, fields(local=%self.info.id, peer=%peer_id))]
+    pub async fn ensure_connection(
+        &self,
+        peer_id: NodeId,
+        peer_addr: SocketAddr,
+    ) -> std::io::Result<Arc<RaftTcpConnection>> {
+        let Some(sender) = self.service_api.get() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "service not running",
+            ));
+        };
+        let (responder, receiver) = oneshot::channel();
+        let ensure_connection = EnsureConnection {
+            peer_id,
+            peer_addr,
+            responder,
+        };
+
+        sender
+            .send(TcpNetworkServiceRequest::EnsureConnection(
+                ensure_connection,
+            ))
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "service not running")
+            })?;
+        let connection = receiver.await.map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::NotConnected, "service not running")
+        });
+        tracing::trace!(?connection, "response received");
+        connection
+    }
+    pub fn run_service(&self) {
         {
             let tcp_service = self.clone();
             let info = self.info.clone();
             let info_for_tracing = info.clone();
             let create_task = move || {
                 let ct = tcp_service.ct.clone();
+                let (ensure_connection_tx, mut ensure_connection_rx) =
+                    tokio::sync::mpsc::unbounded_channel();
                 tokio::spawn(
                     async move {
+                        tracing::info!(?info, "tcp service started");
+                        let this_id = info.id;
                         let inner_task = async move {
-                            let tcp_listener = TcpListener::bind(info.node.addr.clone()).await?;
+                            let tcp_listener = TcpListener::bind(info.node.addr).await?;
+                            let mut connection_map: HashMap<NodeId, Arc<RaftTcpConnection>> = HashMap::new();
+                            let mut ensure_waiting_queue:HashMap<NodeId, Vec<oneshot::Sender<Arc<RaftTcpConnection>>>>  = HashMap::new();
+                            // let pending_connection: Arc<Mutex<HashMap::<NodeId, Arc<Notify>>>> = Default::default();
+                            enum SelectEvent {
+                                Accepted(TcpStream),
+                                Request(TcpNetworkServiceRequest),
+                            }
                             loop {
-                                let accepted = tokio::select! {
+                                let event: SelectEvent = tokio::select! {
                                     _ = ct.cancelled() => {
                                         return Ok(());
                                     }
                                     accepted = tcp_listener.accept() => {
-                                        accepted
+                                        let Ok((stream, _)) = accepted else {
+                                            continue;
+                                        };
+                                        SelectEvent::Accepted(stream)
+                                    }
+                                    ensure_connection_req = ensure_connection_rx.recv() => {
+                                        if let Some(ensure_connection_req) = ensure_connection_req {
+                                            SelectEvent::Request(ensure_connection_req)
+                                        } else {
+                                            return Ok(());
+                                        }
                                     }
                                 };
-                                let Ok((stream, _)) = accepted else {
-                                    continue;
-                                };
-                                if let Ok(connection) = RaftTcpConnection::from_tokio_tcp_stream(
-                                    stream,
-                                    tcp_service.clone(),
-                                )
-                                .await
-                                {
-                                    let peer_id = connection.peer_id();
-                                    // we only accept node with smaller id
-                                    if peer_id >= info.id {
-                                        tracing::debug!(?peer_id, "peer id is greater than self");
-                                        continue;
+                                match event {
+                                    SelectEvent::Accepted(stream) => {
+
+                                        if let Ok(connection) =
+                                                RaftTcpConnection::from_tokio_tcp_stream(
+                                                    stream,
+                                                    tcp_service.clone(),
+                                                )
+                                                .await
+                                            {
+                                                let peer_id = connection.peer_id();
+                                                if let Some(connection) = connection_map.get(&peer_id) {
+                                                    if connection.is_alive() {
+                                                        tracing::trace!(local=%this_id, peer=%peer_id, "connection exists");
+                                                        continue;
+                                                    }
+                                                }
+                                                let connection = Arc::new(connection);
+                                                connection_map.insert(peer_id, connection.clone());
+                                                if let Some(waiting) = ensure_waiting_queue.remove(&peer_id) {
+                                                    for responder in waiting {
+                                                        let _ = responder.send(connection.clone());
+                                                    }
+                                                }
+                                            }
                                     }
-                                    let mut connections = tcp_service.connections.write().await;
-                                    // let peer_node = connection.peer_node();
-                                    if let std::collections::hash_map::Entry::Vacant(e) =
-                                        connections.entry(peer_id)
-                                    {
-                                        tracing::info!(?connection, "new connection");
-                                        e.insert(Arc::new(connection));
-                                    } else {
-                                        tracing::warn!(?connection, "connection already exists");
-                                        continue;
+                                    SelectEvent::Request(request) => {
+                                        match request {
+                                            TcpNetworkServiceRequest::GetConnection(get_connection) => {
+                                                let GetConnection {
+                                                    peer_id,
+                                                    responder,
+                                                } = get_connection;
+                                                let connection = connection_map.get(&peer_id).cloned();
+                                                let _ = responder.send(connection);
+                                            },
+                                            TcpNetworkServiceRequest::EnsureConnection(ensure_connection) => {
+                                                static REQ_ID: AtomicUsize = AtomicUsize::new(0);
+                                                let req_id = REQ_ID.fetch_add(1, atomic::Ordering::Relaxed);
+
+                                                let EnsureConnection {
+                                                    peer_id,
+                                                    peer_addr,
+                                                    responder,
+                                                } = ensure_connection;
+                                                if let Some(connection) = connection_map.get(&peer_id) {
+                                                    if connection.is_alive() {
+                                                        tracing::trace!(req_id, local=%this_id, peer=%peer_id, "connection exists");
+                                                        let _ = responder.send(connection.clone());
+                                                        continue;
+                                                    }
+                                                }
+                                                // compare id 
+                                                match peer_id.cmp(&info.id) {
+                                                    std::cmp::Ordering::Less => {
+                                                        // just wait for connection
+                                                        ensure_waiting_queue.entry(peer_id).or_default().push(responder);
+                                                    },
+                                                    std::cmp::Ordering::Equal => {
+                                                        // self connection is not allowed
+                                                        panic!("self connection is not allowed");
+                                                    },
+                                                    std::cmp::Ordering::Greater => {
+                                                        ensure_waiting_queue.entry(peer_id).or_default().push(responder);
+                                                        let create = async {
+                                                            tracing::trace!(req_id, local=%this_id, peer=%peer_id, "tcp connecting");
+                                                            let stream = TcpStream::connect(peer_addr).await?;
+                                                            tracing::trace!(req_id, local=%this_id, peer=%peer_id, "tcp connected");
+                                                            let connection =
+                                                                RaftTcpConnection::from_tokio_tcp_stream(
+                                                                    stream,
+                                                                    tcp_service.clone(),
+                                                                )
+                                                                .await?;
+                                                            tracing::trace!(req_id, local=%this_id, peer=%peer_id, "node id exchanged");
+                                                            <Result<Arc<RaftTcpConnection>, std::io::Error>>::Ok(
+                                                                Arc::new(connection),
+                                                            )
+                                                        };
+                                                        let result = create.await;
+                                                        if let Ok(connection) = result {
+                                                            connection_map.insert(peer_id, connection.clone());
+                                                            if let Some(waiting) = ensure_waiting_queue.remove(&peer_id) {
+                                                                for responder in waiting {
+                                                                    let _ = responder.send(connection.clone());
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                }
+                                            },
+                                        }
                                     }
                                 }
                             }
@@ -100,9 +254,10 @@ impl TcpNetworkService {
                         "tcp_network_service",
                         info=?info_for_tracing
                     )),
-                )
+                );
+                ensure_connection_tx
             };
-            self.service_task.get_or_init(create_task);
+            self.service_api.get_or_init(create_task);
         }
     }
 }
@@ -126,22 +281,21 @@ pub struct RaftTcpConnection {
     wait_poll: Arc<tokio::sync::Mutex<HashMap<u64, oneshot::Sender<Response>>>>,
     local_seq: Arc<AtomicU64>,
     alive: Arc<AtomicBool>,
-    read_task: tokio::task::JoinHandle<()>,
-    write_task: tokio::task::JoinHandle<()>,
+    ct: CancellationToken,
 }
 
 impl Drop for RaftTcpConnection {
     fn drop(&mut self) {
-        tracing::info!("connection dropped");
-        self.read_task.abort();
-        self.write_task.abort();
+        let peer = self.peer.id;
+        tracing::info!(%peer, "connection dropped");
+        self.ct.cancel();
         self.alive.store(false, atomic::Ordering::Relaxed);
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RaftNodeInfo {
     pub id: NodeId,
-    pub node: BasicNode,
+    pub node: TcpNode,
 }
 impl RaftTcpConnection {
     pub fn is_alive(&self) -> bool {
@@ -150,8 +304,8 @@ impl RaftTcpConnection {
     pub fn peer_id(&self) -> NodeId {
         self.peer.id
     }
-    pub fn peer_node(&self) -> BasicNode {
-        self.peer.node.clone()
+    pub fn peer_node(&self) -> TcpNode {
+        self.peer.node
     }
     fn next_seq(&self) -> u64 {
         self.local_seq.fetch_add(1, atomic::Ordering::Relaxed)
@@ -202,6 +356,7 @@ impl RaftTcpConnection {
         mut stream: TcpStream,
         service: TcpNetworkService,
     ) -> std::io::Result<Self> {
+        let connection_ct = service.ct.child_token();
         let raft = service.raft.get().await;
         let info = service.info.clone();
         let packet = bincode::serialize(&info).map_err(|_| std::io::ErrorKind::InvalidData)?;
@@ -212,7 +367,7 @@ impl RaftTcpConnection {
         stream.read_exact(&mut hello_data).await?;
         let peer: RaftNodeInfo =
             bincode::deserialize(&hello_data).map_err(|_| std::io::ErrorKind::InvalidData)?;
-        tracing::debug!(?peer, "hello received");
+        tracing::debug!(peer=%peer.id, local=%info.id, "hello received");
         let (mut read, mut write) = stream.into_split();
         let wait_pool = Arc::new(tokio::sync::Mutex::new(HashMap::<
             u64,
@@ -220,8 +375,8 @@ impl RaftTcpConnection {
         >::new()));
         let wait_poll_clone = wait_pool.clone();
         let (packet_tx, packet_rx) = flume::bounded::<Packet>(512);
-        let write_task_ct = service.ct.child_token();
-        let write_task = tokio::spawn(
+        let write_task_ct = connection_ct.child_token();
+        let _write_task = tokio::spawn(
             async move {
                 let write_loop = async {
                     loop {
@@ -257,8 +412,8 @@ impl RaftTcpConnection {
             )),
         );
         let alive = Arc::new(AtomicBool::new(true));
-        let read_task_ct = service.ct.child_token();
-        let read_task = {
+        let read_task_ct = connection_ct.child_token();
+        let _read_task = {
             let packet_tx = packet_tx.clone();
             let alive = alive.clone();
             let inner_task = async move {
@@ -335,8 +490,7 @@ impl RaftTcpConnection {
             peer,
             local_seq: Arc::new(AtomicU64::new(0)),
             alive,
-            read_task,
-            write_task,
+            ct: connection_ct,
         })
     }
 }
@@ -346,8 +500,7 @@ impl TcpNetworkService {
         Self {
             info,
             raft,
-            connections: RaftTcpConnectionMap::default(),
-            service_task: Arc::new(OnceLock::new()),
+            service_api: Arc::new(OnceLock::new()),
             ct,
         }
     }
@@ -366,7 +519,7 @@ impl RaftNetworkFactory<TypeConfig> for TcpNetworkService {
         TcpNetwork::new(
             RaftNodeInfo {
                 id: target,
-                node: node.clone(),
+                node: *node,
             },
             self.clone(),
         )

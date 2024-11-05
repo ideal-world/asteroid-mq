@@ -11,8 +11,8 @@ use std::{
 
 use node::NodeData;
 use openraft::{
-    storage::RaftStateMachine, BasicNode, EntryPayload, LogId, RaftSnapshotBuilder, RaftTypeConfig,
-    Snapshot, SnapshotMeta, StorageError, StoredMembership,
+    storage::RaftStateMachine, EntryPayload, LogId, RaftSnapshotBuilder, RaftTypeConfig, Snapshot,
+    SnapshotMeta, StorageError, StoredMembership,
 };
 use tokio::sync::RwLock;
 
@@ -24,10 +24,10 @@ use crate::{
     },
 };
 
-use super::{response::RaftResponse, TypeConfig};
+use super::{raft_node::TcpNode, response::RaftResponse, TypeConfig};
 #[derive(Debug)]
 pub struct StoredSnapshot {
-    pub meta: SnapshotMeta<NodeId, BasicNode>,
+    pub meta: SnapshotMeta<NodeId, TcpNode>,
 
     /// The data of the state machine at the time of this snapshot.
     pub data: NodeData,

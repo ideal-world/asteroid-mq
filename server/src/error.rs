@@ -3,12 +3,10 @@ use std::{
     fmt::{Display, Formatter},
 };
 
-use openraft::BasicNode;
-
 use crate::{
     prelude::NodeId,
     protocol::{
-        node::raft::state_machine::topic::wait_ack::WaitAckError,
+        node::raft::{raft_node::TcpNode, state_machine::topic::wait_ack::WaitAckError},
         topic::durable_message::DurableError,
     },
 };
@@ -97,6 +95,6 @@ error_kind! {
         Io: std::io::Error,
         Ack: WaitAckError,
         Custom: Box<dyn std::error::Error + Send + Sync>,
-        RaftClient: openraft::error::RaftError<NodeId, openraft::error::ClientWriteError<NodeId, BasicNode>>
+        RaftClient: openraft::error::RaftError<NodeId, openraft::error::ClientWriteError<NodeId, TcpNode>>
     }
 }
