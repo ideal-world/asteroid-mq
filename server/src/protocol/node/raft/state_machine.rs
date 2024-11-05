@@ -11,8 +11,8 @@ use std::{
 
 use node::NodeData;
 use openraft::{
-    storage::RaftStateMachine, EntryPayload, LogId, RaftSnapshotBuilder, RaftTypeConfig,
-    Snapshot, SnapshotMeta, StorageError, StoredMembership,
+    storage::RaftStateMachine, EntryPayload, LogId, RaftSnapshotBuilder, RaftTypeConfig, Snapshot,
+    SnapshotMeta, StorageError, StoredMembership,
 };
 use tokio::sync::RwLock;
 
