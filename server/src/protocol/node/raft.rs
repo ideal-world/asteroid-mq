@@ -9,7 +9,7 @@ pub mod raft_node;
 pub mod response;
 pub mod state_machine;
 use network_factory::{RaftNodeInfo, TcpNetworkService};
-use openraft::{BasicNode, Raft};
+use openraft::Raft;
 use proposal::Proposal;
 use raft_node::TcpNode;
 use response::RaftResponse;

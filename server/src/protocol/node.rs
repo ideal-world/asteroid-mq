@@ -1,7 +1,7 @@
 pub mod edge;
 pub mod raft;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     net::SocketAddr,
     ops::Deref,
     sync::{self, Arc, RwLock},
@@ -30,9 +30,9 @@ use edge::{
     EdgeError, EdgeErrorKind,
 };
 use futures_util::TryFutureExt;
-use openraft::{BasicNode, ChangeMembers, Raft};
+use openraft::Raft;
 use raft::{
-    cluster::{ClusterProvider, ClusterService, DynClusterProvider},
+    cluster::{ClusterProvider, ClusterService},
     log_storage::LogStorage,
     network_factory::TcpNetworkService,
     proposal::{EndpointOffline, EndpointOnline, LoadTopic, Proposal},
@@ -42,7 +42,6 @@ use raft::{
 };
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
-use tracing::Instrument;
 
 use crate::{
     prelude::{DurableMessage, DurableService},
@@ -86,6 +85,17 @@ pub struct NodeInner {
     ct: CancellationToken,
 }
 
+impl NodeInner {
+    pub async fn shutdown(&self) {
+        if let Some(raft) = self.raft.get_opt() {
+            let result = raft.shutdown().await;
+            if let Err(e) = result {
+                tracing::error!(?e, "raft shutdown error");
+            }
+        }
+        self.ct.cancel();
+    }
+}
 #[derive(Debug, Clone, Default)]
 pub struct NodeRef {
     inner: std::sync::Weak<NodeInner>,
@@ -613,7 +623,5 @@ pub struct Connection {
 }
 
 impl Drop for NodeInner {
-    fn drop(&mut self) {
-        self.ct.cancel();
-    }
+    fn drop(&mut self) {}
 }

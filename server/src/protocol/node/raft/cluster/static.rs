@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, net::SocketAddr};
 
 use futures_util::future::pending;
 
-use crate::prelude::{NodeConfig, NodeId};
+use crate::prelude::NodeId;
 
 use super::ClusterProvider;
 

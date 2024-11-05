@@ -6,7 +6,7 @@ use std::{
 };
 
 use asteroid_mq::{prelude::NodeId, protocol::node::raft::cluster::ClusterProvider};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 pub struct TestClusterProvider {
     nodes: Arc<Mutex<BTreeMap<NodeId, SocketAddr>>>,
@@ -34,12 +34,14 @@ impl ClusterProvider for TestClusterProvider {
     async fn next_update(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, SocketAddr>> {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let nodes = self.nodes.lock().await.clone();
-        tracing::warn!(?nodes, "updated");
         Ok(nodes)
     }
     async fn pristine_nodes(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, SocketAddr>> {
         let nodes = self.nodes.lock().await.clone();
         Ok(nodes)
+    }
+    fn name(&self) -> std::borrow::Cow<'static, str> {
+        "TestClusterProvider".into()
     }
 }
 #[macro_export]

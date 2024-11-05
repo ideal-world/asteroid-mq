@@ -8,14 +8,12 @@ use std::{
     },
 };
 
-use openraft::{
-    error::Unreachable, raft::ClientWriteResponse, BasicNode, Raft, RaftNetworkFactory,
-};
+use openraft::{error::Unreachable, raft::ClientWriteResponse, Raft, RaftNetworkFactory};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{oneshot, Mutex, Notify, RwLock},
+    sync::oneshot,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{instrument, Instrument};
@@ -35,17 +33,15 @@ use super::{
 pub struct TcpNetworkService {
     pub info: RaftNodeInfo,
     pub raft: MaybeLoadingRaft,
-    pub service_api: Arc<
-        OnceLock<
-            tokio::sync::mpsc::UnboundedSender<TcpNetworkServiceRequest>
-        >,
-    >,
+    pub service_api: Arc<OnceLock<tokio::sync::mpsc::UnboundedSender<TcpNetworkServiceRequest>>>,
     pub ct: CancellationToken,
 }
 
-pub struct TcpNetworkServiceApi {
-    api: tokio::sync::mpsc::UnboundedSender<TcpNetworkServiceRequest>
-}
+// TODO: Expose the API rather than the service itself
+// pub struct TcpNetworkServiceApi {
+//     api: tokio::sync::mpsc::UnboundedSender<TcpNetworkServiceRequest>,
+// }
+
 /// 4KB for each connection, this should be enough
 const BUFFER_CAPACITY: usize = 4096;
 #[derive(Debug)]
@@ -65,9 +61,6 @@ pub enum TcpNetworkServiceRequest {
     GetConnection(GetConnection),
     EnsureConnection(EnsureConnection),
 }
-
-
-
 
 impl TcpNetworkService {
     pub async fn get_connection(&self, peer_id: NodeId) -> Option<Arc<RaftTcpConnection>> {
@@ -169,7 +162,7 @@ impl TcpNetworkService {
                                                     if connection.is_alive() {
                                                         tracing::trace!(local=%this_id, peer=%peer_id, "connection exists");
                                                         continue;
-                                                    } 
+                                                    }
                                                 }
                                                 let connection = Arc::new(connection);
                                                 connection_map.insert(peer_id, connection.clone());
@@ -312,7 +305,7 @@ impl RaftTcpConnection {
         self.peer.id
     }
     pub fn peer_node(&self) -> TcpNode {
-        self.peer.node.clone()
+        self.peer.node
     }
     fn next_seq(&self) -> u64 {
         self.local_seq.fetch_add(1, atomic::Ordering::Relaxed)

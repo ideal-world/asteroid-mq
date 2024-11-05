@@ -5,8 +5,7 @@ use openraft::{
     raft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
         InstallSnapshotResponse, VoteRequest, VoteResponse,
-    },
-    BasicNode, RaftNetwork,
+    }, RaftNetwork,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot::Receiver;

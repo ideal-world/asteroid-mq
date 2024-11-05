@@ -80,7 +80,7 @@ async fn test_raft() {
     node_1.init_raft(cluster.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    cluster 
+    cluster
         .update(map!(
             node_id(1) => node_addr(1),
             node_id(2) => node_addr(2),
@@ -96,41 +96,42 @@ async fn test_raft() {
             node_id(3) => node_addr(3),
         ))
         .await;
-    drop(node_2);
+    tracing::warn!("now shutdown node_2");
+    node_2.shutdown().await;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // cluster
-    //     .update(map!(
-    //         node_id(1) => node_addr(1),
-    //         node_id(3) => node_addr(3),
-    //     ))
-    //     .await;
-    // tokio::time::sleep(Duration::from_secs(2)).await;
-    // let result_1 = node_1
-    //     .raft()
-    //     .await
-    //     .with_raft_state(|s| {
-    //         tracing::info!("node_1 state: {:#?}", s.membership_state);
-    //     })
-    //     .await;
-    // tracing::info!(
-    //     "node_1 leader: {:#?}",
-    //     node_1.raft().await.current_leader().await
-    // );
-    // let result_3 = node_3
-    //     .raft()
-    //     .await
-    //     .with_raft_state(|s| {
-    //         tracing::info!("node_3 state: {:#?}", s.membership_state);
-    //     })
-    //     .await;
-    // tracing::info!(
-    //     "node_3 state: {:#?}",
-    //     node_3.raft().await.current_leader().await
-    // );
-    // result_1.unwrap();
-    // result_3.unwrap();
+    cluster
+        .update(map!(
+            node_id(1) => node_addr(1),
+            node_id(3) => node_addr(3),
+        ))
+        .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let result_1 = node_1
+        .raft()
+        .await
+        .with_raft_state(|s| {
+            tracing::info!("node_1 state: {:#?}", s.membership_state);
+        })
+        .await;
+    tracing::info!(
+        "node_1 leader: {:#?}",
+        node_1.raft().await.current_leader().await
+    );
+    let result_3 = node_3
+        .raft()
+        .await
+        .with_raft_state(|s| {
+            tracing::info!("node_3 state: {:#?}", s.membership_state);
+        })
+        .await;
+    tracing::info!(
+        "node_3 state: {:#?}",
+        node_3.raft().await.current_leader().await
+    );
+    result_1.unwrap();
+    result_3.unwrap();
 
     tokio::time::sleep(Duration::from_secs(10)).await;
 }
