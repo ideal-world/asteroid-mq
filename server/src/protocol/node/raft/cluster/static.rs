@@ -22,6 +22,9 @@ impl StaticClusterProvider {
     }
 }
 impl ClusterProvider for StaticClusterProvider {
+    fn name(&self) -> std::borrow::Cow<'static, str> {
+        "static".into()
+    }
     async fn next_update(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
         pending().await
     }
