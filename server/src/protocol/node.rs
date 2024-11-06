@@ -162,7 +162,7 @@ impl Node {
             inner: Arc::new(inner),
         }
     }
-    pub async fn init_raft<C: ClusterProvider>(
+    pub async fn start<C: ClusterProvider>(
         &self,
         mut cluster_provider: C,
     ) -> Result<(), crate::Error> {
@@ -194,23 +194,17 @@ impl Node {
         .await
         .map_err(crate::Error::contextual_custom("create raft node"))?;
         // waiting for members contain self
-        let nodes: BTreeMap<NodeId, TcpNode> = loop {
-            let next_update = cluster_provider.next_update().await;
-            if let Ok(nodes) = next_update {
-                if nodes.contains_key(&id) {
-                    tracing::info!("this node is included in the cluster");
-                    break nodes
-                        .into_iter()
-                        .map(|(k, v)| (k, TcpNode::new(v)))
-                        .collect();
-                } else {
-                    tracing::info!(?nodes, "this node is not included in the cluster");
-                }
-            }
-        };
-        raft.initialize(nodes)
+        let pristine_nodes = cluster_provider.pristine_nodes().await?;
+        if pristine_nodes.contains_key(&id) {
+            raft.initialize(
+                pristine_nodes
+                    .into_iter()
+                    .map(|(k, n)| (k, TcpNode::new(n)))
+                    .collect::<BTreeMap<_, _>>(),
+            )
             .await
             .map_err(crate::Error::contextual_custom("init raft node"))?;
+        }
         maybe_loading_raft.set(raft.clone());
         let cluster_service =
             ClusterService::new(cluster_provider, tcp_service, cluster_service_ct);

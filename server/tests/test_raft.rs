@@ -29,7 +29,7 @@ async fn test_raft() {
     fn raft_config() -> openraft::Config {
         openraft::Config {
             cluster_name: "test".to_string(),
-            heartbeat_interval: 200,
+            heartbeat_interval: 400,
             election_timeout_max: 1000,
             election_timeout_min: 500,
             ..Default::default()
@@ -47,7 +47,9 @@ async fn test_raft() {
     let cluster = common::TestClusterProvider::new(map!(
         node_id(2) => node_addr(2),
     ));
-
+    cluster.update(map!(
+        node_id(2) => node_addr(2),
+    )).await;
     let node_1 = Node::new(NodeConfig {
         id: node_id(1),
         addr: node_addr(1),
@@ -69,7 +71,7 @@ async fn test_raft() {
         ..Default::default()
     });
 
-    node_2.init_raft(cluster.clone()).await.unwrap();
+    node_2.start(cluster.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     cluster
         .update(map!(
@@ -77,7 +79,7 @@ async fn test_raft() {
             node_id(2) => node_addr(2),
         ))
         .await;
-    node_1.init_raft(cluster.clone()).await.unwrap();
+    node_1.start(cluster.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     cluster
@@ -90,55 +92,91 @@ async fn test_raft() {
     let node_3_init_task = {
         let node_3 = node_3.clone();
         let cluster = cluster.clone();
-        tokio::spawn(async move {
-            node_3.init_raft(cluster).await
-        })
+        tokio::spawn(async move { node_3.start(cluster).await })
     };
-    // cluster
-    //     .update(map!(
-    //         node_id(1) => node_addr(1),
-    //         node_id(3) => node_addr(3),
-    //     ))
-    //     .await;
-    // node_3_init_task.await.unwrap().unwrap();
-    // tokio::time::sleep(Duration::from_secs(5)).await;
+    cluster
+        .update(map!(
+            node_id(1) => node_addr(1),
+            node_id(3) => node_addr(3),
+        ))
+        .await;
+    node_3_init_task.await.unwrap().unwrap();
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
-    // tracing::warn!("now shutdown node_2");
-    // node_2.shutdown().await;
+    tracing::warn!("now shutdown node_2");
+    node_2.shutdown().await;
 
-    // tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // cluster
-    //     .update(map!(
-    //         node_id(1) => node_addr(1),
-    //         node_id(3) => node_addr(3),
-    //     ))
-    //     .await;
-    // tokio::time::sleep(Duration::from_secs(2)).await;
-    // let result_1 = node_1
-    //     .raft()
-    //     .await
-    //     .with_raft_state(|s| {
-    //         tracing::warn!("node_1 state: {:#?}", s.membership_state);
-    //     })
-    //     .await;
-    // tracing::warn!(
-    //     "node_1 leader: {:#?}",
-    //     node_1.raft().await.current_leader().await
-    // );
-    // let result_3 = node_3
-    //     .raft()
-    //     .await
-    //     .with_raft_state(|s| {
-    //         tracing::warn!("node_3 state: {:#?}", s.membership_state);
-    //     })
-    //     .await;
-    // tracing::warn!(
-    //     "node_3 state: {:#?}",
-    //     node_3.raft().await.current_leader().await
-    // );
-    // result_1.unwrap();
-    // result_3.unwrap();
-
+    // we should trigger a leader election here
     tokio::time::sleep(Duration::from_secs(10)).await;
+
+    let leader_of_1 = node_1.raft().await.current_leader().await;
+    let leader_of_3 = node_3.raft().await.current_leader().await;
+    // assert!(
+    //     leader_of_1.is_some() && leader_of_3.is_some() && leader_of_1 == leader_of_3,
+    //     "no leader elected"
+    // );
+    tracing::warn!("leader of node_1: {:#?}", leader_of_1);
+    tracing::warn!("leader of node_3: {:#?}", leader_of_3);
+
+    tracing::warn!("now restart node_2");
+    let node_2 = Node::new(NodeConfig {
+        id: node_id(2),
+        addr: node_addr(2),
+        raft: raft_config(),
+        ..Default::default()
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    node_2.start(cluster.clone()).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    tracing::warn!("now shutdown node_1");
+    node_1.shutdown().await;
+    cluster
+    .update(map!(
+        node_id(3) => node_addr(3),
+    ))
+    .await;
+    tracing::warn!("now start node_4");
+    let node_4 = Node::new(NodeConfig {
+        id: node_id(4),
+        addr: node_addr(4),
+        raft: raft_config(),
+        ..Default::default()
+    });
+    node_4.start(cluster.clone()).await.unwrap();
+    cluster
+    .update(map!(
+        node_id(4) => node_addr(4),
+        node_id(3) => node_addr(3),
+    ))
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+
+    let result_4 = node_4
+        .raft()
+        .await
+        .with_raft_state(|s| {
+            tracing::warn!("node_4 state: {:#?}", s.membership_state);
+        })
+        .await;
+    tracing::warn!(
+        "node_4 leader: {:#?}",
+        node_4.raft().await.current_leader().await
+    );
+    let result_3 = node_3
+        .raft()
+        .await
+        .with_raft_state(|s| {
+            tracing::warn!("node_3 state: {:#?}", s.membership_state);
+        })
+        .await;
+    tracing::warn!(
+        "node_3 state: {:#?}",
+        node_3.raft().await.current_leader().await
+    );
+    result_4.unwrap();
+    result_3.unwrap();
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
 }

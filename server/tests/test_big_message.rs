@@ -74,7 +74,7 @@ async fn test_big_message() {
         nodes.insert(id, node.clone());
         let cluster = cluster.clone();
         init_tasks.spawn(async move {
-            node.init_raft(cluster).await?;
+            node.start(cluster).await?;
             let raft = node.raft().await;
             loop {
                 if let Some(leader) = raft.current_leader().await {

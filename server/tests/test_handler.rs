@@ -32,7 +32,7 @@ async fn hello_world_handler(Json(hello_world): Json<HelloWorld>) -> asteroid_mq
 async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
     let node = Node::new(NodeConfig::default());
     let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
-    node.init_raft(cluster_provider).await?;
+    node.start(cluster_provider).await?;
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
     let _evt_loop_handle = topic
         .create_endpoint([Interest::new("*")])

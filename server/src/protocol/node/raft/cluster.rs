@@ -20,9 +20,7 @@ use super::{network_factory::TcpNetworkService, raft_node::TcpNode};
 pub trait ClusterProvider: Send + 'static {
     fn pristine_nodes(
         &mut self,
-    ) -> impl Future<Output = crate::Result<BTreeMap<NodeId, SocketAddr>>> + Send {
-        self.next_update()
-    }
+    ) -> impl Future<Output = crate::Result<BTreeMap<NodeId, SocketAddr>>> + Send;
     fn next_update(
         &mut self,
     ) -> impl Future<Output = crate::Result<BTreeMap<NodeId, SocketAddr>>> + Send;
@@ -156,6 +154,7 @@ impl ClusterService {
             else {
                 continue;
             };
+
             let current_nodes = current_members
                 .committed()
                 .nodes()
@@ -176,62 +175,60 @@ impl ClusterService {
                     }
                 })
                 .collect::<BTreeMap<_, _>>();
-            tracing::debug!(ensured = ?ensured_nodes, remove = ?to_remove, add = ?to_add, "updating raft members");
             let leader_node = raft.current_leader().await;
-            let Some(leader_node) = leader_node else {
-                tracing::warn!("no leader node found");
-                let elect_result = raft.trigger().elect().await;
-                if let Err(e) = elect_result {
-                    tracing::error!("failed to trigger election: {}", e);
-                }
-                continue;
-            };
-            if to_remove.contains(&leader_node) {
-                let elect_result = raft.trigger().elect().await;
-                if let Err(e) = elect_result {
-                    tracing::error!("failed to trigger election: {}", e);
-                }
+            if to_remove.is_empty() && to_add.is_empty() {
+                tracing::trace!(leader=?leader_node, "no change in nodes");
+            } else {
+                tracing::info!(ensured = ?ensured_nodes, remove = ?to_remove, add = ?to_add, leader=?leader_node, "updating raft members");
             }
-            if local_id == leader_node {
+            if Some(local_id) == leader_node {
                 if !to_add.is_empty() {
                     let raft = raft.clone();
-                    tokio::spawn(async move {
-                        let add_nodes_result = raft
-                            .change_membership(ChangeMembers::AddNodes(to_add.clone()), false)
-                            .await;
-                        if let Err(e) = add_nodes_result {
-                            tracing::warn!("failed to add nodes: {}", e);
+                    for (id, node) in to_add {
+                        let add_result = raft.add_learner(id, node, true).await;
+                        match add_result {
+                            Ok(resp) => {
+                                tracing::info!(?resp, "learner {} added", id);
+                            }
+                            Err(e) => {
+                                tracing::warn!("failed to add learner {}: {}", id, e);
+                            }
                         }
-                        let add_voters_result = raft
-                            .change_membership(ChangeMembers::AddVoters(to_add.clone()), false)
-                            .await;
-                        if let Err(e) = add_voters_result {
+                    }
+                    let add_voters_result = raft
+                        .change_membership(
+                            current_nodes.keys().cloned().collect::<BTreeSet<_>>(),
+                            false,
+                        )
+                        .await;
+                    match add_voters_result {
+                        Ok(resp) => {
+                            tracing::info!(?resp, "voters added");
+                        }
+                        Err(e) => {
                             tracing::warn!("failed to add voters: {}", e);
                         }
-                    });
+                    }
                 }
                 if !to_remove.is_empty() {
                     let raft = raft.clone();
-                    tokio::spawn(async move {
-                        let remove_nodes_result = raft
-                            .change_membership(ChangeMembers::RemoveNodes(to_remove.clone()), false)
-                            .await;
-                        if let Err(e) = remove_nodes_result {
-                            tracing::warn!("failed to remove nodes: {}", e);
-                        }
-                        let remove_voters_result = raft
-                            .change_membership(
-                                ChangeMembers::RemoveVoters(to_remove.clone()),
-                                false,
-                            )
-                            .await;
-                        if let Err(e) = remove_voters_result {
-                            tracing::warn!("failed to remove voters: {}", e);
-                        }
-                    });
+                    let remove_nodes_result = raft
+                        .change_membership(ChangeMembers::RemoveNodes(to_remove.clone()), false)
+                        .await;
+                    if let Err(e) = remove_nodes_result {
+                        tracing::warn!("failed to remove nodes: {}", e);
+                    }
+                    let remove_voters_result = raft
+                        .change_membership(
+                            ChangeMembers::RemoveVoters(to_remove.clone()),
+                            false,
+                        )
+                        .await;
+                    if let Err(e) = remove_voters_result {
+                        tracing::warn!("failed to remove voters: {}", e);
+                    }
                 }
             }
-            tracing::trace!("waiting for next update")
         }
         Ok(())
     }
