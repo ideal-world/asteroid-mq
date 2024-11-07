@@ -342,7 +342,8 @@ impl RaftTcpConnection {
 
         self.wait_poll.lock().await.insert(seq_id, sender);
         self.packet_tx
-            .send(packet).await
+            .send(packet)
+            .await
             .inspect_err(|_| {
                 let pool = self.wait_poll.clone();
                 tokio::spawn(async move {
@@ -461,11 +462,9 @@ impl RaftTcpConnection {
                                         Request::Vote(vote) => {
                                             Response::Vote(raft.vote(vote).await)
                                         }
-                                        Request::AppendEntries(append) => {
-                                            Response::AppendEntries(
-                                                raft.append_entries(append).await,
-                                            )
-                                        }
+                                        Request::AppendEntries(append) => Response::AppendEntries(
+                                            raft.append_entries(append).await,
+                                        ),
                                         Request::InstallSnapshot(install) => {
                                             Response::InstallSnapshot(
                                                 raft.install_snapshot(install).await,

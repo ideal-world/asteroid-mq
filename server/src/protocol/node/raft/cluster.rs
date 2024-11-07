@@ -11,7 +11,6 @@ pub(crate) mod k8s;
 #[cfg(feature = "cluster-k8s")]
 pub use k8s::K8sClusterProvider;
 pub(crate) mod r#static;
-use openraft::ChangeMembers;
 pub use r#static::StaticClusterProvider;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -154,7 +153,6 @@ impl ClusterService {
             else {
                 continue;
             };
-
             let current_nodes = current_members
                 .committed()
                 .nodes()
@@ -181,51 +179,50 @@ impl ClusterService {
             } else {
                 tracing::info!(ensured = ?ensured_nodes, remove = ?to_remove, add = ?to_add, leader=?leader_node, "updating raft members");
             }
-            if Some(local_id) == leader_node {
-                if !to_add.is_empty() {
-                    let raft = raft.clone();
-                    for (id, node) in to_add {
-                        let add_result = raft.add_learner(id, node, true).await;
-                        match add_result {
-                            Ok(resp) => {
-                                tracing::info!(?resp, "learner {} added", id);
-                            }
-                            Err(e) => {
-                                tracing::warn!("failed to add learner {}: {}", id, e);
-                            }
-                        }
-                    }
-                    let add_voters_result = raft
-                        .change_membership(
-                            current_nodes.keys().cloned().collect::<BTreeSet<_>>(),
-                            false,
-                        )
-                        .await;
-                    match add_voters_result {
+            if let Some(leader_node) = leader_node {
+                if to_remove.contains(&leader_node) && local_id != leader_node {
+                    tracing::warn!("leader {} is removed from cluster", leader_node);
+                    let trigger_elect_result = raft.trigger().elect().await;
+                    match trigger_elect_result {
                         Ok(resp) => {
-                            tracing::info!(?resp, "voters added");
+                            tracing::info!(?resp, "leader removed, trigger election");
                         }
                         Err(e) => {
-                            tracing::warn!("failed to add voters: {}", e);
+                            tracing::warn!("failed to trigger election: {}", e);
                         }
                     }
                 }
-                if !to_remove.is_empty() {
-                    let raft = raft.clone();
-                    let remove_nodes_result = raft
-                        .change_membership(ChangeMembers::RemoveNodes(to_remove.clone()), false)
-                        .await;
-                    if let Err(e) = remove_nodes_result {
-                        tracing::warn!("failed to remove nodes: {}", e);
+            }
+            if to_remove.contains(&local_id) {
+                tracing::warn!("local node {} is removed from cluster", local_id);
+                break;
+            }
+
+            if Some(local_id) == leader_node && !to_add.is_empty() {
+                let raft = raft.clone();
+                for (id, node) in to_add {
+                    let add_result = raft.add_learner(id, node, true).await;
+                    match add_result {
+                        Ok(resp) => {
+                            tracing::info!(?resp, "learner {} added", id);
+                        }
+                        Err(e) => {
+                            tracing::warn!("failed to add learner {}: {}", id, e);
+                        }
                     }
-                    let remove_voters_result = raft
-                        .change_membership(
-                            ChangeMembers::RemoveVoters(to_remove.clone()),
-                            false,
-                        )
-                        .await;
-                    if let Err(e) = remove_voters_result {
-                        tracing::warn!("failed to remove voters: {}", e);
+                }
+                let add_voters_result = raft
+                    .change_membership(
+                        ensured_nodes.keys().cloned().collect::<BTreeSet<_>>(),
+                        false,
+                    )
+                    .await;
+                match add_voters_result {
+                    Ok(resp) => {
+                        tracing::info!(?resp, "voters added");
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to add voters: {}", e);
                     }
                 }
             }

@@ -83,12 +83,11 @@ impl HoldMessage {
                 }
                 false
             }
-            MessageTargetKind::Online | MessageTargetKind::Available | MessageTargetKind::Push => {
-                self.wait_ack
-                    .status
-                    .values()
-                    .all(|status| status.is_resolved(self.wait_ack.expect))
-            }
+            MessageTargetKind::Online | MessageTargetKind::Push => self
+                .wait_ack
+                .status
+                .values()
+                .all(|status| status.is_resolved(self.wait_ack.expect)),
         }
     }
     pub(crate) fn resolve(self) -> WaitAckResult {

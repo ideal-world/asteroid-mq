@@ -40,7 +40,7 @@ impl ClusterProvider for TestClusterProvider {
     }
     async fn pristine_nodes(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, SocketAddr>> {
         let nodes = self.pristine_nodes.as_ref().clone();
-        
+
         Ok(nodes)
     }
     fn name(&self) -> std::borrow::Cow<'static, str> {

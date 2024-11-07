@@ -67,12 +67,12 @@ impl TopicData {
                 self.collect_addr_by_subjects(message.header.subjects.iter())
                 // just accept all
             }
-            #[allow(deprecated)]
-            MessageTargetKind::Available => {
-                tracing::warn!("message target kind available is not supported yet, this message would be ignored");
-                return;
-                // unsupported
-            }
+            // #[allow(deprecated)]
+            // MessageTargetKind::Available => {
+            //     tracing::warn!("message target kind available is not supported yet, this message would be ignored");
+            //     return;
+            //     // unsupported
+            // }
             MessageTargetKind::Push => {
                 let message_hash = crate::util::hash64(&message.id());
                 let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());

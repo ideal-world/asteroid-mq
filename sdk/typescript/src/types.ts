@@ -53,7 +53,6 @@ export enum MessageAckExpectKind {
 export enum MessageTargetKind {
 	Durable = "Durable",
 	Online = "Online",
-	Available = "Available",
 	Push = "Push",
 }
 

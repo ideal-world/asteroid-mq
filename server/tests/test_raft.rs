@@ -47,9 +47,11 @@ async fn test_raft() {
     let cluster = common::TestClusterProvider::new(map!(
         node_id(2) => node_addr(2),
     ));
-    cluster.update(map!(
-        node_id(2) => node_addr(2),
-    )).await;
+    cluster
+        .update(map!(
+            node_id(2) => node_addr(2),
+        ))
+        .await;
     let node_1 = Node::new(NodeConfig {
         id: node_id(1),
         addr: node_addr(1),
@@ -129,13 +131,6 @@ async fn test_raft() {
     node_2.start(cluster.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    tracing::warn!("now shutdown node_1");
-    node_1.shutdown().await;
-    cluster
-    .update(map!(
-        node_id(3) => node_addr(3),
-    ))
-    .await;
     tracing::warn!("now start node_4");
     let node_4 = Node::new(NodeConfig {
         id: node_id(4),
@@ -145,13 +140,36 @@ async fn test_raft() {
     });
     node_4.start(cluster.clone()).await.unwrap();
     cluster
-    .update(map!(
-        node_id(4) => node_addr(4),
-        node_id(3) => node_addr(3),
-    ))
-    .await;
+        .update(map!(
+            node_id(1) => node_addr(1),
+            node_id(3) => node_addr(3),
+            node_id(4) => node_addr(4),
+        ))
+        .await;
     tokio::time::sleep(Duration::from_secs(2)).await;
-
+    tracing::warn!("now shutdown node_1");
+    node_1.shutdown().await;
+    cluster
+        .update(map!(
+            node_id(3) => node_addr(3),
+            node_id(4) => node_addr(4),
+        ))
+        .await;
+    let node_5 = Node::new(NodeConfig {
+        id: node_id(5),
+        addr: node_addr(5),
+        raft: raft_config(),
+        ..Default::default()
+    });
+    node_5.start(cluster.clone()).await.unwrap();
+    cluster
+        .update(map!(
+            node_id(3) => node_addr(3),
+            node_id(4) => node_addr(4),
+            node_id(5) => node_addr(5),
+        ))
+        .await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     let result_4 = node_4
         .raft()
