@@ -51,6 +51,9 @@ impl ClusterProvider for K8sClusterProvider {
     fn name(&self) -> Cow<'static, str> {
         Cow::Owned(format!("k8s/{}/{}", self.namespace, self.service,))
     }
+    async fn pristine_nodes(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
+        self.next_update().await
+    }
     async fn next_update(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
         tokio::time::sleep_until(self.next_update).await;
         self.next_update += self.poll_interval;

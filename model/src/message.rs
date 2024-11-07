@@ -4,6 +4,7 @@ use crate::{
     durable::MessageDurableConfig, interest::Subject, topic::TopicCode, util::MaybeBase64Bytes,
 };
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use typeshare::typeshare;
 
@@ -319,6 +320,11 @@ impl MessageHeaderBuilder {
         self.durability = Some(config);
         self
     }
+    pub fn mode_pull(mut self, expire_at: DateTime<Utc>) -> Self {
+        self.target_kind = MessageTargetKind::Durable;
+        self.durability = Some(MessageDurableConfig::new_pull(expire_at));
+        self
+    }
     pub fn mode_push(mut self) -> Self {
         self.target_kind = MessageTargetKind::Push;
         self
@@ -349,7 +355,9 @@ pub struct MessageAck {
 pub enum MessageTargetKind {
     Durable = 0,
     Online = 1,
-    Available = 2,
+    // #[allow(deprecated)]
+    // #[deprecated(note = "not supported yet")]
+    // Available = 2,
     #[default]
     Push = 3,
 }
@@ -359,7 +367,8 @@ impl From<u8> for MessageTargetKind {
         match kind {
             0 => MessageTargetKind::Durable,
             1 => MessageTargetKind::Online,
-            2 => MessageTargetKind::Available,
+            // #[allow(deprecated)]
+            // 2 => MessageTargetKind::Available,
             _ => MessageTargetKind::Push,
         }
     }

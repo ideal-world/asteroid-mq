@@ -277,7 +277,7 @@ impl Deref for RaftTcpConnectionMap {
 #[derive(Debug)]
 pub struct RaftTcpConnection {
     peer: RaftNodeInfo,
-    packet_tx: flume::Sender<Packet>,
+    packet_tx: tokio::sync::mpsc::Sender<Packet>,
     wait_poll: Arc<tokio::sync::Mutex<HashMap<u64, oneshot::Sender<Response>>>>,
     local_seq: Arc<AtomicU64>,
     alive: Arc<AtomicBool>,
@@ -343,6 +343,7 @@ impl RaftTcpConnection {
         self.wait_poll.lock().await.insert(seq_id, sender);
         self.packet_tx
             .send(packet)
+            .await
             .inspect_err(|_| {
                 let pool = self.wait_poll.clone();
                 tokio::spawn(async move {
@@ -359,6 +360,7 @@ impl RaftTcpConnection {
         let connection_ct = service.ct.child_token();
         let raft = service.raft.get().await;
         let info = service.info.clone();
+        let local_id = info.id;
         let packet = bincode::serialize(&info).map_err(|_| std::io::ErrorKind::InvalidData)?;
         stream.write_u32(packet.len() as u32).await?;
         stream.write_all(&packet).await?;
@@ -367,14 +369,15 @@ impl RaftTcpConnection {
         stream.read_exact(&mut hello_data).await?;
         let peer: RaftNodeInfo =
             bincode::deserialize(&hello_data).map_err(|_| std::io::ErrorKind::InvalidData)?;
-        tracing::debug!(peer=%peer.id, local=%info.id, "hello received");
+        let peer_id = peer.id;
+        tracing::debug!(peer=%peer_id, local=%local_id, "hello received");
         let (mut read, mut write) = stream.into_split();
         let wait_pool = Arc::new(tokio::sync::Mutex::new(HashMap::<
             u64,
             oneshot::Sender<Response>,
         >::new()));
         let wait_poll_clone = wait_pool.clone();
-        let (packet_tx, packet_rx) = flume::bounded::<Packet>(512);
+        let (packet_tx, mut packet_rx) = tokio::sync::mpsc::channel::<Packet>(512);
         let write_task_ct = connection_ct.child_token();
         let _write_task = tokio::spawn(
             async move {
@@ -384,8 +387,13 @@ impl RaftTcpConnection {
                             _ = write_task_ct.cancelled() => {
                                 return std::io::Result::<()>::Ok(());
                             }
-                            packet = packet_rx.recv_async() => {
-                                packet.map_err(|e| std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))?
+                            maybe_packet = packet_rx.recv() => {
+                                match maybe_packet {
+                                    None => {
+                                        return std::io::Result::<()>::Ok(());
+                                    }
+                                    Some(packet) => packet,
+                                }
                             }
                         };
                         let bytes = bincode::serialize(&packet.payload)
@@ -448,22 +456,34 @@ impl RaftTcpConnection {
                         Payload::Request(req) => {
                             let raft = raft.clone();
                             let packet_tx = packet_tx.clone();
-                            tokio::spawn(async move {
-                                let resp = match req {
-                                    Request::Vote(vote) => Response::Vote(raft.vote(vote).await),
-                                    Request::AppendEntries(append) => {
-                                        Response::AppendEntries(raft.append_entries(append).await)
-                                    }
-                                    Request::InstallSnapshot(install) => Response::InstallSnapshot(
-                                        raft.install_snapshot(install).await,
-                                    ),
-                                    Request::Proposal(proposal) => {
-                                        Response::Proposal(raft.client_write(proposal).await)
-                                    }
-                                };
-                                let payload = Payload::Response(resp);
-                                let _ = packet_tx.send_async(Packet { seq_id, payload }).await;
-                            });
+                            tokio::spawn(
+                                async move {
+                                    let resp = match req {
+                                        Request::Vote(vote) => {
+                                            Response::Vote(raft.vote(vote).await)
+                                        }
+                                        Request::AppendEntries(append) => Response::AppendEntries(
+                                            raft.append_entries(append).await,
+                                        ),
+                                        Request::InstallSnapshot(install) => {
+                                            Response::InstallSnapshot(
+                                                raft.install_snapshot(install).await,
+                                            )
+                                        }
+                                        Request::Proposal(proposal) => {
+                                            Response::Proposal(raft.client_write(proposal).await)
+                                        }
+                                    };
+                                    let payload = Payload::Response(resp);
+                                    let _ = packet_tx.send(Packet { seq_id, payload }).await;
+                                }
+                                .instrument(tracing::span!(
+                                    tracing::Level::INFO,
+                                    "tcp_request_handler",
+                                    local=%local_id,
+                                    peer=%peer_id
+                                )),
+                            );
                         }
                         Payload::Response(resp) => {
                             let sender = wait_poll_clone.lock().await.remove(&seq_id);
@@ -475,7 +495,13 @@ impl RaftTcpConnection {
                         }
                     }
                 }
-            };
+            }
+            .instrument(tracing::span!(
+                tracing::Level::INFO,
+                "tcp_read_loop",
+                local=%local_id,
+                peer=%peer_id
+            ));
             tokio::spawn(async move {
                 let result: std::io::Result<()> = inner_task.await;
                 if let Err(e) = result {

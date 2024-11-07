@@ -183,7 +183,7 @@ async fn main() -> asteroid_mq::Result<()> {
         .init();
     let node = Node::new(NodeConfig::default());
     let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
-    node.init_raft(cluster_provider).await?;
+    node.start(cluster_provider).await?;
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
 
     let receiver_endpoint = topic

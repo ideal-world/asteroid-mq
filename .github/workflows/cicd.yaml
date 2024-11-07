@@ -97,6 +97,8 @@ jobs:
 
       - name: Check clippy
         run: cargo clippy -p asteroid-mq --all-features
+      - name: Test all
+        run: cargo test -p asteroid-mq --all-features
       - name: Package
         if: ${{ startsWith(github.ref, 'refs/tags/release') }}
         run: cargo package -p asteroid-mq
@@ -153,9 +155,10 @@ jobs:
 
       - name: Check format
         run: cargo fmt -p asteroid-mq-sdk -- --check
-
       - name: Check clippy
         run: cargo clippy -p asteroid-mq-sdk --all-features
+      - name: Cargo test
+        run: cargo test -p asteroid-mq-sdk --all-features
       - name: Package
         if: ${{ startsWith(github.ref, 'refs/tags/release') }}
         run: cargo package -p asteroid-mq-sdk

@@ -182,7 +182,7 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     });
 
-    node.init_raft(cluster.clone()).await?;
+    node.start(cluster.clone()).await?;
 
     node.load_from_durable_service().await?;
     let topic = node.get_topic(&PRELOAD_TOPIC_CODE);

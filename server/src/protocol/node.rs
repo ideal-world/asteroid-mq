@@ -162,7 +162,7 @@ impl Node {
             inner: Arc::new(inner),
         }
     }
-    pub async fn init_raft<C: ClusterProvider>(
+    pub async fn start<C: ClusterProvider>(
         &self,
         mut cluster_provider: C,
     ) -> Result<(), crate::Error> {
@@ -193,33 +193,18 @@ impl Node {
         )
         .await
         .map_err(crate::Error::contextual_custom("create raft node"))?;
-        let members = cluster_provider
-            .pristine_nodes()
-            .await?
-            .into_iter()
-            .map(|(id, addr)| {
-                let node = TcpNode::new(addr);
-                (id, node)
-            })
-            .collect::<BTreeMap<_, _>>();
-        {
-            let tcp_service = tcp_service.clone();
-            let members = members.clone();
-            tokio::spawn(async move {
-                for (peer_id, peer_node) in members.iter() {
-                    if id == *peer_id {
-                        continue;
-                    }
-                    tracing::debug!(peer=%peer_id, local=%id, "ensure connection");
-                    let _ = tcp_service
-                        .ensure_connection(*peer_id, peer_node.addr)
-                        .await;
-                }
-            });
-        }
-        raft.initialize(members.clone())
+        // waiting for members contain self
+        let pristine_nodes = cluster_provider.pristine_nodes().await?;
+        if pristine_nodes.contains_key(&id) {
+            raft.initialize(
+                pristine_nodes
+                    .into_iter()
+                    .map(|(k, n)| (k, TcpNode::new(n)))
+                    .collect::<BTreeMap<_, _>>(),
+            )
             .await
             .map_err(crate::Error::contextual_custom("init raft node"))?;
+        }
         maybe_loading_raft.set(raft.clone());
         let cluster_service =
             ClusterService::new(cluster_provider, tcp_service, cluster_service_ct);

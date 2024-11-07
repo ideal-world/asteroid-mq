@@ -154,7 +154,8 @@ public class Types {
   public enum MessageTargetKind {
     Durable,
     Online,
-    Available,
+    // not supported yet
+    // Available,
     Push
   }
 

@@ -9,6 +9,7 @@ use asteroid_mq::{prelude::NodeId, protocol::node::raft::cluster::ClusterProvide
 use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 pub struct TestClusterProvider {
+    pristine_nodes: Arc<BTreeMap<NodeId, SocketAddr>>,
     nodes: Arc<Mutex<BTreeMap<NodeId, SocketAddr>>>,
     latest: Arc<AtomicU64>,
     version: u64,
@@ -17,6 +18,7 @@ pub struct TestClusterProvider {
 impl TestClusterProvider {
     pub fn new(nodes: BTreeMap<NodeId, SocketAddr>) -> Self {
         Self {
+            pristine_nodes: Arc::new(nodes.clone()),
             nodes: Arc::new(Mutex::new(nodes)),
             latest: Arc::new(AtomicU64::new(0)),
             version: 0,
@@ -37,7 +39,8 @@ impl ClusterProvider for TestClusterProvider {
         Ok(nodes)
     }
     async fn pristine_nodes(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, SocketAddr>> {
-        let nodes = self.nodes.lock().await.clone();
+        let nodes = self.pristine_nodes.as_ref().clone();
+
         Ok(nodes)
     }
     fn name(&self) -> std::borrow::Cow<'static, str> {

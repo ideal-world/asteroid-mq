@@ -18,6 +18,12 @@ impl MessageDurableConfig {
             max_receiver: None,
         }
     }
+    pub fn new_pull(expire: DateTime<Utc>) -> Self {
+        Self {
+            expire,
+            max_receiver: Some(1),
+        }
+    }
     pub fn with_max_receiver(mut self, max_receiver: u32) -> Self {
         self.max_receiver = Some(max_receiver);
         self
