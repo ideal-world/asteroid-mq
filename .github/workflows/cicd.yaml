@@ -162,7 +162,6 @@ jobs:
       - name: Package
         if: ${{ startsWith(github.ref, 'refs/tags/release') }}
         run: cargo package -p asteroid-mq-sdk
-
       - name: Cargo login
         run: cargo login ${{ secrets.CRATES_TOKEN }}
       - name: Publish dry run
