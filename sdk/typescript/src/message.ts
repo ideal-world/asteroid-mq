@@ -27,6 +27,49 @@ export type MessageConfig = {
     topic: TopicCode,
 }
 
+
+export namespace MessageConfig {
+    /*
+    * The default expire time of the message: 1 day
+    */
+    const DEFAULT_EXPIRE = 1000 * 60 * 60 * 24;
+    export function push(topic: TopicCode, subjects: Subject[], ): MessageConfig {
+        return {
+            subjects,
+            topic,
+            targetKind: MessageTargetKind.Push
+        }
+    }
+    export function pull(topic: TopicCode, subjects: Subject[], ): MessageConfig {
+        return {
+            subjects,
+            topic,
+            targetKind: MessageTargetKind.Durable,
+            durability: {
+                expire: new Date(Date.now() + DEFAULT_EXPIRE),
+                maxReceiver: 1
+            }
+        }
+    }
+    export function online(topic: TopicCode, subjects: Subject[], ): MessageConfig {
+        return {
+            subjects,
+            topic,
+            targetKind: MessageTargetKind.Online
+        }
+    }
+    export function durable(topic: TopicCode, subjects: Subject[], expire?: Date, maxReceiver?: number): MessageConfig {
+        return {
+            subjects,
+            topic,
+            targetKind: MessageTargetKind.Durable,
+            durability: {
+                expire: expire ?? new Date(Date.now() + DEFAULT_EXPIRE),
+                maxReceiver
+            }
+        }
+    }
+}
 /**
  * The message received by the endpoint
  */

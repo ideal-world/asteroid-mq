@@ -281,6 +281,9 @@ impl MessageHeader {
     pub fn ack_failed(&self, topic_code: TopicCode, from: EndpointAddr) -> MessageAck {
         self.ack(topic_code, from, MessageStatusKind::Failed)
     }
+    pub fn is_durable(&self) -> bool {
+        self.target_kind == MessageTargetKind::Durable
+    }
 }
 
 pub struct MessageHeaderBuilder {

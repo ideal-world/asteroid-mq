@@ -1,5 +1,5 @@
 import { sleep, spawn, spawnSync } from "bun";
-import { MessageTargetKind, Node, newMessage } from "../src/index";
+import { MessageConfig, MessageTargetKind, Node, newMessage } from "../src/index";
 import { describe, test } from "bun:test";
 
 const { exitCode: buildExitCode } = spawnSync(["cargo", "build", "-p", "asteroid-mq", "--example", "axum-server"]);
@@ -20,11 +20,9 @@ interface HelloMessage {
 const message = (s: string) => newMessage<HelloMessage>(
     {
         "hello": s
-    }, {
-    topic: "test",
-    subjects: ["event/hello", "event/hello/avatar/b2"],
-    targetKind: MessageTargetKind.Online
-});
+    }, 
+    MessageConfig.online("test", ["event/hello", "event/hello/avatar/b2"])
+);
 
 describe("basic connection", () => {
     test("basic connection", async () => {

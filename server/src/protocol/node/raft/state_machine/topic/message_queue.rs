@@ -230,7 +230,7 @@ impl MessageQueue {
         &mut self,
         id: MessageId,
         reachable_eps: &HashSet<EndpointAddr>,
-        ctx: &ProposalContext,
+        ctx: &mut ProposalContext,
     ) -> Option<Poll<()>> {
         if self.resolved.contains(&id) {
             Some(Poll::Ready(()))
@@ -246,7 +246,7 @@ impl MessageQueue {
         &mut self,
         id: MessageId,
         reachable_eps: &HashSet<EndpointAddr>,
-        ctx: &ProposalContext,
+        ctx: &mut ProposalContext,
     ) -> Option<Poll<()>> {
         if self.blocking {
             let front = self.get_front()?;
@@ -276,7 +276,7 @@ impl MessageQueue {
     pub(crate) fn blocking_pop(
         &mut self,
         reachable_eps: &HashSet<EndpointAddr>,
-        context: &ProposalContext,
+        context: &mut ProposalContext,
     ) -> Option<HoldMessage> {
         let next = self.get_front()?;
         let poll = self.poll_message(next.message.id(), reachable_eps, context)?;
@@ -295,16 +295,22 @@ impl MessageQueue {
         if self.blocking {
             while let Some(m) = self.blocking_pop(reachable_eps, context) {
                 let id = m.message.id();
+                let is_durable = m.message.header.is_durable();
                 let result = m.resolve();
                 context.resolve_ack(id, result);
-                context.push_durable_command(DurableCommand::Archive(id));
+                if is_durable {
+                    context.push_durable_command(DurableCommand::Archive(id));
+                }
             }
         } else {
             for id in self.swap_out_resolved() {
                 if let Some(m) = self.remove(id) {
+                    let is_durable = m.message.header.is_durable();
                     let result = m.resolve();
                     context.resolve_ack(id, result);
-                    context.push_durable_command(DurableCommand::Archive(id));
+                    if is_durable {
+                        context.push_durable_command(DurableCommand::Archive(id));
+                    }
                 }
             }
         }

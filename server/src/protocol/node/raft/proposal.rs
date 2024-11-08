@@ -68,7 +68,6 @@ impl ProposalContext {
                 tracing::warn!(?topic_code, "topic not found");
                 return;
             };
-
             tokio::spawn(
                 async move {
                     // only one execute task at a time for each topic

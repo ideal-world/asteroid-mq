@@ -160,7 +160,9 @@ impl TopicData {
                             },
                         ),
                     );
-                    ctx.push_durable_command(DurableCommand::Create(message.clone()));
+                    if message.header.is_durable() {
+                        ctx.push_durable_command(DurableCommand::Create(message.clone()));
+                    }
                 }
             }
         }
@@ -179,7 +181,12 @@ impl TopicData {
         ctx: &mut ProposalContext,
     ) {
         let reachable_eps = self.reachable_eps(&ctx.node.id());
-        ctx.push_durable_command(DurableCommand::UpdateStatus(update.clone()));
+        // check if message is of durable kind
+        if let Some(message) = self.queue.hold_messages.get(&update.message_id) {
+            if message.message.header.is_durable() {
+                ctx.push_durable_command(DurableCommand::UpdateStatus(update.clone()));
+            }
+        }
         let poll_result = {
             for (from, status) in update.status {
                 self.queue.update_ack(&update.message_id, from, status)
