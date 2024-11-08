@@ -71,7 +71,6 @@ impl ClientNode {
 }
 
 #[derive(Debug)]
-
 pub(crate) struct ClientNodeInner {
     pub(crate) sender: tokio::sync::mpsc::UnboundedSender<(EdgeRequest, Responder)>,
     pub(crate) endpoint_map: EndpointMailboxMap,
