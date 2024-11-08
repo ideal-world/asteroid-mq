@@ -53,7 +53,7 @@ impl HoldMessage {
         context: &ProposalContext,
     ) {
         for (ep, status) in self.wait_ack.status.iter_mut() {
-            tracing::debug!(?ep, %status, ?reachable_eps, "send_unsent");
+            tracing::trace!(?ep, %status, ?reachable_eps, "send_unsent");
             if status.is_unsent() && reachable_eps.contains(ep) {
                 *status = MessageStatusKind::Sending;
                 context.dispatch_message(&self.message, *ep);
