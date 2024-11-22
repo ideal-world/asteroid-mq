@@ -1,8 +1,13 @@
+use std::str::FromStr;
+
 use asteroid_mq::event_handler::json::Json;
 use asteroid_mq::event_handler::EventAttribute;
 use asteroid_mq::prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, Subject, TopicCode};
 use asteroid_mq::protocol::node::raft::cluster::StaticClusterProvider;
 use serde::{Deserialize, Serialize};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelloWorld {
     pub number: u32,
@@ -30,6 +35,21 @@ async fn hello_world_handler(Json(hello_world): Json<HelloWorld>) -> asteroid_mq
 
 #[tokio::test]
 async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(
+                tracing_subscriber::filter::EnvFilter::from_default_env()
+                    .add_directive(tracing_subscriber::filter::Directive::from_str("info").unwrap())
+                    .add_directive(
+                        tracing_subscriber::filter::Directive::from_str("asteroid_mq=trace")
+                            .unwrap(),
+                    )
+                    .add_directive(
+                        tracing_subscriber::filter::Directive::from_str("openraft=info").unwrap(),
+                    ),
+            ),
+        )
+        .init();
     let node = Node::new(NodeConfig::default());
     let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
     node.start(cluster_provider).await?;

@@ -69,6 +69,7 @@ impl HandleEventLoop {
     {
         let subject = H::Event::SUBJECT;
         let ep = self.ep.clone();
+        tracing::debug!(?subject, "register event handler");
         let inner_handler = Box::new(move |message: Message| {
             let handler = handler.clone();
             let ep = ep.clone();
@@ -111,6 +112,7 @@ impl HandleEventLoop {
             let subjects = message.header.subjects.clone();
             for subject in subjects.iter() {
                 let Some(handler) = self.handlers.get(subject) else {
+                    tracing::debug!(?subject, "no handler found");
                     continue;
                 };
                 let fut = (handler)(message.clone());

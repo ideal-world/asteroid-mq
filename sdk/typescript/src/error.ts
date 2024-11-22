@@ -1,8 +1,8 @@
-import { EdgeError, EdgeErrorKind, EndpointAddr, MessageStatusKind, WaitAckError } from "./types";
+import { EdgeError, EdgeErrorKind, EndpointAddr, MessageStatusKind, WaitAckError, WaitAckErrorException } from "./types";
 
 export class EdgeErrorClass extends Error {
-    context: string;
-    kind: EdgeErrorKind;
+    readonly context: string;
+    readonly kind: EdgeErrorKind;
     constructor(error: EdgeError) {
         super(error.message);
         this.context = error.context;
@@ -11,7 +11,8 @@ export class EdgeErrorClass extends Error {
 }
 
 export class WaitAckErrorClass extends Error {
-    status: Record<EndpointAddr, MessageStatusKind>;
+    readonly status: Record<EndpointAddr, MessageStatusKind>;
+    readonly exception?: WaitAckErrorException;
     constructor(error: WaitAckError) {
         if (error.exception === null) {
             super("Ack Error");
@@ -19,5 +20,6 @@ export class WaitAckErrorClass extends Error {
             super(error.exception);
         }
         this.status = error.status;
+        this.exception = error.exception;
     }
 }

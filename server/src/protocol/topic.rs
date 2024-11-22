@@ -151,6 +151,7 @@ impl Topic {
     ) -> Option<MessageStatusKind> {
         // message is local or edge?
         if let Some(local) = self.get_local_ep(ep) {
+            tracing::debug!(?ep, "dispatch message to local");
             local.upgrade()?.push_message(message);
             Some(MessageStatusKind::Sent)
         } else {
