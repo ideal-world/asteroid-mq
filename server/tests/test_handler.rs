@@ -20,12 +20,12 @@ pub struct ByeWorld {
 }
 
 impl EventAttribute for HelloWorld {
-    const SUBJECT: Subject = Subject::const_new("hello-world");
+    const SUBJECT: Subject = Subject::const_new("test/hello-world");
     const EXPECT_ACK_KIND: MessageAckExpectKind = MessageAckExpectKind::Processed;
 }
 
 impl EventAttribute for ByeWorld {
-    const SUBJECT: Subject = Subject::const_new("bye-world");
+    const SUBJECT: Subject = Subject::const_new("test/bye-world");
 }
 
 async fn hello_world_handler(Json(hello_world): Json<HelloWorld>) -> asteroid_mq::Result<()> {
@@ -55,7 +55,7 @@ async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
     node.start(cluster_provider).await?;
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
     let _evt_loop_handle = topic
-        .create_endpoint([Interest::new("*")])
+        .create_endpoint([Interest::new("test/*")])
         .await?
         .create_event_loop()
         .with_handler(hello_world_handler)

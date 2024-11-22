@@ -2,6 +2,7 @@ pub mod json;
 use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin};
 
 use bytes::Bytes;
+use tracing::Instrument;
 
 use crate::{
     prelude::{Subject, Topic},
@@ -109,6 +110,7 @@ impl HandleEventLoop {
             let Some(message) = self.ep.next_message().await else {
                 break;
             };
+            tracing::trace!(?message, "handle message");
             let subjects = message.header.subjects.clone();
             for subject in subjects.iter() {
                 let Some(handler) = self.handlers.get(subject) else {
@@ -116,7 +118,15 @@ impl HandleEventLoop {
                     continue;
                 };
                 let fut = (handler)(message.clone());
-                tokio::spawn(fut);
+                let subject = subject.clone();
+                tokio::spawn(async move {
+                    let result = fut
+                        .instrument(tracing::info_span!("event_handler", %subject))
+                        .await;
+                    if let Err(e) = result {
+                        tracing::warn!(error=%e, "handler process error")
+                    }
+                });
             }
         }
     }
