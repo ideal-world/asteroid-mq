@@ -126,7 +126,7 @@ public class Node implements AutoCloseable {
               var seqId = ((EdgeResponsePayload) payload).getContent().getSeqId();
               var responseQueue = responsePool.get(seqId);
               if (responseQueue != null) {
-                log.debug("[Node EdgeResponse] response:{}", result);
+                log.debug("[Node EdgeResponse] response:{}", objectMapper.writeValueAsString(result));
                 responseQueue.put(result);
               }
             } else if (payload instanceof EdgePushPayload) {
@@ -146,14 +146,15 @@ public class Node implements AutoCloseable {
                     tempQueue.put(contentMessage);
                     continue;
                   }
-                  log.debug("[Node EdgePush] Push payload:{}", contentMessage.getPayload());
+                  log.debug("[Node EdgePush] Push payload:{}",
+                      objectMapper.writeValueAsString(contentMessage.getPayload()));
                   endpoint.getMessageQueue().put(contentMessage);
                 }
               } else {
-                log.warn("socket onMessage unknown payload:{}", payload);
+                log.warn("socket onMessage unknown payload:{}", objectMapper.writeValueAsString(payload));
               }
             } else {
-              log.warn("socket onMessage unknown payload:{}", payload);
+              log.warn("socket onMessage unknown payload:{}", objectMapper.writeValueAsString(payload));
             }
           } catch (InterruptedException | JsonProcessingException e) {
             log.warn("socket onMessage error", e);
@@ -180,7 +181,7 @@ public class Node implements AutoCloseable {
           try {
             var boxRequest = node.getRequestPool().take();
             var seq_id = boxRequest.getRequest().getSeqId();
-            log.debug("[Node sendRequest] request: {}", boxRequest.getRequest().getRequest());
+            log.debug("[Node sendRequest] request: {}", objectMapper.writeValueAsString(boxRequest.getRequest()));
             var message = objectMapper.writeValueAsString(new Types.EdgeRequestPayload(boxRequest.getRequest()));
             log.trace("[Node sendRequest] json request: {}", message);
             socket.send(message.getBytes());
