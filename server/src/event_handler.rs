@@ -83,6 +83,7 @@ impl HandleEventLoop {
                 let event = match H::Event::from_bytes(message.payload.into_inner()) {
                     Some(msg) => msg,
                     None => {
+                        tracing::debug!("failed to decode event, this message will be ignored");
                         if H::Event::EXPECT_ACK_KIND == MessageAckExpectKind::Processed {
                             ep.ack_failed(&message.header).await?;
                         }
