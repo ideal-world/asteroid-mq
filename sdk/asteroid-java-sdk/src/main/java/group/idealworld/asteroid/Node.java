@@ -8,10 +8,12 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -100,7 +102,7 @@ public class Node implements AutoCloseable {
     return endpoints;
   }
 
-  public static Node connect(String url) {
+  public static Node connect(String url, Optional<Function<Exception, Void>> onError) {
     Node node = new Node();
     var responsePool = new HashMap<Integer, BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>>>();
     try {
@@ -165,13 +167,16 @@ public class Node implements AutoCloseable {
         @Override
         public void onClose(int code, String reason, boolean remote) {
           node.setAlive(false);
+          node.socketConnectLatch.countDown();
         }
 
         @Override
         public void onError(Exception ex) {
           this.close();
           node.setAlive(false);
+          node.socketConnectLatch.countDown();
           log.warn("socket onError", ex);
+          onError.ifPresent(fn -> fn.apply(ex));
         }
       };
       socket.connect();

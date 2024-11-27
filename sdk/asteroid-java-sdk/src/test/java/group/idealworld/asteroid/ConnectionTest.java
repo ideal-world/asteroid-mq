@@ -9,6 +9,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -58,8 +59,8 @@ public class ConnectionTest {
   public void testConnection() throws IOException, InterruptedException {
     startServer();
     Thread.sleep(1000L);
-    Node node_a = Node.connect(getWsUrl());
-    Node node_b = Node.connect(getWsUrl());
+    Node node_a = Node.connect(getWsUrl(), Optional.empty());
+    Node node_b = Node.connect(getWsUrl(), Optional.empty());
 
     Endpoint endpoint_b1 = node_a.createEndpoint("test", Arrays.asList("event/*"));
     Endpoint endpoint_b2 = node_b.createEndpoint("test", Arrays.asList("event/**/b2"));
