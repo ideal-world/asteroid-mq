@@ -14,11 +14,14 @@ export class Node {
         resolve(): void;
         reject(error: any): void;
     }>();
-    private alive = false;
+    private _alive = false;
+    get alive() {
+        return this._alive;
+    }
     private endpoints = new Map<EndpointAddr, Endpoint>;
     private tempMailbox = new Map<EndpointAddr, Array<Message>>;
     public textDecoder = new TextDecoder();
-
+    
     /**
      * Create a new Node by connecting to the given URL
      * @param options options for the connection
@@ -74,13 +77,13 @@ export class Node {
             }
         }
         socket.onopen = (_evt) => {
-            node.alive = true;
+            node._alive = true;
             node.openingWaitingPool.forEach((channel) => {
                 channel.resolve();
             })
         }
         socket.onclose = (_evt) => {
-            node.alive = false;
+            node._alive = false;
         }
         return node;
     }
@@ -111,7 +114,7 @@ export class Node {
     }
     private waitSocketOpen() {
         return new Promise<void>((resolve, reject) => {
-            if (this.alive) {
+            if (this._alive) {
                 resolve();
             } else {
                 this.openingWaitingPool.add({
@@ -169,7 +172,7 @@ export class Node {
         return endpoint
     }
     public async destroyEndpoint(endpoint: Endpoint): Promise<void> {
-        if (!this.alive) {
+        if (!this._alive) {
             return;
         }
         endpoint.closeMessageChannel();
@@ -199,7 +202,7 @@ export class Node {
         this.endpoints.delete(endpoint.address);
     }
     public async updateInterests(endpoint: Endpoint, interests: Interest[]): Promise<void> {
-        if (!this.alive) {
+        if (!this._alive) {
             return;
         }
         const requestId = this.nextRequestId();
@@ -287,7 +290,7 @@ export class Node {
         }
     }
     public isAlive(): boolean {
-        return this.alive;
+        return this._alive;
     }
     public async close() {
         await Promise.all(Array.from(this.endpoints.values()).map((endpoint) => {
