@@ -82,8 +82,8 @@ Topic可以把队列设置为阻塞模式，这意味着在前一个消息被标
 
 # 客户端SDK
 
-|crate                                                                          |description                                        |
+|language                                                                       |description                                        |
 |:-----------------------------------------------------------------------------:|:-------------------------------------------------:|
-|[asteroid-mq-sdk](sdk/asteroid-java-sdk)(rust)                                 |rust client sdk                                    |
-|[asteroid-mq-sdk](sdk/rust)(java)                                              |java client sdk                                    |
-|[asteroid-mq-sdk](sdk/typescript)(TypeScript/JavaScript)                       |JavaScript/TypeScript client sdk                   |
+|[rust](sdk/asteroid-java-sdk)                                                  |rust client sdk                                    |
+|[java](sdk/rust)                                                               |java client sdk                                    |
+|[TypeScript/JavaScript](sdk/typescript)                                        |JavaScript/TypeScript client sdk                   |
