@@ -1,13 +1,89 @@
-#
+# 简介
+## Topic
+服务端拥有许多个Topic，Topic分别有自己的消息队列
+
+### 阻塞模式
+Topic可以把队列设置为阻塞模式，这意味着在前一个消息被标记为Resolved之前，接下来的消息不会被发出。
+
+### 拒绝模式
+当队列中的消息数量超过队列长度的时候，会选择一种拒绝模式来丢弃消息
+#### 拒绝新消息（RejectNew）
+拒绝新送达的消息
+#### 丢弃旧消息（DropOld）
+按照时间顺序，丢弃队头消息
+
+## 节点（Node）
+节点是连接的基本单元，一个节点上可以挂载多个端点。消息从一个节点上发出，发到另一个端点上。
+
+## 端点（Endpoint）
+端点是接收消息的基本单元，端点可以订阅一些兴趣。
+
+## 主题-兴趣机制
+每个消息有多个主题（Subject），端点可以订阅多个兴趣（Interest）
+
+一个兴趣通过glob匹配可以匹配一个或多个主题
+
+例如兴趣`user/*`可以匹配主题`user/a`，`user/b`，但不能匹配主题`user`
+
+例如兴趣`user/*/quit`可以匹配主题`user/a/quit`，`user/b/quit`
+
+例如兴趣`user/**` 可以匹配主题`user/a/quit`，`user/b/helloworld`
+
+## 消息 （Message）
+一个消息有以下内容：
+1. 模式
+2. 期待状态
+3. 主题
+4. Topic
+5. 负载
+
+### 消息模式
+#### Push
+推送到**一个且仅一个** （**one and only**）对此感兴趣的端点
+#### Online
+推送到所有在线并对此感兴趣的端点
+#### Durable
+持久化消息，直到满足它的持久化配置之前，它都一直存在
+#### 持久化配置
+1. 最大接受者数量（可选）：当达到此数量的端点确认消息后，消息将失效
+2. 最大存在时间：在此时间过后，消息将失效
+
+例如要实现Pull效果，可以将最大接受者数量设置为1
+
+要实现推送效果，可以不设置最大接收者数量，并设置一个最大存在时间
+
+### 期待状态
+消息到达到什么状态被视为解决（Resolved）？
+再各个接收端点上，消息有这么几种状态等级
+#### Sent
+已经发送，此为默认值，代表服务器已经成功发送此消息到某端点
+#### Received
+已经接收，代表端点已经成功拿到消息。需要端点响应`Received`，表示确认接收。
+#### Processed
+已经处理，代表端点已经成功处理消息。这个需要端点响应`Processed`，表示确认消息已经被成功处理。
+
+### 异常状态
+除此之外，还有一些异常状态
+#### Unreachable
+端点不可达，由服务器设置
+#### Failed
+消息处理失败，代表端点已经收到消息，但是消息处理并没有成功。由端点响应。
 
 
+### 主题
+消息应当携带至少一个主题，来决定它的去向
 
-## Crates
+### Topic
+消息应当指定自己的Topic
 
-|crate                                              |description                                        |
-|:-------------------------------------------------:|:-------------------------------------------------:|
-|asteroid-mq                                        |server                                             |
-|asteroid-mq-model                                  |common date structures                             |
-|asteroid-mq-sdk(rust)                              |rust client sdk                                    |
-|asteroid-mq-sdk(java)                              |java client sdk                                    |
-|asteroid-mq-sdk(TypeScript/JavaScript)             |JavaScript/TypeScript client sdk                   |
+### 负载
+消息的负载是一段字节数据（bytes array），并未对编码做要求，这意味着它可能是json，字符串，二进制数据，或者其它。
+
+
+# 客户端SDK
+
+|crate                                                                          |description                                        |
+|:-----------------------------------------------------------------------------:|:-------------------------------------------------:|
+|[asteroid-mq-sdk](sdk/asteroid-java-sdk)(rust)                                 |rust client sdk                                    |
+|[asteroid-mq-sdk](sdk/rust)(java)                                              |java client sdk                                    |
+|[asteroid-mq-sdk](sdk/typescript)(TypeScript/JavaScript)                       |JavaScript/TypeScript client sdk                   |
