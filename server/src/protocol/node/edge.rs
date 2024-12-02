@@ -6,6 +6,7 @@ pub mod auth;
 pub mod codec;
 pub mod connection;
 pub mod packet;
+pub mod middleware;
 
 use super::NodeId;
 pub use asteroid_mq_model::{

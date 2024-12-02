@@ -5,7 +5,7 @@ use tracing::warn;
 use crate::protocol::{
     endpoint::EndpointAddr,
     message::*,
-    node::edge::{EdgePayload, EdgeResponse},
+    node::edge::{middleware::EdgeConnectionHandler, EdgePayload, EdgeResponse},
 };
 
 use super::{
@@ -185,9 +185,9 @@ impl EdgeConnectionInstance {
                                     let encoder = encoder.clone();
                                     tokio::spawn(async move {
                                         let seq_id = request.seq_id;
-                                        let resp = node
-                                            .handle_edge_request(peer_id, request.request)
-                                            .await;
+                                        let handler = node.edge_handler.read().await.clone();
+                                        let resp =
+                                            handler.handle(node, peer_id, request.request).await;
                                         let resp = EdgeResponse::from_result(seq_id, resp);
                                         let payload = encoder.encode(&EdgePayload::Response(resp));
                                         let resp = EdgePacket::new(preferred_codec, payload);

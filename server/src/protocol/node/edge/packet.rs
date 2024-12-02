@@ -65,4 +65,14 @@ impl EdgePacket {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Auth {}
+pub struct Auth {
+    pub payload: Bytes,
+}
+
+impl Auth {
+    pub fn new(payload: impl Into<Bytes>) -> Self {
+        Self {
+            payload: payload.into(),
+        }
+    }
+}

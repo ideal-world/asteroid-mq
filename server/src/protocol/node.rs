@@ -23,6 +23,7 @@ use edge::{
         ConnectionConfig, EdgeConnectionInstance, EdgeConnectionRef, NodeConnection,
         NodeConnectionError,
     },
+    middleware::EdgeConnectionHandlerObject,
     EdgeConfig, EdgeResult,
 };
 use edge::{
@@ -76,6 +77,7 @@ pub struct NodeInner {
     config: NodeConfig,
     edge_connections: RwLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
     edge_routing: RwLock<HashMap<EndpointAddr, (NodeId, TopicCode)>>,
+    pub edge_handler: tokio::sync::RwLock<EdgeConnectionHandlerObject>,
     codec_registry: Arc<CodecRegistry>,
     topics: RwLock<HashMap<TopicCode, Topic>>,
     durable_commands_queue: std::sync::RwLock<VecDeque<DurableCommand>>,
@@ -149,6 +151,7 @@ impl Node {
             edge_connections: RwLock::new(HashMap::new()),
             edge_routing: RwLock::new(HashMap::new()),
             topics: RwLock::new(HashMap::new()),
+            edge_handler: tokio::sync::RwLock::new(EdgeConnectionHandlerObject::basic()),
             config,
             raft,
             codec_registry: Arc::new(CodecRegistry::new_preloaded()),
@@ -329,7 +332,7 @@ impl Node {
             })?;
         let config = ConnectionConfig {
             attached_node: self.node_ref(),
-            auth: Auth {},
+            auth: edge_config.peer_auth,
             codec_registry: self.codec_registry.clone(),
             preferred_codec: preferred,
             peer_id: edge_config.peer_id,

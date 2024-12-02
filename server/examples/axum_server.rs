@@ -146,7 +146,7 @@ async fn handler(
     let config = EdgeConfig {
         peer_id: NodeId { bytes },
         supported_codec_kinds: vec![CodecKind::JSON].into_iter().collect(),
-        peer_auth: Auth {},
+        peer_auth: Auth::default(),
     };
     tracing::info!(?config, "new edge connection");
     ws.on_upgrade(|ws| async move { handle_socket(ws, state.0, config).await })
