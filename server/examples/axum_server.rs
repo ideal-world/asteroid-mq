@@ -18,6 +18,7 @@ use asteroid_mq::{
         edge::{
             codec::CodecKind,
             connection::{NodeConnection, NodeConnectionError, NodeConnectionErrorKind},
+            middleware::{EdgeConnectionHandler, EdgeConnectionMiddleware},
             packet::{Auth, EdgePacket},
             EdgeConfig,
         },
@@ -182,6 +183,25 @@ async fn main() -> asteroid_mq::Result<()> {
         .with_env_filter("debug,asteroid_mq=trace,openraft=warn")
         .init();
     let node = Node::new(NodeConfig::default());
+    #[derive(Clone)]
+    pub struct TestMiddleware;
+    impl<I> EdgeConnectionMiddleware<I> for TestMiddleware
+    where
+        I: EdgeConnectionHandler,
+    {
+        type Future = I::Future;
+        fn handle(
+            &self,
+            node: Node,
+            from: NodeId,
+            req: asteroid_mq_model::EdgeRequestEnum,
+            inner: &I,
+        ) -> Self::Future {
+            tracing::info!(?from, ?req, "log middleware");
+            inner.handle(node, from, req)
+        }
+    }
+    node.insert_edge_connection_middleware(TestMiddleware).await;
     let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
     node.start(cluster_provider).await?;
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;

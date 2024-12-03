@@ -45,22 +45,22 @@ pub enum Proposal {
     EpInterest(EndpointInterest),
 }
 #[derive(Debug, Clone)]
-pub struct ProposalContext {
+pub(crate) struct ProposalContext {
     pub node: Node,
     pub topic_code: Option<TopicCode>,
 }
 
 impl ProposalContext {
-    pub fn new(node: Node) -> Self {
+    pub(crate) fn new(node: Node) -> Self {
         Self {
             node,
             topic_code: None,
         }
     }
-    pub fn push_durable_command(&mut self, command: DurableCommand) {
+    pub(crate) fn push_durable_command(&mut self, command: DurableCommand) {
         self.node.push_durable_commands(Some(command));
     }
-    pub fn commit_durable_commands(&mut self) {
+    pub(crate) fn commit_durable_commands(&mut self) {
         if let Some(service) = self.durable_service() {
             let topic_code = self.topic_code.clone().expect("topic code not set");
             let node = self.node.clone();
@@ -111,13 +111,13 @@ impl ProposalContext {
             );
         }
     }
-    pub fn durable_service(&self) -> Option<DurableService> {
+    pub(crate) fn durable_service(&self) -> Option<DurableService> {
         self.node.config.durable.clone()
     }
-    pub fn set_topic_code(&mut self, code: TopicCode) {
+    pub(crate) fn set_topic_code(&mut self, code: TopicCode) {
         self.topic_code = Some(code);
     }
-    pub fn resolve_ack(&self, id: MessageId, result: WaitAckResult) {
+    pub(crate) fn resolve_ack(&self, id: MessageId, result: WaitAckResult) {
         let Some(ref code) = self.topic_code else {
             return;
         };
@@ -131,7 +131,7 @@ impl ProposalContext {
         });
     }
     #[tracing::instrument(skip(self))]
-    pub fn dispatch_message(&self, message: &Message, endpoint: EndpointAddr) {
+    pub(crate) fn dispatch_message(&self, message: &Message, endpoint: EndpointAddr) {
         let Some(ref code) = self.topic_code else {
             // topic code is not set
             tracing::warn!("topic code is not set");

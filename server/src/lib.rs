@@ -7,7 +7,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 pub use bytes;
 pub use error::Error;
 pub use openraft;
-use serde::{Deserialize, Serialize};
 pub type Result<T> = std::result::Result<T, Error>;
 pub mod prelude {
     pub use crate::error::Error;
@@ -24,15 +23,6 @@ pub mod prelude {
         Topic, TopicCode,
     };
     pub use crate::util::MaybeBase64Bytes;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct TimestampSec(u64);
-
-impl TimestampSec {
-    pub fn now() -> Self {
-        Self(crate::util::timestamp_sec())
-    }
 }
 
 pub const DEFAULT_TCP_PORT: u16 = 9559;

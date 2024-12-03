@@ -74,7 +74,7 @@ impl DurableError {
 }
 
 #[derive(Debug, Clone)]
-pub enum DurableCommand {
+pub(crate) enum DurableCommand {
     Create(Message),
     UpdateStatus(MessageStateUpdate),
     Archive(MessageId),

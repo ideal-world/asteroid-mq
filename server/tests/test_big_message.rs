@@ -106,7 +106,6 @@ async fn test_big_message() {
     }
     let node_sender = nodes.get(&node_id_1).unwrap().clone();
     let node_receiver = nodes.get(&node_id_2).unwrap().clone();
-
     node_sender
         .raft()
         .await

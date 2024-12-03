@@ -29,24 +29,6 @@ pub(crate) struct HoldMessage {
 }
 
 impl HoldMessage {
-    // pub(crate) fn as_durable(&self) -> DurableMessage {
-    //     DurableMessage {
-    //         message: self.message.clone(),
-    //         status: self.wait_ack.status.read().unwrap().clone(),
-    //         time: Utc::now(),
-    //     }
-    // }
-    // pub(crate) fn from_durable(durable: DurableMessage) -> Self {
-    //     let wait_ack = WaitAck {
-    //         expect: durable.message.ack_kind(),
-    //         status: durable.status.into(),
-    //         timeout: None,
-    //     };
-    //     Self {
-    //         message: durable.message,
-    //         wait_ack,
-    //     }
-    // }
     pub(crate) fn send_unsent(
         &mut self,
         reachable_eps: &HashSet<EndpointAddr>,
