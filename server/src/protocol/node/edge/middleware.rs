@@ -4,7 +4,6 @@ use asteroid_mq_model::{EdgeError, EdgeRequestEnum, EdgeResponseEnum, NodeId};
 
 use crate::prelude::Node;
 
-
 pub trait EdgeConnectionHandler: Clone + Send + 'static {
     type Future: Future<Output = Result<EdgeResponseEnum, EdgeError>> + Send;
     fn handle(&self, node: Node, from: NodeId, req: EdgeRequestEnum) -> Self::Future;

@@ -5,8 +5,8 @@ use packet::Auth;
 pub mod auth;
 pub mod codec;
 pub mod connection;
-pub mod packet;
 pub mod middleware;
+pub mod packet;
 
 use super::NodeId;
 pub use asteroid_mq_model::{
