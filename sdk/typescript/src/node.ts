@@ -14,6 +14,10 @@ export class Node {
         resolve(): void;
         reject(error: any): void;
     }>();
+    private closingWaitingPool = new Set<{
+        resolve(): void;
+        reject(error: any): void;
+    }>();
     private _alive = false;
     get alive() {
         return this._alive;
@@ -21,7 +25,7 @@ export class Node {
     private endpoints = new Map<EndpointAddr, Endpoint>;
     private tempMailbox = new Map<EndpointAddr, Array<Message>>;
     public textDecoder = new TextDecoder();
-    
+
     /**
      * Create a new Node by connecting to the given URL
      * @param options options for the connection
@@ -84,6 +88,9 @@ export class Node {
         }
         socket.onclose = (_evt) => {
             node._alive = false;
+            node.closingWaitingPool.forEach((channel) => {
+                channel.resolve();
+            })
         }
         return node;
     }
@@ -112,12 +119,24 @@ export class Node {
             })
         })
     }
-    private waitSocketOpen() {
+    public waitSocketOpen() {
         return new Promise<void>((resolve, reject) => {
             if (this._alive) {
                 resolve();
             } else {
                 this.openingWaitingPool.add({
+                    resolve,
+                    reject
+                })
+            }
+        })
+    }
+    public waitSocketClose() {
+        return new Promise<void>((resolve, reject) => {
+            if (!this._alive) {
+                resolve();
+            } else {
+                this.closingWaitingPool.add({
                     resolve,
                     reject
                 })
