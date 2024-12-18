@@ -14,12 +14,12 @@ use crate::protocol::node::{
 
 use super::{NodeConnection, NodeConnectionError, NodeConnectionErrorKind};
 #[derive(Debug, PartialEq, Eq)]
-pub enum ReadState {
+pub(crate) enum ReadState {
     ExpectingHeader,
     ExpectingPayload,
 }
 #[derive(Debug, PartialEq, Eq)]
-pub enum WriteState {
+pub(crate) enum WriteState {
     Ready,
     WritingHeader,
     WritingPayload,

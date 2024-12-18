@@ -1,3 +1,5 @@
+/// This is a extension layer upon the mq. The user can create a loop to dispatch event to
+/// corresponded handlers.
 pub mod json;
 use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin};
 
@@ -35,14 +37,14 @@ pub trait Handler<A>: Clone + Sync + Send + 'static {
     fn handle(self, event: Self::Event) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
-/// function Adapter for event handlers
+/// Basic function adapter for event handlers, this adapter accept a [`Message`] as argument.
 #[derive(Debug, Clone)]
 pub struct PlainFnAdapter<M, E>(PhantomData<*const fn(M) -> E>);
 impl<M, F, Fut, E> Handler<PlainFnAdapter<M, E>> for F
 where
     E: std::error::Error + Send,
     M: Event,
-    F: Fn(M) -> Fut + Clone + Send + Sync + 'static,
+    F: (Fn(M) -> Fut) + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<(), E>> + Send,
 {
     type Event = M;

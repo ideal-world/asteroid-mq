@@ -73,6 +73,7 @@ impl TopicInner {
 }
 
 impl Topic {
+    /// Send a message out, and get a awaitable handle.
     pub async fn send_message(&self, message: Message) -> Result<WaitAckHandle, crate::Error> {
         let handle = self.wait_ack(message.id()).await;
         self.node()
@@ -83,20 +84,26 @@ impl Topic {
             .await?;
         Ok(handle)
     }
+    /// Get the attached node.
     pub fn node(&self) -> Node {
         self.node.clone()
     }
+
+    /// Create the wait handle of a specific message
     pub async fn wait_ack(&self, id: MessageId) -> WaitAckHandle {
         let (sender, handle) = WaitAckHandle::new(id);
         self.ack_waiting_pool.write().await.insert(id, sender);
         handle
     }
+
+    /// Get a weak reference of this topic
     pub fn reference(&self) -> TopicRef {
         TopicRef {
             inner: Arc::downgrade(&self.inner),
         }
     }
 
+    /// Create a new endpoint under this topic
     pub async fn create_endpoint(
         &self,
         interests: impl IntoIterator<Item = Interest>,
@@ -132,6 +139,8 @@ impl Topic {
             })?;
         Ok(ep)
     }
+
+    /// Delete a endpoint
     pub async fn delete_endpoint(&self, addr: EndpointAddr) -> Result<(), crate::Error> {
         let node = self.node();
         self.local_endpoints.write().unwrap().remove(&addr);

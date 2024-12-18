@@ -82,6 +82,7 @@ impl LocalEndpoint {
         }
     }
 
+    /// Send a processed acknowledgement
     pub async fn ack_processed(&self, header: &MessageHeader) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
             topic
@@ -94,6 +95,8 @@ impl LocalEndpoint {
             ))
         }
     }
+
+    /// Send a received acknowledgement
     pub async fn ack_received(&self, header: &MessageHeader) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
             topic
@@ -106,6 +109,8 @@ impl LocalEndpoint {
             ))
         }
     }
+
+    /// Send a failed acknowledgement
     pub async fn ack_failed(&self, header: &MessageHeader) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
             topic
@@ -126,6 +131,8 @@ impl LocalEndpoint {
     pub async fn next_message(&self) -> Option<Message> {
         self.mail_box.recv_async().await.ok()
     }
+
+    /// Update the interest of this endpoint
     pub async fn update_interest(&self, interests: Vec<Interest>) -> Result<(), crate::Error> {
         if let Some(topic) = self.topic() {
             let node = topic.node();

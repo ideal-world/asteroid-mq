@@ -131,12 +131,15 @@ impl Deref for Node {
 }
 
 impl Node {
+    /// Get the inner openraft structure
     pub async fn raft(&self) -> Raft<TypeConfig> {
         self.raft.get().await
     }
+    /// Get node config
     pub fn config(&self) -> &NodeConfig {
         &self.config
     }
+    /// Create a new node
     pub fn new(config: NodeConfig) -> Self {
         let ct = CancellationToken::new();
         let raft = MaybeLoadingRaft::new();
@@ -165,6 +168,7 @@ impl Node {
             inner: Arc::new(inner),
         }
     }
+    /// Start running, this will start tcp connection service and node discovery service
     pub async fn start<C: ClusterProvider>(
         &self,
         mut cluster_provider: C,
@@ -214,6 +218,8 @@ impl Node {
         cluster_service.spawn();
         Ok(())
     }
+
+    /// load existed topic from durable service
     #[tracing::instrument(skip_all)]
     pub async fn load_from_durable_service(&self) -> Result<(), crate::Error> {
         const PAGE_SIZE: u32 = 100;
@@ -271,6 +277,9 @@ impl Node {
         }
         Ok(())
     }
+    /// Propose a raft proposal
+    /// 
+    /// The final behavior is determined by the role of raft node.
     pub(crate) async fn propose(&self, proposal: Proposal) -> Result<(), crate::Error> {
         let raft = self.raft().await;
         let metric = raft
@@ -310,12 +319,14 @@ impl Node {
         self.raft.get_opt()
     }
 
+    /// Get a weak reference of this node
     pub fn node_ref(&self) -> NodeRef {
         NodeRef {
             inner: Arc::downgrade(&self.inner),
         }
     }
 
+    /// Create a connection to a edge node.
     pub async fn create_edge_connection<C: NodeConnection>(
         &self,
         conn: C,
