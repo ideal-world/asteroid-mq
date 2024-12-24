@@ -236,6 +236,7 @@ impl EdgeMessageBuilder {
         self.target_kind = MessageTargetKind::Push;
         self
     }
+    /// wrap a subject with this message
     pub fn with_subject(mut self, subject: Subject) -> Self {
         self.subjects.push(subject);
         self

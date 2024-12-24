@@ -28,6 +28,14 @@ impl EventAttribute for ByeWorld {
     const SUBJECT: Subject = Subject::const_new("test/bye-world");
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OtherEvent {
+    pub texts: Vec<String>,
+}
+impl EventAttribute for OtherEvent {
+    const SUBJECT: Subject = Subject::const_new("other-test/bye-world");
+    const BROADCAST: bool = true;
+}
 async fn hello_world_handler(Json(hello_world): Json<HelloWorld>) -> asteroid_mq::Result<()> {
     println!("Received hello world: {:?}", hello_world);
     Ok(())
@@ -54,6 +62,17 @@ async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
     let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
     node.start(cluster_provider).await?;
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
+    topic
+        .create_endpoint([Interest::new("other-test/*")])
+        .await?
+        .create_event_loop()
+        .with_handler(|event: Json<OtherEvent>| {
+            async move {
+                println!("Received other event {:?}", event);
+                asteroid_mq::Result::Ok(())
+            }
+        })
+        .spawn();
     let _evt_loop_handle = topic
         .create_endpoint([Interest::new("test/*")])
         .await?
@@ -75,7 +94,11 @@ async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
             texts: vec!["Goodbye, world!".to_string()],
         }))
         .await?;
-
+    topic
+        .send_event(Json(OtherEvent {
+            texts: vec!["Other event".to_string()],
+        }))
+        .await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     Ok(())
 }

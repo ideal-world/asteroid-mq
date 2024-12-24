@@ -3,6 +3,7 @@
 pub mod json;
 use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin};
 
+use asteroid_mq_model::MessageDurableConfig;
 use bytes::Bytes;
 use tracing::Instrument;
 
@@ -27,6 +28,9 @@ pub trait EventAttribute {
     const SUBJECT: Subject;
     const BROADCAST: bool = false;
     const EXPECT_ACK_KIND: MessageAckExpectKind = MessageAckExpectKind::Sent;
+    fn durable_config() -> Option<MessageDurableConfig> {
+        None
+    }
 }
 pub trait Event: EventAttribute + EventCodec + Send {}
 
@@ -148,7 +152,9 @@ impl Topic {
     pub async fn send_event<E: Event>(&self, event: E) -> Result<(), crate::Error> {
         let bytes = event.to_bytes();
         let mut header_builder = MessageHeader::builder([E::SUBJECT]);
-        if E::BROADCAST {
+        if let Some(durable_config) = E::durable_config() {
+            header_builder = header_builder.mode_durable(durable_config);
+        } else if E::BROADCAST {
             header_builder = header_builder.mode_online();
         } else {
             header_builder = header_builder.mode_push();
