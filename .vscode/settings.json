@@ -1,18 +1,24 @@
 {
-    "cSpell.words": [
-        "Bincode",
-        "Cbor",
-        "chrono",
-        "Deque",
-        "kademlia",
-        "nanos",
-        "nsecs",
-        "openraft",
-        "Protobuf",
-        "Sharded",
-        "subsec",
-        "typeshare",
-        "Uninit"
-    ],
-    "rust-analyzer.cargo.features": "all"
+  "cSpell.words": [
+    "Bincode",
+    "Cbor",
+    "chrono",
+    "Deque",
+    "idealworld",
+    "kademlia",
+    "nanos",
+    "nsecs",
+    "openraft",
+    "Protobuf",
+    "Sharded",
+    "subsec",
+    "typeshare",
+    "Uninit"
+  ],
+  "rust-analyzer.cargo.features": "all",
+  "java.jdt.ls.vmargs": "-Xmx4G -Xms100m",
+  "rust-analyzer.linkedProjects": [
+    "sdk/rust/Cargo.toml"
+  ],
+  "java.configuration.updateBuildConfiguration": "interactive"
 }

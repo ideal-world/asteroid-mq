@@ -3,12 +3,14 @@ package group.idealworld.asteroid;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TimeZone;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -46,7 +48,10 @@ import group.idealworld.asteroid.Types.SetStateRequest;
 public class Node implements AutoCloseable {
   private static ObjectMapper objectMapper = new ObjectMapper()
       .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
-      .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+      .setSerializationInclusion(JsonInclude.Include.NON_NULL)
+      .setDateFormat(new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX"))
+      .setTimeZone(TimeZone.getTimeZone("UTC"));
+
   private static final Logger log = LoggerFactory.getLogger(Node.class);
 
   private WebSocketClient socket;

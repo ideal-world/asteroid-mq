@@ -8,6 +8,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.Optional;
 
@@ -97,7 +98,9 @@ public class ConnectionTest {
     });
 
     Types.EdgeMessageHeader header = new Types.EdgeMessageHeader(Types.MessageAckExpectKind.Sent,
-        Types.MessageTargetKind.Push, null, Arrays.asList("event/hello", "event/hello/avatar/b2"), "test");
+        Types.MessageTargetKind.Push,
+        new Types.MessageDurabilityConfig(new Date(System.currentTimeMillis() + 10000), 1),
+        Arrays.asList("event/hello", "event/hello/avatar/b2"), "test");
     node_a.sendMessage(new Types.EdgeMessage(header, "world"));
     node_a.sendMessage(new Types.EdgeMessage(header, "alice"));
     node_a.sendMessage(new Types.EdgeMessage(header, "bob"));
