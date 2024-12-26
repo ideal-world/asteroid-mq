@@ -3,12 +3,14 @@ package group.idealworld.asteroid;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TimeZone;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -46,7 +48,10 @@ import group.idealworld.asteroid.Types.SetStateRequest;
 public class Node implements AutoCloseable {
   private static ObjectMapper objectMapper = new ObjectMapper()
       .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
-      .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+      .setSerializationInclusion(JsonInclude.Include.NON_NULL)
+      .setDateFormat(new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX"))
+      .setTimeZone(TimeZone.getTimeZone("UTC"));
+
   private static final Logger log = LoggerFactory.getLogger(Node.class);
 
   private WebSocketClient socket;
@@ -98,6 +103,19 @@ public class Node implements AutoCloseable {
     }
   }
 
+  public static class EdgeResponseHolder {
+    private BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>> responseQueue;
+
+    private EdgeResponseHolder(BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>> responseQueue) {
+      this.responseQueue = responseQueue;
+    }
+
+    public EdgeResult<EdgeResponseEnum, EdgeError> await() throws InterruptedException {
+      return responseQueue.take();
+    }
+
+  }
+
   protected Map<String, Endpoint> getEndpoints() {
     return endpoints;
   }
@@ -128,7 +146,7 @@ public class Node implements AutoCloseable {
               var seqId = ((EdgeResponsePayload) payload).getContent().getSeqId();
               var responseQueue = responsePool.get(seqId);
               if (responseQueue != null) {
-                log.debug("[Node EdgeResponse] response:{}", objectMapper.writeValueAsString(result));
+                log.debug("[Node EdgeResponse] Response:{}", objectMapper.writeValueAsString(result));
                 responseQueue.put(result);
               }
             } else if (payload instanceof EdgePushPayload) {
@@ -148,7 +166,7 @@ public class Node implements AutoCloseable {
                     tempQueue.put(contentMessage);
                     continue;
                   }
-                  log.debug("[Node EdgePush] Push payload:{}",
+                  log.debug("[Node EdgePush] Received Push payload:{}",
                       objectMapper.writeValueAsString(contentMessage.getPayload()));
                   endpoint.getMessageQueue().put(contentMessage);
                 }
@@ -186,11 +204,11 @@ public class Node implements AutoCloseable {
           try {
             var boxRequest = node.getRequestPool().take();
             var seq_id = boxRequest.getRequest().getSeqId();
-            log.debug("[Node sendRequest] request: {}", objectMapper.writeValueAsString(boxRequest.getRequest()));
+            log.debug("[Node sendRequest] Request: {}", objectMapper.writeValueAsString(boxRequest.getRequest()));
             var message = objectMapper.writeValueAsString(new Types.EdgeRequestPayload(boxRequest.getRequest()));
             log.trace("[Node sendRequest] json request: {}", message);
-            socket.send(message.getBytes());
             responsePool.put(seq_id, boxRequest.getResponseQueue());
+            socket.send(message.getBytes());
           } catch (InterruptedException | JsonProcessingException e) {
             log.warn("socket sendRequest error", e);
           }
@@ -203,7 +221,7 @@ public class Node implements AutoCloseable {
     }
   }
 
-  public EdgeResult<EdgeResponseEnum, EdgeError> sendMessage(EdgeMessage message) throws InterruptedException {
+  public EdgeResponseHolder sendMessage(EdgeMessage message) throws InterruptedException {
     if (!isAlive()) {
       throw new NodeException("Node is not alive");
     }
@@ -227,14 +245,13 @@ public class Node implements AutoCloseable {
     return endpoint;
   }
 
-  private EdgeResult<EdgeResponseEnum, EdgeError> sendRequest(EdgeRequestEnum request) throws InterruptedException {
+  private EdgeResponseHolder sendRequest(EdgeRequestEnum request) throws InterruptedException {
     var responseQueue = new LinkedBlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>>();
     BoxRequest boxRequest = new BoxRequest();
     boxRequest.setRequest(new EdgeRequest(nextRequestId(), request));
     boxRequest.setResponseQueue(responseQueue);
     requestPool.put(boxRequest);
-    var result = responseQueue.take();
-    return result;
+    return new EdgeResponseHolder(responseQueue);
   }
 
   private int nextRequestId() {
@@ -244,7 +261,8 @@ public class Node implements AutoCloseable {
   protected void sendSingleAck(MessageAck ack) throws InterruptedException {
     var response = sendRequest(
         new SetStateRequest(new SetState(ack.getTopicCode(), new MessageStateUpdate(ack.getAckTo(),
-            Map.of(ack.getFrom(), ack.getKind())))));
+            Map.of(ack.getFrom(), ack.getKind())))))
+        .await();
     if (response instanceof Types.Ok) {
       @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
@@ -256,7 +274,7 @@ public class Node implements AutoCloseable {
   }
 
   private String sendEndpointsOnline(EdgeEndpointOnline request) throws InterruptedException {
-    var response = sendRequest(new Types.EndpointOnlineRequest(request));
+    var response = sendRequest(new Types.EndpointOnlineRequest(request)).await();
     if (response instanceof Types.Ok) {
       @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
@@ -268,7 +286,7 @@ public class Node implements AutoCloseable {
   }
 
   protected void sendEndpointsOffline(Types.EdgeEndpointOffline request) throws InterruptedException {
-    var response = sendRequest(new Types.EndpointOfflineRequest(request));
+    var response = sendRequest(new Types.EndpointOfflineRequest(request)).await();
     if (response instanceof Types.Ok) {
       @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
@@ -280,7 +298,7 @@ public class Node implements AutoCloseable {
   }
 
   protected void sendEndpointsInterests(Types.EndpointInterestRequest request) throws InterruptedException {
-    var response = sendRequest(request);
+    var response = sendRequest(request).await();
     if (response instanceof Types.Ok) {
       @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
