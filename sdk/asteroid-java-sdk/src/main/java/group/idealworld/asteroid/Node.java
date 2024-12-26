@@ -103,6 +103,19 @@ public class Node implements AutoCloseable {
     }
   }
 
+  public static class EdgeResponseHolder {
+    private BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>> responseQueue;
+
+    private EdgeResponseHolder(BlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>> responseQueue) {
+      this.responseQueue = responseQueue;
+    }
+
+    public EdgeResult<EdgeResponseEnum, EdgeError> await() throws InterruptedException {
+      return responseQueue.take();
+    }
+
+  }
+
   protected Map<String, Endpoint> getEndpoints() {
     return endpoints;
   }
@@ -208,7 +221,7 @@ public class Node implements AutoCloseable {
     }
   }
 
-  public EdgeResult<EdgeResponseEnum, EdgeError> sendMessage(EdgeMessage message) throws InterruptedException {
+  public EdgeResponseHolder sendMessage(EdgeMessage message) throws InterruptedException {
     if (!isAlive()) {
       throw new NodeException("Node is not alive");
     }
@@ -232,14 +245,13 @@ public class Node implements AutoCloseable {
     return endpoint;
   }
 
-  private EdgeResult<EdgeResponseEnum, EdgeError> sendRequest(EdgeRequestEnum request) throws InterruptedException {
+  private EdgeResponseHolder sendRequest(EdgeRequestEnum request) throws InterruptedException {
     var responseQueue = new LinkedBlockingQueue<EdgeResult<EdgeResponseEnum, EdgeError>>();
     BoxRequest boxRequest = new BoxRequest();
     boxRequest.setRequest(new EdgeRequest(nextRequestId(), request));
     boxRequest.setResponseQueue(responseQueue);
     requestPool.put(boxRequest);
-    var result = responseQueue.take();
-    return result;
+    return new EdgeResponseHolder(responseQueue);
   }
 
   private int nextRequestId() {
@@ -249,7 +261,8 @@ public class Node implements AutoCloseable {
   protected void sendSingleAck(MessageAck ack) throws InterruptedException {
     var response = sendRequest(
         new SetStateRequest(new SetState(ack.getTopicCode(), new MessageStateUpdate(ack.getAckTo(),
-            Map.of(ack.getFrom(), ack.getKind())))));
+            Map.of(ack.getFrom(), ack.getKind())))))
+        .await();
     if (response instanceof Types.Ok) {
       @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
@@ -261,7 +274,7 @@ public class Node implements AutoCloseable {
   }
 
   private String sendEndpointsOnline(EdgeEndpointOnline request) throws InterruptedException {
-    var response = sendRequest(new Types.EndpointOnlineRequest(request));
+    var response = sendRequest(new Types.EndpointOnlineRequest(request)).await();
     if (response instanceof Types.Ok) {
       @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
@@ -273,7 +286,7 @@ public class Node implements AutoCloseable {
   }
 
   protected void sendEndpointsOffline(Types.EdgeEndpointOffline request) throws InterruptedException {
-    var response = sendRequest(new Types.EndpointOfflineRequest(request));
+    var response = sendRequest(new Types.EndpointOfflineRequest(request)).await();
     if (response instanceof Types.Ok) {
       @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();
@@ -285,7 +298,7 @@ public class Node implements AutoCloseable {
   }
 
   protected void sendEndpointsInterests(Types.EndpointInterestRequest request) throws InterruptedException {
-    var response = sendRequest(request);
+    var response = sendRequest(request).await();
     if (response instanceof Types.Ok) {
       @SuppressWarnings("rawtypes")
       var content = ((Types.Ok) response).getContent();

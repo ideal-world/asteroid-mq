@@ -109,10 +109,10 @@ public class ConnectionTest {
         new Types.MessageDurabilityConfig(new Date(System.currentTimeMillis() + 10000), 1),
         Arrays.asList("event/hello", "event/hello/avatar/b2"), "test");
 
-    node_a.sendMessage(new Types.EdgeMessage(pushHeader, "world"));
+    node_a.sendMessage(new Types.EdgeMessage(pushHeader, "world")).await();
     node_a.sendMessage(new Types.EdgeMessage(durableHeader, "alice"));
     node_a.sendMessage(new Types.EdgeMessage(durableHeader, "bob"));
-    Thread.sleep(1000L);
+    Thread.sleep(3000L);
 
     node_a.close();
     node_b.close();
