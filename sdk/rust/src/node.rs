@@ -16,8 +16,26 @@ use tokio_tungstenite::tungstenite;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 type Responder = oneshot::Sender<Result<EdgeResponseEnum, EdgeError>>;
+type ResponseHandle = oneshot::Receiver<Result<EdgeResponseEnum, EdgeError>>;
 type ResponsePool = Arc<RwLock<HashMap<u32, Responder>>>;
 type EndpointMailboxMap = Arc<RwLock<HashMap<EndpointAddr, EndpointMailbox>>>;
+
+pub struct MessageAckHandle {
+    response_handle: ResponseHandle,
+}
+
+impl MessageAckHandle {
+    pub async fn wait(self) -> Result<WaitAckSuccess, ClientNodeError> {
+        let response = ClientNodeInner::wait_handle(self.response_handle).await?;
+        if let EdgeResponseEnum::SendMessage(edge_result) = response {
+            let wait_ack = edge_result.into_std()?;
+            Ok(wait_ack)
+        } else {
+            Err(ClientNodeError::unexpected_response(response))
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ClientNode {
     pub(crate) inner: Arc<ClientNodeInner>,
@@ -30,8 +48,15 @@ impl ClientNode {
     pub async fn send_message(
         &self,
         message: EdgeMessage,
-    ) -> Result<WaitAckSuccess, ClientNodeError> {
+    ) -> Result<MessageAckHandle, ClientNodeError> {
         self.inner.send_message(message).await
+    }
+    pub async fn send_message_and_wait(
+        &self,
+        message: EdgeMessage,
+    ) -> Result<WaitAckSuccess, ClientNodeError> {
+        let handle = self.inner.send_message(message).await?;
+        handle.wait().await
     }
     pub async fn create_endpoint(
         &self,
@@ -92,23 +117,21 @@ impl ClientNodeInner {
             .or_insert_with(EndpointMailbox::new)
             .take_rx()
     }
-    async fn send_message(&self, message: EdgeMessage) -> Result<WaitAckSuccess, ClientNodeError> {
-        let response = self
+    async fn send_message(
+        &self,
+        message: EdgeMessage,
+    ) -> Result<MessageAckHandle, ClientNodeError> {
+        let response_handle = self
             .send_request(EdgeRequestEnum::SendMessage(message))
             .await?;
-        if let EdgeResponseEnum::SendMessage(edge_result) = response {
-            let wait_ack = edge_result.into_std()?;
-            Ok(wait_ack)
-        } else {
-            Err(ClientNodeError::unexpected_response(response))
-        }
+        Ok(MessageAckHandle { response_handle })
     }
     async fn send_ep_online(
         &self,
         request: EdgeEndpointOnline,
     ) -> Result<EndpointAddr, ClientNodeError> {
         let response = self
-            .send_request(EdgeRequestEnum::EndpointOnline(request))
+            .send_request_and_wait(EdgeRequestEnum::EndpointOnline(request))
             .await?;
         if let EdgeResponseEnum::EndpointOnline(ep_addr) = response {
             Ok(ep_addr)
@@ -122,7 +145,7 @@ impl ClientNodeInner {
         endpoint: EndpointAddr,
     ) -> Result<(), ClientNodeError> {
         let response = self
-            .send_request(EdgeRequestEnum::EndpointOffline(EdgeEndpointOffline {
+            .send_request_and_wait(EdgeRequestEnum::EndpointOffline(EdgeEndpointOffline {
                 endpoint,
                 topic_code,
             }))
@@ -140,7 +163,7 @@ impl ClientNodeInner {
         interests: Vec<Interest>,
     ) -> Result<(), ClientNodeError> {
         let response = self
-            .send_request(EdgeRequestEnum::EndpointInterest(EndpointInterest {
+            .send_request_and_wait(EdgeRequestEnum::EndpointInterest(EndpointInterest {
                 topic_code,
                 endpoint,
                 interests,
@@ -162,7 +185,7 @@ impl ClientNodeInner {
         }: MessageAck,
     ) -> Result<(), ClientNodeError> {
         let response = self
-            .send_request(EdgeRequestEnum::SetState(SetState {
+            .send_request_and_wait(EdgeRequestEnum::SetState(SetState {
                 topic: topic_code,
                 update: MessageStateUpdate {
                     message_id: ack_to,
@@ -179,8 +202,8 @@ impl ClientNodeInner {
     async fn send_request(
         &self,
         request: EdgeRequestEnum,
-    ) -> Result<EdgeResponseEnum, ClientNodeError> {
-        let (responder, rx) = oneshot::channel();
+    ) -> Result<ResponseHandle, ClientNodeError> {
+        let (responder, response_handle) = oneshot::channel();
         let request = EdgeRequest {
             seq_id: self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             request,
@@ -190,10 +213,26 @@ impl ClientNodeInner {
             .map_err(|e| ClientNodeError {
                 kind: ClientErrorKind::NoConnection(e.0 .0.request),
             })?;
-        let response = rx.await.map_err(|_| ClientNodeError {
+        Ok(response_handle)
+        // let response = rx.await.map_err(|_| ClientNodeError {
+        //     kind: ClientErrorKind::Disconnected,
+        // })??;
+        // Ok(response)
+    }
+    async fn wait_handle(
+        response_handle: ResponseHandle,
+    ) -> Result<EdgeResponseEnum, ClientNodeError> {
+        let response = response_handle.await.map_err(|_| ClientNodeError {
             kind: ClientErrorKind::Disconnected,
         })??;
         Ok(response)
+    }
+    async fn send_request_and_wait(
+        &self,
+        request: EdgeRequestEnum,
+    ) -> Result<EdgeResponseEnum, ClientNodeError> {
+        let response_handle = self.send_request(request).await?;
+        Self::wait_handle(response_handle).await
     }
     #[tracing::instrument(skip(url))]
     pub(crate) async fn connect<R>(url: R) -> Result<ClientNodeInner, ClientNodeError>

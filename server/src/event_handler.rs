@@ -9,7 +9,10 @@ use tracing::Instrument;
 
 use crate::{
     prelude::{Subject, Topic},
-    protocol::{endpoint::LocalEndpoint, message::*},
+    protocol::{
+        endpoint::LocalEndpoint, message::*,
+        node::raft::state_machine::topic::wait_ack::WaitAckHandle,
+    },
 };
 
 type InnerEventHandler =
@@ -149,7 +152,7 @@ impl LocalEndpoint {
 }
 
 impl Topic {
-    pub async fn send_event<E: Event>(&self, event: E) -> Result<(), crate::Error> {
+    pub async fn send_event<E: Event>(&self, event: E) -> Result<WaitAckHandle, crate::Error> {
         let bytes = event.to_bytes();
         let mut header_builder = MessageHeader::builder([E::SUBJECT]);
         if let Some(durable_config) = E::durable_config() {
@@ -162,6 +165,10 @@ impl Topic {
         header_builder = header_builder.ack_kind(E::EXPECT_ACK_KIND);
         let message = Message::new(header_builder.build(), bytes);
         let handle = self.send_message(message).await?;
+        Ok(handle)
+    }
+    pub async fn send_event_and_wait<E: Event>(&self, event: E) -> Result<(), crate::Error> {
+        let handle = self.send_event(event).await?;
         let _ = handle
             .await
             .map_err(crate::Error::contextual("waiting event ack"))?;

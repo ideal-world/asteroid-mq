@@ -87,7 +87,7 @@ async fn test_connection() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     let send_task = tokio::spawn(async move {
         let send_result = node_a
-            .send_message(
+            .send_message_and_wait(
                 EdgeMessage::builder(
                     TOPIC_CODE,
                     [Subject::new("event/hello/durable")],
