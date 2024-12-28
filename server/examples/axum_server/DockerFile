@@ -1,0 +1,7 @@
+
+
+FROM ubuntu:22.04
+COPY target/debug/examples/axum-server /usr/local/bin/axum-server
+EXPOSE 8080
+EXPOSE 9559
+CMD ["axum-server"]

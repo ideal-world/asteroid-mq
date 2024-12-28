@@ -495,20 +495,22 @@ impl RaftTcpConnection {
                         }
                     }
                 }
-            }
-            .instrument(tracing::span!(
-                tracing::Level::INFO,
-                "tcp_read_loop",
-                local=%local_id,
-                peer=%peer_id
-            ));
-            tokio::spawn(async move {
-                let result: std::io::Result<()> = inner_task.await;
-                if let Err(e) = result {
-                    tracing::error!(%e, "read task error");
+            };
+            tokio::spawn(
+                async move {
+                    let result: std::io::Result<()> = inner_task.await;
+                    if let Err(e) = result {
+                        tracing::error!(%e, "read task error");
+                    }
+                    alive.store(false, atomic::Ordering::Relaxed);
                 }
-                alive.store(false, atomic::Ordering::Relaxed);
-            })
+                .instrument(tracing::span!(
+                    tracing::Level::INFO,
+                    "tcp_read_loop",
+                    local=%local_id,
+                    peer=%peer_id
+                )),
+            )
         };
         Ok(Self {
             packet_tx,

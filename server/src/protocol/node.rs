@@ -202,6 +202,7 @@ impl Node {
         .map_err(crate::Error::contextual_custom("create raft node"))?;
         // waiting for members contain self
         let pristine_nodes = cluster_provider.pristine_nodes().await?;
+        tracing::info!(?pristine_nodes);
         if pristine_nodes.contains_key(&id) {
             raft.initialize(
                 pristine_nodes
@@ -216,6 +217,7 @@ impl Node {
         let cluster_service =
             ClusterService::new(cluster_provider, tcp_service, cluster_service_ct);
         cluster_service.spawn();
+        tracing::info!("node started");
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::BTreeMap, net::SocketAddr, sync::OnceLock};
+use std::{borrow::Cow, collections::BTreeMap, default, net::SocketAddr, sync::OnceLock};
 
 use k8s_openapi::api::core::v1::{Endpoints, Service};
 
@@ -52,7 +52,8 @@ impl ClusterProvider for K8sClusterProvider {
         Cow::Owned(format!("k8s/{}/{}", self.namespace, self.service,))
     }
     async fn pristine_nodes(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
-        self.next_update().await
+        Ok(<BTreeMap<NodeId, SocketAddr>>::default())
+    
     }
     async fn next_update(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
         tokio::time::sleep_until(self.next_update).await;
@@ -85,14 +86,14 @@ impl ClusterProvider for K8sClusterProvider {
             .get(&self.service)
             .await
             .expect("endpoints not found");
-        tracing::trace!(?ep_list, "k8s endpoints list");
+        // tracing::trace!(?ep_list, "k8s endpoints list");
         let subsets = ep_list.subsets.unwrap_or_default();
         let socket_addr_list = subsets.into_iter().flat_map(|subset| {
             subset
-                .not_ready_addresses
+                .addresses
                 .into_iter()
                 .flatten()
-                .chain(subset.addresses.into_iter().flatten())
+                // .chain(subset.not_ready_addresses.into_iter().flatten())
                 .map(|address| {
                     let target = address.target_ref.expect("should have target ref");
                     let addr: SocketAddr = format!("{}:{}", address.ip, port_mapped)

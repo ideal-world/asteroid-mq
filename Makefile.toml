@@ -1,0 +1,18 @@
+[tasks."build-example-axum-server"]
+workspace = true
+description = "Build the example axum server"
+command = "cargo"
+args = ["build", "--example", "axum-server", "--features", "cluster-k8s"]
+
+[tasks."build-example-axum-server-docker"]
+workspace = true
+description = "Build the example axum server docker image"
+dependencies = ["build-example-axum-server"]
+script = "scripts/axum-server-example-docker-build.sh"
+
+[tasks."kind-load-example-axum-server-docker"]
+workspace = true
+description = "Load the example axum server docker image into kind"
+dependencies = ["build-example-axum-server-docker"]
+script = "scripts/apply-axum-server-example-to-k8s.sh"
+

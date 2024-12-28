@@ -12,9 +12,9 @@ pub struct HelloMessage {
 
 async fn get_ws_url() -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
-    const NODE_ID_API: &str = "http://localhost:8080/node_id";
+    const NODE_ID_API: &str = "http://localhost:38080/node_id";
     let node_id = client.put(NODE_ID_API).send().await?.text().await?;
-    let url = format!("ws://localhost:8080/connect?node_id={node_id}");
+    let url = format!("ws://localhost:38080/connect?node_id={node_id}");
     Ok(url)
 }
 #[tokio::test]
@@ -22,25 +22,25 @@ async fn test_connection() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
-    let build_serve_result = tokio::process::Command::new("cargo")
-        .arg("build")
-        .arg("-p")
-        .arg("asteroid-mq")
-        .arg("--example")
-        .arg("axum-server")
-        .spawn()?
-        .wait()
-        .await?;
-    if !build_serve_result.success() {
-        return Err("Failed to build axum-server example".into());
-    }
-    let _server_process = tokio::process::Command::new("cargo")
-        .arg("run")
-        .arg("-p")
-        .arg("asteroid-mq")
-        .arg("--example")
-        .arg("axum-server")
-        .spawn()?;
+    // let build_serve_result = tokio::process::Command::new("cargo")
+    //     .arg("build")
+    //     .arg("-p")
+    //     .arg("asteroid-mq")
+    //     .arg("--example")
+    //     .arg("axum-server")
+    //     .spawn()?
+    //     .wait()
+    //     .await?;
+    // if !build_serve_result.success() {
+    //     return Err("Failed to build axum-server example".into());
+    // }
+    // let _server_process = tokio::process::Command::new("cargo")
+    //     .arg("run")
+    //     .arg("-p")
+    //     .arg("asteroid-mq")
+    //     .arg("--example")
+    //     .arg("axum-server")
+    //     .spawn()?;
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     let url_a = get_ws_url().await?;
     let url_b = get_ws_url().await?;

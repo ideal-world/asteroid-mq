@@ -8,7 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use std::task::ready;
+use std::{env, task::ready};
 
 use futures_util::{Sink, Stream};
 
@@ -22,8 +22,9 @@ use asteroid_mq::{
             packet::{Auth, EdgePacket},
             EdgeConfig,
         },
-        raft::cluster::StaticClusterProvider,
+        raft::cluster::{K8sClusterProvider, StaticClusterProvider},
     },
+    DEFAULT_TCP_PORT,
 };
 
 pin_project_lite::pin_project! {
@@ -180,9 +181,14 @@ async fn get_node_id() -> String {
 #[tokio::main]
 async fn main() -> asteroid_mq::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter("debug,asteroid_mq=trace,openraft=warn")
+        .with_env_filter("debug,kube_client=off,asteroid_mq=trace,openraft=warn,hyper_util=warn,hyper=warn,tower=warn,rustls=off")
         .init();
-    let node = Node::new(NodeConfig::default());
+    let mut node_config = NodeConfig::default();
+    if let Ok(pod_id) = env::var("POD_UID") {
+        let node_id = NodeId::sha256(pod_id.as_bytes());
+        node_config.id = node_id;
+    }
+    let node = Node::new(node_config);
     #[derive(Clone)]
     pub struct TestMiddleware;
     impl<I> EdgeConnectionMiddleware<I> for TestMiddleware
@@ -202,8 +208,15 @@ async fn main() -> asteroid_mq::Result<()> {
         }
     }
     node.insert_edge_connection_middleware(TestMiddleware).await;
-    let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
-    node.start(cluster_provider).await?;
+    if let Ok(k8s_svc) = env::var("SVC") {
+        tracing::info!(%k8s_svc, "k8s cluster provider");
+        let cluster_provider = K8sClusterProvider::new(k8s_svc, DEFAULT_TCP_PORT).await;
+        node.start(cluster_provider).await?;
+    } else {
+        let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
+        node.start(cluster_provider).await?;
+    };
+
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
 
     let receiver_endpoint = topic

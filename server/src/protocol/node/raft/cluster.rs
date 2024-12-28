@@ -128,6 +128,7 @@ impl ClusterService {
                     nodes?
                 }
             };
+            tracing::trace!(?nodes, "nodes update received");
 
             // ensure connections to all nodes
             let mut ensured_nodes = BTreeMap::new();
@@ -190,6 +191,17 @@ impl ClusterService {
                         Err(e) => {
                             tracing::warn!("failed to trigger election: {}", e);
                         }
+                    }
+                }
+            } else {
+                tracing::warn!("no leader");
+                let trigger_elect_result = raft.trigger().elect().await;
+                match trigger_elect_result {
+                    Ok(resp) => {
+                        tracing::info!(?resp, "election triggered");
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to trigger election: {}", e);
                     }
                 }
             }
