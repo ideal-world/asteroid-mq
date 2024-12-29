@@ -181,13 +181,17 @@ async fn get_node_id() -> String {
 #[tokio::main]
 async fn main() -> asteroid_mq::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter("debug,kube_client=off,asteroid_mq=trace,openraft=warn,hyper_util=warn,hyper=warn,tower=warn,rustls=off")
+        .with_env_filter("debug,kube_client=off,asteroid_mq=debug,openraft=warn,hyper_util=warn,hyper=warn,tower=warn,rustls=off")
         .init();
     let mut node_config = NodeConfig::default();
     if let Ok(pod_id) = env::var("POD_UID") {
         let node_id = NodeId::sha256(pod_id.as_bytes());
         node_config.id = node_id;
     }
+    node_config.raft.election_timeout_max = 1000;
+    node_config.raft.election_timeout_min = 500;
+    node_config.raft.heartbeat_interval = 200;
+
     let node = Node::new(node_config);
     #[derive(Clone)]
     pub struct TestMiddleware;

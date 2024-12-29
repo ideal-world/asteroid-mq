@@ -212,6 +212,10 @@ impl Node {
             )
             .await
             .map_err(crate::Error::contextual_custom("init raft node"))?;
+        } else {
+            return Err(crate::Error::unknown(
+                format!("{id} not in cluster: {pristine_nodes:?}")
+            ));
         }
         maybe_loading_raft.set(raft.clone());
         let cluster_service =
@@ -280,7 +284,7 @@ impl Node {
         Ok(())
     }
     /// Propose a raft proposal
-    /// 
+    ///
     /// The final behavior is determined by the role of raft node.
     pub(crate) async fn propose(&self, proposal: Proposal) -> Result<(), crate::Error> {
         let raft = self.raft().await;

@@ -1,17 +1,17 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: asteroid-test
 spec:
-  # serviceName: asteroid-axum-server-example
-  replicas: 1
+  serviceName: asteroid-axum-server-example
+  replicas: 3
   selector:
     matchLabels:
       app: asteroid-axum-server-example
   template:
     metadata:
       labels:
-        app: asteroid-axum-server-example
+        app: asteroid-axum-server-example 
     spec:
       serviceAccountName: asteroid-sa
       containers:

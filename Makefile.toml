@@ -10,7 +10,7 @@ description = "Build the example axum server docker image"
 dependencies = ["build-example-axum-server"]
 script = "scripts/axum-server-example-docker-build.sh"
 
-[tasks."kind-load-example-axum-server-docker"]
+[tasks.kind-load-example-axum-server-docker]
 workspace = true
 description = "Load the example axum server docker image into kind"
 dependencies = ["build-example-axum-server-docker"]

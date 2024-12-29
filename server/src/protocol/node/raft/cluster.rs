@@ -193,18 +193,7 @@ impl ClusterService {
                         }
                     }
                 }
-            } else {
-                tracing::warn!("no leader");
-                let trigger_elect_result = raft.trigger().elect().await;
-                match trigger_elect_result {
-                    Ok(resp) => {
-                        tracing::info!(?resp, "election triggered");
-                    }
-                    Err(e) => {
-                        tracing::warn!("failed to trigger election: {}", e);
-                    }
-                }
-            }
+            } 
             if to_remove.contains(&local_id) {
                 tracing::warn!("local node {} is removed from cluster", local_id);
                 break;

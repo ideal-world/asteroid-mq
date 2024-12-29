@@ -12,9 +12,9 @@ pub struct HelloMessage {
 
 async fn get_ws_url() -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
-    const NODE_ID_API: &str = "http://localhost:38080/node_id";
+    const NODE_ID_API: &str = "http://localhost:8080/node_id";
     let node_id = client.put(NODE_ID_API).send().await?.text().await?;
-    let url = format!("ws://localhost:38080/connect?node_id={node_id}");
+    let url = format!("ws://localhost:8080/connect?node_id={node_id}");
     Ok(url)
 }
 #[tokio::test]

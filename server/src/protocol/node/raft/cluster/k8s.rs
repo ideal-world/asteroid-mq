@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::BTreeMap, default, net::SocketAddr, sync::OnceLock};
+use std::{borrow::Cow, collections::BTreeMap, net::SocketAddr, sync::OnceLock};
 
 use k8s_openapi::api::core::v1::{Endpoints, Service};
 
@@ -52,8 +52,7 @@ impl ClusterProvider for K8sClusterProvider {
         Cow::Owned(format!("k8s/{}/{}", self.namespace, self.service,))
     }
     async fn pristine_nodes(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
-        Ok(<BTreeMap<NodeId, SocketAddr>>::default())
-    
+        self.next_update().await
     }
     async fn next_update(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
         tokio::time::sleep_until(self.next_update).await;
@@ -93,7 +92,7 @@ impl ClusterProvider for K8sClusterProvider {
                 .addresses
                 .into_iter()
                 .flatten()
-                // .chain(subset.not_ready_addresses.into_iter().flatten())
+                .chain(subset.not_ready_addresses.into_iter().flatten())
                 .map(|address| {
                     let target = address.target_ref.expect("should have target ref");
                     let addr: SocketAddr = format!("{}:{}", address.ip, port_mapped)
