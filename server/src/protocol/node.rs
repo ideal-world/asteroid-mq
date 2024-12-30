@@ -212,11 +212,12 @@ impl Node {
             )
             .await
             .map_err(crate::Error::contextual_custom("init raft node"))?;
-        } else {
-            return Err(crate::Error::unknown(
-                format!("{id} not in cluster: {pristine_nodes:?}")
-            ));
-        }
+        } 
+        // else {
+        //     return Err(crate::Error::unknown(
+        //         format!("{id} not in cluster: {pristine_nodes:?}")
+        //     ));
+        // }
         maybe_loading_raft.set(raft.clone());
         let cluster_service =
             ClusterService::new(cluster_provider, tcp_service, cluster_service_ct);
