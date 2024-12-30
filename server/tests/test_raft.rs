@@ -75,6 +75,7 @@ async fn test_raft() {
 
     node_2.start(cluster.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
+
     cluster
         .update(map!(
             node_id(1) => node_addr(1),
@@ -113,10 +114,7 @@ async fn test_raft() {
 
     let leader_of_1 = node_1.raft().await.current_leader().await;
     let leader_of_3 = node_3.raft().await.current_leader().await;
-    // assert!(
-    //     leader_of_1.is_some() && leader_of_3.is_some() && leader_of_1 == leader_of_3,
-    //     "no leader elected"
-    // );
+
     tracing::warn!("leader of node_1: {:#?}", leader_of_1);
     tracing::warn!("leader of node_3: {:#?}", leader_of_3);
 
@@ -171,30 +169,18 @@ async fn test_raft() {
         .await;
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    let result_4 = node_4
-        .raft()
-        .await
-        .with_raft_state(|s| {
-            tracing::warn!("node_4 state: {:#?}", s.membership_state);
-        })
-        .await;
     tracing::warn!(
         "node_4 leader: {:#?}",
         node_4.raft().await.current_leader().await
     );
-    let result_3 = node_3
-        .raft()
-        .await
-        .with_raft_state(|s| {
-            tracing::warn!("node_3 state: {:#?}", s.membership_state);
-        })
-        .await;
     tracing::warn!(
-        "node_3 state: {:#?}",
+        "node_3 leader: {:#?}",
         node_3.raft().await.current_leader().await
     );
-    result_4.unwrap();
-    result_3.unwrap();
+    tracing::warn!(
+        "node_5 leader: {:#?}",
+        node_5.raft().await.current_leader().await
+    );
 
     tokio::time::sleep(Duration::from_secs(3)).await;
 }

@@ -60,3 +60,4 @@ rand = "0"
 [[example]]
 path = "examples/axum_server.rs"
 name = "axum-server"
+required-features = ["cluster-k8s"]

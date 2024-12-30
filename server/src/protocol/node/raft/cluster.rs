@@ -128,6 +128,7 @@ impl ClusterService {
                     nodes?
                 }
             };
+            tracing::trace!(?nodes, "nodes update received");
 
             // ensure connections to all nodes
             let mut ensured_nodes = BTreeMap::new();
@@ -192,7 +193,7 @@ impl ClusterService {
                         }
                     }
                 }
-            }
+            } 
             if to_remove.contains(&local_id) {
                 tracing::warn!("local node {} is removed from cluster", local_id);
                 break;

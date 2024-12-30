@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: asteroid-test
+spec:
+  serviceName: asteroid-axum-server-example
+  replicas: 3
+  selector:
+    matchLabels:
+      app: asteroid-axum-server-example
+  template:
+    metadata:
+      labels:
+        app: asteroid-axum-server-example 
+    spec:
+      serviceAccountName: asteroid-sa
+      containers:
+        - name: asteroid
+          image: asteroid-axum-server-example:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+            - containerPort: 9559
+          env:
+            - name: SVC
+              value: "asteroid-axum-server-example"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: asteroid-axum-server-example
+spec:
+  type: NodePort 
+  selector:
+    app: asteroid-axum-server-example
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+    - name: mq
+      port: 9559
+      targetPort: 9559
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: asteroid-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: asteroid-sa
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: asteroid-role
+  apiGroup: rbac.authorization.k8s.io
