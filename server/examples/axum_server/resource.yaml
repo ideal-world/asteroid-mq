@@ -11,7 +11,7 @@ spec:
   template:
     metadata:
       labels:
-        app: asteroid-axum-server-example 
+        app: asteroid-axum-server-example
     spec:
       serviceAccountName: asteroid-sa
       containers:
@@ -27,14 +27,14 @@ spec:
             - name: POD_UID
               valueFrom:
                 fieldRef:
-                  fieldPath: metadata.uid
+                  fieldPath: metadata.name
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: asteroid-axum-server-example
 spec:
-  type: NodePort 
+  clusterIP: None
   selector:
     app: asteroid-axum-server-example
   ports:
@@ -58,3 +58,40 @@ roleRef:
   kind: ClusterRole
   name: asteroid-role
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: asteroid-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: asteroid-axum-server-example
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: asteroid-axum-server-example
+      ports:
+        - port: 9559
+        - port: 8080
+  egress:
+    # 允许 DNS 查询
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # 允许访问其他 Pod
+    - to:
+        - podSelector:
+            matchLabels:
+              app: asteroid-axum-server-example
+      ports:
+        - port: 9559
+        - port: 8080

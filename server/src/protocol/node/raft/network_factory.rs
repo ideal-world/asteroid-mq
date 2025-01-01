@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    net::SocketAddr,
     ops::Deref,
     sync::{
         atomic::{self, AtomicBool, AtomicU64, AtomicUsize},
@@ -53,7 +52,7 @@ pub struct GetConnection {
 #[derive(Debug)]
 pub struct EnsureConnection {
     peer_id: NodeId,
-    peer_addr: SocketAddr,
+    peer_addr: String,
     responder: oneshot::Sender<Arc<RaftTcpConnection>>,
 }
 #[derive(Debug)]
@@ -78,7 +77,7 @@ impl TcpNetworkService {
     pub async fn ensure_connection(
         &self,
         peer_id: NodeId,
-        peer_addr: SocketAddr,
+        peer_addr: String,
     ) -> std::io::Result<Arc<RaftTcpConnection>> {
         let Some(sender) = self.service_api.get() else {
             return Err(std::io::Error::new(
@@ -137,6 +136,7 @@ impl TcpNetworkService {
                                         let Ok((stream, _)) = accepted else {
                                             continue;
                                         };
+                                        tracing::info!(local=%this_id, "tcp connection accepted");
                                         SelectEvent::Accepted(stream)
                                     }
                                     ensure_connection_req = ensure_connection_rx.recv() => {
@@ -149,17 +149,24 @@ impl TcpNetworkService {
                                 };
                                 match event {
                                     SelectEvent::Accepted(stream) => {
-
                                         if let Ok(connection) =
                                                 RaftTcpConnection::from_tokio_tcp_stream(
                                                     stream,
                                                     tcp_service.clone(),
                                                 )
-                                                .await
+                                                .await.inspect_err(|e| {
+                                                    tracing::error!(%e, "tcp connection error");
+                                                })
                                             {
                                                 let peer_id = connection.peer_id();
+                                                tracing::info!(local=%this_id, peer=%peer_id, "tcp connection established");
                                                 if let Some(connection) = connection_map.get(&peer_id) {
                                                     if connection.is_alive() {
+                                                        if let Some(waiting) = ensure_waiting_queue.remove(&peer_id) {
+                                                            for responder in waiting {
+                                                                let _ = responder.send(connection.clone());
+                                                            }
+                                                        }
                                                         tracing::trace!(local=%this_id, peer=%peer_id, "connection exists");
                                                         continue;
                                                     }
@@ -171,6 +178,7 @@ impl TcpNetworkService {
                                                         let _ = responder.send(connection.clone());
                                                     }
                                                 }
+                                                tracing::info!(local=%this_id, peer=%peer_id, "connection stored");
                                             }
                                     }
                                     SelectEvent::Request(request) => {
@@ -203,6 +211,7 @@ impl TcpNetworkService {
                                                 match peer_id.cmp(&info.id) {
                                                     std::cmp::Ordering::Less => {
                                                         // just wait for connection
+                                                        tracing::info!(local=%this_id, peer=%peer_id, "waiting for connection({req_id})");
                                                         ensure_waiting_queue.entry(peer_id).or_default().push(responder);
                                                     },
                                                     std::cmp::Ordering::Equal => {
@@ -212,21 +221,25 @@ impl TcpNetworkService {
                                                     std::cmp::Ordering::Greater => {
                                                         ensure_waiting_queue.entry(peer_id).or_default().push(responder);
                                                         let create = async {
-                                                            tracing::trace!(req_id, local=%this_id, peer=%peer_id, "tcp connecting");
-                                                            let stream = TcpStream::connect(peer_addr).await?;
-                                                            tracing::trace!(req_id, local=%this_id, peer=%peer_id, "tcp connected");
+                                                            tracing::info!(req_id, local=%this_id, peer=%peer_id, %peer_addr, "tcp connecting");
+                                                            let stream = TcpStream::connect(&peer_addr).await?;
+                                                            tracing::info!(req_id, local=%this_id, peer=%peer_id, %peer_addr, "tcp connected");
                                                             let connection =
                                                                 RaftTcpConnection::from_tokio_tcp_stream(
                                                                     stream,
                                                                     tcp_service.clone(),
                                                                 )
                                                                 .await?;
-                                                            tracing::trace!(req_id, local=%this_id, peer=%peer_id, "node id exchanged");
+                                                            tracing::info!(req_id, local=%this_id, peer=%peer_id, %peer_addr, "connected established");
                                                             <Result<Arc<RaftTcpConnection>, std::io::Error>>::Ok(
                                                                 Arc::new(connection),
                                                             )
                                                         };
-                                                        let result = create.await;
+                                                        let result = create.await
+                                                        .inspect_err(|e| {
+                                                            tracing::error!(req_id, local=%this_id, peer=%peer_id, %peer_addr, %e, "tcp connection error");
+                                                        });
+
                                                         if let Ok(connection) = result {
                                                             connection_map.insert(peer_id, connection.clone());
                                                             if let Some(waiting) = ensure_waiting_queue.remove(&peer_id) {
@@ -234,6 +247,9 @@ impl TcpNetworkService {
                                                                     let _ = responder.send(connection.clone());
                                                                 }
                                                             }
+                                                        } else {
+                                                            // drop waiting handles
+                                                            ensure_waiting_queue.remove(&peer_id);
                                                         }
                                                     },
                                                 }
@@ -304,8 +320,8 @@ impl RaftTcpConnection {
     pub fn peer_id(&self) -> NodeId {
         self.peer.id
     }
-    pub fn peer_node(&self) -> TcpNode {
-        self.peer.node
+    pub fn peer_node(&self) -> &TcpNode {
+        &self.peer.node
     }
     fn next_seq(&self) -> u64 {
         self.local_seq.fetch_add(1, atomic::Ordering::Relaxed)
@@ -358,8 +374,8 @@ impl RaftTcpConnection {
         service: TcpNetworkService,
     ) -> std::io::Result<Self> {
         let connection_ct = service.ct.child_token();
-        let raft = service.raft.get().await;
         let info = service.info.clone();
+        let pending_raft = service.raft.clone();
         let local_id = info.id;
         let packet = bincode::serialize(&info).map_err(|_| std::io::ErrorKind::InvalidData)?;
         stream.write_u32(packet.len() as u32).await?;
@@ -370,7 +386,7 @@ impl RaftTcpConnection {
         let peer: RaftNodeInfo =
             bincode::deserialize(&hello_data).map_err(|_| std::io::ErrorKind::InvalidData)?;
         let peer_id = peer.id;
-        tracing::debug!(peer=%peer_id, local=%local_id, "hello received");
+        tracing::info!(peer=%peer_id, local=%local_id, "hello received");
         let (mut read, mut write) = stream.into_split();
         let wait_pool = Arc::new(tokio::sync::Mutex::new(HashMap::<
             u64,
@@ -454,10 +470,11 @@ impl RaftTcpConnection {
                     tracing::trace!(?seq_id, ?payload, "received");
                     match payload {
                         Payload::Request(req) => {
-                            let raft = raft.clone();
+                            let pending_raft = pending_raft.clone();
                             let packet_tx = packet_tx.clone();
                             tokio::spawn(
                                 async move {
+                                    let raft = pending_raft.get().await;
                                     let resp = match req {
                                         Request::Vote(vote) => {
                                             Response::Vote(raft.vote(vote).await)
@@ -547,7 +564,7 @@ impl RaftNetworkFactory<TypeConfig> for TcpNetworkService {
         TcpNetwork::new(
             RaftNodeInfo {
                 id: target,
-                node: *node,
+                node: node.clone(),
             },
             self.clone(),
         )

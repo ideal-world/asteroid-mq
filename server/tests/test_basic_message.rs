@@ -48,16 +48,16 @@ async fn test_nodes() {
     let node_id_1 = NodeId::from(1);
     let node_id_2 = NodeId::from(2);
     let static_nodes = [
-        (node_id_1, SocketAddr::from_str("127.0.0.1:9559").unwrap()),
-        (node_id_2, SocketAddr::from_str("127.0.0.1:9560").unwrap()),
+        (node_id_1, "127.0.0.1:9559".to_string()),
+        (node_id_2, "127.0.0.1:9560".to_string()),
     ];
-    let cluster = StaticClusterProvider::new(BTreeMap::from(static_nodes));
+    let cluster = StaticClusterProvider::new(BTreeMap::from(static_nodes.clone()));
     let mut nodes = HashMap::new();
     let mut init_tasks = tokio::task::JoinSet::new();
     for (id, addr) in static_nodes {
         let node = Node::new(NodeConfig {
             id,
-            addr,
+            addr: SocketAddr::from_str(&addr).unwrap(),
             raft: raft_config.clone(),
             ..Default::default()
         });

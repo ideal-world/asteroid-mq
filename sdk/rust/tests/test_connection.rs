@@ -22,26 +22,26 @@ async fn test_connection() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
-    let build_serve_result = tokio::process::Command::new("cargo")
-        .arg("build")
-        .arg("-p")
-        .arg("asteroid-mq")
-        .arg("--example")
-        .arg("axum-server")
-        .spawn()?
-        .wait()
-        .await?;
-    if !build_serve_result.success() {
-        return Err("Failed to build axum-server example".into());
-    }
-    let _server_process = tokio::process::Command::new("cargo")
-        .arg("run")
-        .arg("-p")
-        .arg("asteroid-mq")
-        .arg("--example")
-        .arg("axum-server")
-        .spawn()?;
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    // let build_serve_result = tokio::process::Command::new("cargo")
+    //     .arg("build")
+    //     .arg("-p")
+    //     .arg("asteroid-mq")
+    //     .arg("--example")
+    //     .arg("axum-server")
+    //     .spawn()?
+    //     .wait()
+    //     .await?;
+    // if !build_serve_result.success() {
+    //     return Err("Failed to build axum-server example".into());
+    // }
+    // let _server_process = tokio::process::Command::new("cargo")
+    //     .arg("run")
+    //     .arg("-p")
+    //     .arg("asteroid-mq")
+    //     .arg("--example")
+    //     .arg("axum-server")
+    //     .spawn()?;
+    // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     let url_a = get_ws_url().await?;
     let url_b = get_ws_url().await?;
     let node_a = ClientNode::connect(url_a).await?;

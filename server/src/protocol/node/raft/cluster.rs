@@ -2,14 +2,13 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     future::Future,
-    net::SocketAddr,
 };
 
 use crate::prelude::NodeId;
 #[cfg(feature = "cluster-k8s")]
 pub(crate) mod k8s;
 #[cfg(feature = "cluster-k8s")]
-pub use k8s::K8sClusterProvider;
+pub use k8s::{this_pod_id, K8sClusterProvider};
 pub(crate) mod r#static;
 pub use r#static::StaticClusterProvider;
 use tokio_util::sync::CancellationToken;
@@ -19,10 +18,10 @@ use super::{network_factory::TcpNetworkService, raft_node::TcpNode};
 pub trait ClusterProvider: Send + 'static {
     fn pristine_nodes(
         &mut self,
-    ) -> impl Future<Output = crate::Result<BTreeMap<NodeId, SocketAddr>>> + Send;
+    ) -> impl Future<Output = crate::Result<BTreeMap<NodeId, String>>> + Send;
     fn next_update(
         &mut self,
-    ) -> impl Future<Output = crate::Result<BTreeMap<NodeId, SocketAddr>>> + Send;
+    ) -> impl Future<Output = crate::Result<BTreeMap<NodeId, String>>> + Send;
     fn name(&self) -> Cow<'static, str> {
         std::any::type_name::<Self>().into()
     }
@@ -61,10 +60,10 @@ impl DynClusterProvider {
     pub fn name(&self) -> &str {
         &self.name
     }
-    pub async fn pristine_nodes(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
+    pub async fn pristine_nodes(&mut self) -> crate::Result<BTreeMap<NodeId, String>> {
         self.inner.pristine_nodes().await
     }
-    pub async fn next_update(&mut self) -> crate::Result<BTreeMap<NodeId, SocketAddr>> {
+    pub async fn next_update(&mut self) -> crate::Result<BTreeMap<NodeId, String>> {
         self.inner.next_update().await
     }
 }
@@ -72,9 +71,8 @@ impl DynClusterProvider {
 mod sealed {
     use super::ClusterProvider;
     use crate::prelude::NodeId;
-    use std::{collections::BTreeMap, future::Future, net::SocketAddr, pin::Pin};
-    type DynUpdate<'a> =
-        dyn Future<Output = crate::Result<BTreeMap<NodeId, SocketAddr>>> + Send + 'a;
+    use std::{collections::BTreeMap, future::Future, pin::Pin};
+    type DynUpdate<'a> = dyn Future<Output = crate::Result<BTreeMap<NodeId, String>>> + Send + 'a;
     pub trait ClusterProviderObjectTrait {
         fn pristine_nodes(&mut self) -> Pin<Box<DynUpdate<'_>>>;
         fn next_update(&mut self) -> Pin<Box<DynUpdate<'_>>>;
@@ -138,13 +136,13 @@ impl ClusterService {
                 } else {
                     tracing::trace!("ensuring connection to {}", peer_id);
                     let ensure_result = tcp_network_service
-                        .ensure_connection(peer_id, peer_addr)
+                        .ensure_connection(peer_id, peer_addr.clone())
                         .await;
                     if let Err(e) = ensure_result {
                         tracing::warn!("failed to ensure connection to {}: {}", peer_id, e);
                     } else {
                         tracing::trace!("connection to {} ensured", peer_id);
-                        ensured_nodes.insert(peer_id, TcpNode::new(peer_addr));
+                        ensured_nodes.insert(peer_id, TcpNode::new(peer_addr.clone()));
                     }
                 }
             }
@@ -157,7 +155,7 @@ impl ClusterService {
             let current_nodes = current_members
                 .committed()
                 .nodes()
-                .map(|(k, v)| (*k, *v))
+                .map(|(k, v)| (*k, v.clone()))
                 .collect::<BTreeMap<_, _>>();
             let to_remove = current_nodes
                 .keys()
@@ -168,7 +166,7 @@ impl ClusterService {
                 .iter()
                 .filter_map(|(k, v)| {
                     if !current_nodes.contains_key(k) {
-                        Some((*k, *v))
+                        Some((*k, v.clone()))
                     } else {
                         None
                     }
@@ -193,13 +191,13 @@ impl ClusterService {
                         }
                     }
                 }
-            } 
+            }
             if to_remove.contains(&local_id) {
                 tracing::warn!("local node {} is removed from cluster", local_id);
                 break;
             }
 
-            if Some(local_id) == leader_node && !to_add.is_empty() {
+            if Some(local_id) == leader_node && (!to_add.is_empty() || !to_remove.is_empty()) {
                 let raft = raft.clone();
                 for (id, node) in to_add {
                     let add_result = raft.add_learner(id, node, true).await;

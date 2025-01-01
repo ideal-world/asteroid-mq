@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 use std::{
     collections::BTreeMap,
-    net::SocketAddr,
     sync::{atomic::AtomicU64, Arc},
 };
 
@@ -9,14 +8,14 @@ use asteroid_mq::{prelude::NodeId, protocol::node::raft::cluster::ClusterProvide
 use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 pub struct TestClusterProvider {
-    pristine_nodes: Arc<BTreeMap<NodeId, SocketAddr>>,
-    nodes: Arc<Mutex<BTreeMap<NodeId, SocketAddr>>>,
+    pristine_nodes: Arc<BTreeMap<NodeId, String>>,
+    nodes: Arc<Mutex<BTreeMap<NodeId, String>>>,
     latest: Arc<AtomicU64>,
     version: u64,
 }
 
 impl TestClusterProvider {
-    pub fn new(nodes: BTreeMap<NodeId, SocketAddr>) -> Self {
+    pub fn new(nodes: BTreeMap<NodeId, String>) -> Self {
         Self {
             pristine_nodes: Arc::new(nodes.clone()),
             nodes: Arc::new(Mutex::new(nodes)),
@@ -25,7 +24,7 @@ impl TestClusterProvider {
         }
     }
 
-    pub async fn update(&self, nodes: BTreeMap<NodeId, SocketAddr>) {
+    pub async fn update(&self, nodes: BTreeMap<NodeId, String>) {
         *self.nodes.lock().await = nodes;
         self.latest
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -33,12 +32,12 @@ impl TestClusterProvider {
 }
 
 impl ClusterProvider for TestClusterProvider {
-    async fn next_update(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, SocketAddr>> {
+    async fn next_update(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, String>> {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let nodes = self.nodes.lock().await.clone();
         Ok(nodes)
     }
-    async fn pristine_nodes(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, SocketAddr>> {
+    async fn pristine_nodes(&mut self) -> asteroid_mq::Result<BTreeMap<NodeId, String>> {
         let nodes = self.pristine_nodes.as_ref().clone();
 
         Ok(nodes)
@@ -53,7 +52,7 @@ macro_rules! map {
         {
             let mut map = std::collections::BTreeMap::new();
             $(
-                map.insert($key, $value);
+                map.insert($key, ($value).to_string());
             )*
             map
         }
