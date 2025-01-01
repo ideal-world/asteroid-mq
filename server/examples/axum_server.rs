@@ -8,7 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use std::{env, task::ready};
+use std::task::ready;
 
 use futures_util::{Sink, Stream};
 
@@ -22,7 +22,7 @@ use asteroid_mq::{
             packet::{Auth, EdgePacket},
             EdgeConfig,
         },
-        raft::cluster::{K8sClusterProvider, StaticClusterProvider},
+        raft::cluster::{this_pod_id, K8sClusterProvider, StaticClusterProvider},
     },
     DEFAULT_TCP_PORT,
 };
@@ -177,15 +177,17 @@ async fn get_node_id() -> String {
     tracing::info!(?node_id, "new node id");
     node_id
 }
-
+fn is_running_in_k8s() -> bool {
+    std::path::Path::new("/var/run/secrets/kubernetes.io").exists()
+}
 #[tokio::main]
 async fn main() -> asteroid_mq::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter("debug,kube_client=off,asteroid_mq=debug,openraft=warn,hyper_util=warn,hyper=warn,tower=warn,rustls=off")
         .init();
     let mut node_config = NodeConfig::default();
-    if let Ok(pod_id) = env::var("POD_UID") {
-        let node_id = NodeId::sha256(pod_id.as_bytes());
+    if is_running_in_k8s() {
+        let node_id = this_pod_id();
         node_config.id = node_id;
     }
     node_config.raft.election_timeout_max = 1000;
@@ -212,15 +214,15 @@ async fn main() -> asteroid_mq::Result<()> {
         }
     }
     node.insert_edge_connection_middleware(TestMiddleware).await;
-    if let Ok(k8s_svc) = env::var("SVC") {
-        tracing::info!(%k8s_svc, "k8s cluster provider");
-        let cluster_provider = K8sClusterProvider::new(k8s_svc, DEFAULT_TCP_PORT).await;
+    if is_running_in_k8s() {
+        let cluster_provider = K8sClusterProvider::new(DEFAULT_TCP_PORT).await;
         node.start(cluster_provider).await?;
     } else {
-        let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
+        let cluster_provider =
+            StaticClusterProvider::singleton(node.id(), node.config().addr.to_string());
         node.start(cluster_provider).await?;
     };
-
+    node.wait_for_leader().await?;
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
 
     let receiver_endpoint = topic

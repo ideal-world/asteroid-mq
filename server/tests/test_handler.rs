@@ -59,18 +59,16 @@ async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
         )
         .init();
     let node = Node::new(NodeConfig::default());
-    let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr);
+    let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr.to_string());
     node.start(cluster_provider).await?;
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
     topic
         .create_endpoint([Interest::new("other-test/*")])
         .await?
         .create_event_loop()
-        .with_handler(|event: Json<OtherEvent>| {
-            async move {
-                println!("Received other event {:?}", event);
-                asteroid_mq::Result::Ok(())
-            }
+        .with_handler(|event: Json<OtherEvent>| async move {
+            println!("Received other event {:?}", event);
+            asteroid_mq::Result::Ok(())
         })
         .spawn();
     let _evt_loop_handle = topic

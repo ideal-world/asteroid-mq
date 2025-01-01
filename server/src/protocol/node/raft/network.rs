@@ -77,7 +77,7 @@ impl TcpNetwork {
     async fn send_request(&mut self, req: Request) -> Result<Receiver<Response>, Unreachable> {
         let connection = self
             .source
-            .ensure_connection(self.peer.id, self.peer.node.addr)
+            .ensure_connection(self.peer.id, self.peer.node.addr.clone())
             .await
             .map_err(|e| Unreachable::new(&e))?;
         connection.send_request(req).await

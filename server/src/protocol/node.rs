@@ -143,7 +143,11 @@ impl Node {
     pub fn new(config: NodeConfig) -> Self {
         let ct = CancellationToken::new();
         let raft = MaybeLoadingRaft::new();
-        let network = raft.net_work_service(config.id, TcpNode::new(config.addr), ct.child_token());
+        let network = raft.net_work_service(
+            config.id,
+            TcpNode::new(config.addr.to_string()),
+            ct.child_token(),
+        );
         let scheduler_runner = tsuki_scheduler::AsyncSchedulerRunner::tokio()
             .with_execute_duration(Duration::from_secs(1));
         let scheduler_client = scheduler_runner.client();
@@ -189,11 +193,9 @@ impl Node {
             .validate()
             .map_err(crate::Error::contextual_custom("validate raft config"))?;
         tcp_service.run_service();
-        // ensure connection layer
-        tokio::spawn(async move {});
         let raft = Raft::<TypeConfig>::new(
             id,
-            Arc::new(raft_config),
+            Arc::new(raft_config.clone()),
             tcp_service.clone(),
             LogStorage::default(),
             Arc::new(state_machine_store),
@@ -203,7 +205,33 @@ impl Node {
         // waiting for members contain self
         let pristine_nodes = cluster_provider.pristine_nodes().await?;
         tracing::info!(?pristine_nodes);
+
         if pristine_nodes.contains_key(&id) {
+            loop {
+                let mut peer_nodes = pristine_nodes.clone();
+                peer_nodes.remove(&id);
+                let mut ensured_nodes = BTreeMap::new();
+                for (peer_id, peer_addr) in peer_nodes.iter() {
+                    if ensured_nodes.contains_key(peer_id) {
+                        continue;
+                    }
+                    let ensure_result = tcp_service
+                        .ensure_connection(*peer_id, peer_addr.clone())
+                        .await;
+                    if let Err(e) = ensure_result {
+                        tracing::warn!("failed to ensure connection to {}: {}", peer_id, e);
+                    } else {
+                        ensured_nodes.insert(*peer_id, peer_addr.clone());
+                        tracing::trace!("connection to {} ensured", peer_id);
+                    }
+                }
+                if ensured_nodes.len() == peer_nodes.len() {
+                    break;
+                } else {
+                    tokio::time::sleep(Duration::from_millis(raft_config.heartbeat_interval)).await;
+                }
+            }
+            maybe_loading_raft.set(raft.clone());
             raft.initialize(
                 pristine_nodes
                     .into_iter()
@@ -212,13 +240,20 @@ impl Node {
             )
             .await
             .map_err(crate::Error::contextual_custom("init raft node"))?;
-        } 
-        // else {
-        //     return Err(crate::Error::unknown(
-        //         format!("{id} not in cluster: {pristine_nodes:?}")
-        //     ));
-        // }
-        maybe_loading_raft.set(raft.clone());
+
+            // wait for election
+            raft.wait(None)
+                .metrics(
+                    |rm| rm.current_leader.is_some(),
+                    "wait for leader to be elected",
+                )
+                .await
+                .map_err(crate::Error::contextual_custom("wait for leader"))?;
+        } else {
+            return Err(crate::Error::unknown(format!(
+                "{id} not in cluster: {pristine_nodes:?}"
+            )));
+        }
         let cluster_service =
             ClusterService::new(cluster_provider, tcp_service, cluster_service_ct);
         cluster_service.spawn();
@@ -584,6 +619,15 @@ impl Node {
     pub async fn is_leader(&self) -> bool {
         let raft = self.raft().await;
         raft.ensure_linearizable().await.is_ok()
+    }
+    pub async fn wait_for_leader(&self) -> Result<(), crate::Error> {
+        let raft = self.raft().await;
+        tracing::info!("wait for leader to be elected");
+        raft.wait(None)
+            .metrics(|rm| rm.current_leader.is_some(), "wait for leader")
+            .await
+            .map_err(crate::Error::contextual_custom("wait for leader"))?;
+        Ok(())
     }
     pub async fn load_topic<C: Into<TopicConfig>>(
         &self,
