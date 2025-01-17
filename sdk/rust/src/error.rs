@@ -1,4 +1,4 @@
-use asteroid_mq_model::{EdgeError, EdgeRequestEnum, EdgeResponseEnum, WaitAckError};
+use asteroid_mq_model::{connection::EdgeConnectionError, EdgeError, EdgeRequestEnum, EdgeResponseEnum, WaitAckError};
 #[derive(Debug)]
 pub struct ClientNodeError {
     pub kind: ClientErrorKind,
@@ -32,10 +32,10 @@ impl From<WaitAckError> for ClientNodeError {
         }
     }
 }
-impl From<tokio_tungstenite::tungstenite::Error> for ClientNodeError {
-    fn from(e: tokio_tungstenite::tungstenite::Error) -> Self {
+impl From<EdgeConnectionError> for ClientNodeError {
+    fn from(e: EdgeConnectionError) -> Self {
         Self {
-            kind: ClientErrorKind::Ws(e),
+            kind: ClientErrorKind::Connection(e),
         }
     }
 }
@@ -51,7 +51,7 @@ impl From<EdgeError> for ClientNodeError {
 pub enum ClientErrorKind {
     UnexpectedResponse(EdgeResponseEnum),
     Edge(EdgeError),
-    Ws(tokio_tungstenite::tungstenite::Error),
+    Connection(EdgeConnectionError),
     NoConnection(EdgeRequestEnum),
     Disconnected,
     Io(std::io::Error),
@@ -65,7 +65,7 @@ impl std::fmt::Display for ClientErrorKind {
                 write!(f, "Unexpected response: {:?}", response)
             }
             ClientErrorKind::Edge(e) => write!(f, "Edge error: {:?}", e),
-            ClientErrorKind::Ws(e) => write!(f, "WebSocket error: {:?}", e),
+            ClientErrorKind::Connection(e) => write!(f, "Edge connection error: {:?}", e),
             ClientErrorKind::NoConnection(req) => write!(f, "No connection for request: {:?}", req),
             ClientErrorKind::Disconnected => write!(f, "Disconnected"),
             ClientErrorKind::Io(e) => write!(f, "IO error: {:?}", e),

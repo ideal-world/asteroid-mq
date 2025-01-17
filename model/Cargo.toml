@@ -15,11 +15,21 @@ edition.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true }
+bincode = { workspace = true, optional = true  }
+ciborium = { workspace = true, optional = true }
 typeshare = { workspace = true }
 base64.workspace = true
-chrono = { workspace = true, features = ["serde"]}
-
+chrono = { workspace = true, features = ["serde"] }
+futures-util = { workspace = true, features = ["sink"] }
+pin-project-lite = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 # digest
 sha2.workspace = true
 
 machine-uid = "0.5.3"
+
+[features]
+default = ["bincode"]
+cbor = ["dep:ciborium"]
+bincode = ["dep:bincode"]
+connect-ws = ["dep:tokio", "dep:pin-project-lite"]

@@ -10,6 +10,7 @@
     "nsecs",
     "openraft",
     "Protobuf",
+    "Reconnectable",
     "Sharded",
     "subsec",
     "typeshare",

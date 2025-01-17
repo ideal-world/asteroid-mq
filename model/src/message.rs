@@ -11,6 +11,7 @@ use typeshare::typeshare;
 use super::endpoint::EndpointAddr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 #[repr(u8)]
 pub enum MessageStatusKind {
@@ -38,6 +39,7 @@ impl std::fmt::Display for MessageStatusKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub enum MessageAckExpectKind {
     #[default]
@@ -114,6 +116,7 @@ impl MessageStatusKind {
     }
 }
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare(serialized_as = "String")]
 #[repr(transparent)]
 pub struct MessageId {
@@ -214,6 +217,7 @@ impl MessageId {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct Message {
     pub header: MessageHeader,
@@ -245,6 +249,7 @@ impl Message {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct MessageHeader {
     pub message_id: MessageId,
@@ -353,6 +358,7 @@ pub struct MessageAck {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[repr(u8)]
 #[typeshare]
 pub enum MessageTargetKind {

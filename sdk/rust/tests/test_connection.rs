@@ -1,5 +1,6 @@
 use asteroid_mq_model::{
-    EdgeMessage, Interest, MessageAckExpectKind, MessageDurableConfig, Subject, TopicCode,
+    CodecKind, DynCodec, EdgeMessage, Interest, MessageAckExpectKind, MessageDurableConfig,
+    Subject, TopicCode,
 };
 use asteroid_mq_sdk::ClientNode;
 use chrono::{TimeDelta, Utc};
@@ -9,14 +10,21 @@ use serde::{Deserialize, Serialize};
 pub struct HelloMessage {
     pub message: String,
 }
+const CODEC: &str = "bincode";
+
+fn get_codec() -> DynCodec {
+    let codec_kind = CODEC.parse::<CodecKind>().unwrap();
+    DynCodec::form_kind(codec_kind).unwrap()
+}
 
 async fn get_ws_url() -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     const NODE_ID_API: &str = "http://localhost:8080/node_id";
     let node_id = client.put(NODE_ID_API).send().await?.text().await?;
-    let url = format!("ws://localhost:8080/connect?node_id={node_id}");
+    let url = format!("ws://localhost:8080/connect?node_id={node_id}&codec={CODEC}");
     Ok(url)
 }
+
 #[tokio::test]
 async fn test_connection() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -29,6 +37,8 @@ async fn test_connection() -> Result<(), Box<dyn std::error::Error>> {
             .arg("asteroid-mq")
             .arg("--example")
             .arg("axum-server")
+            .arg("--features")
+            .arg("cluster-k8s")
             .spawn()?
             .wait()
             .await?;
@@ -41,13 +51,15 @@ async fn test_connection() -> Result<(), Box<dyn std::error::Error>> {
             .arg("asteroid-mq")
             .arg("--example")
             .arg("axum-server")
+            .arg("--features")
+            .arg("cluster-k8s")
             .spawn()?;
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
     let url_a = get_ws_url().await?;
     let url_b = get_ws_url().await?;
-    let node_a = ClientNode::connect(url_a).await?;
-    let node_b = ClientNode::connect(url_b).await?;
+    let node_a = ClientNode::connect_ws2(url_a, get_codec()).await?;
+    let node_b = ClientNode::connect_ws2(url_b, get_codec()).await?;
     const TOPIC_CODE: TopicCode = TopicCode::const_new("test");
     fn message(message: &'static str) -> EdgeMessage {
         EdgeMessage::builder(

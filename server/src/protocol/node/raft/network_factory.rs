@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use asteroid_mq_model::bincode::BINCODE_CONFIG;
 use openraft::{error::Unreachable, raft::ClientWriteResponse, Raft, RaftNetworkFactory};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -377,14 +378,14 @@ impl RaftTcpConnection {
         let info = service.info.clone();
         let pending_raft = service.raft.clone();
         let local_id = info.id;
-        let packet = bincode::serialize(&info).map_err(|_| std::io::ErrorKind::InvalidData)?;
+        let packet = bincode::serde::encode_to_vec(&info, BINCODE_CONFIG).map_err(|_| std::io::ErrorKind::InvalidData)?;
         stream.write_u32(packet.len() as u32).await?;
         stream.write_all(&packet).await?;
         let hello_size = stream.read_u32().await?;
         let mut hello_data = vec![0; hello_size as usize];
         stream.read_exact(&mut hello_data).await?;
         let peer: RaftNodeInfo =
-            bincode::deserialize(&hello_data).map_err(|_| std::io::ErrorKind::InvalidData)?;
+            bincode::serde::decode_from_slice(&hello_data, BINCODE_CONFIG).map_err(|_| std::io::ErrorKind::InvalidData)?.0;
         let peer_id = peer.id;
         tracing::info!(peer=%peer_id, local=%local_id, "hello received");
         let (mut read, mut write) = stream.into_split();
@@ -412,7 +413,7 @@ impl RaftTcpConnection {
                                 }
                             }
                         };
-                        let bytes = bincode::serialize(&packet.payload)
+                        let bytes = bincode::serde::encode_to_vec(&packet.payload, BINCODE_CONFIG)
                             .expect("should be valid for bincode");
                         write.write_u64(packet.seq_id).await?;
                         write.write_u32(bytes.len() as u32).await?;
@@ -462,7 +463,7 @@ impl RaftTcpConnection {
                     // }
                     let data = &mut buffer[..len];
                     read.read_exact(data).await?;
-                    let Ok(payload) = bincode::deserialize::<Payload>(data).inspect_err(|e| {
+                    let Ok((payload, _)) = bincode::serde::decode_from_slice::<Payload, _>(data, BINCODE_CONFIG).inspect_err(|e| {
                         tracing::error!(?e);
                     }) else {
                         continue;

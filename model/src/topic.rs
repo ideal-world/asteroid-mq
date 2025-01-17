@@ -9,7 +9,7 @@ use crate::{endpoint::EndpointAddr, message::MessageStatusKind};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[typeshare(serialized_as = "String")]
 /// code are expect to be a valid utf8 string
-pub struct TopicCode(Bytes);
+pub struct TopicCode(pub(crate) Bytes);
 impl TopicCode {
     pub fn new<B: Into<String>>(code: B) -> Self {
         Self(Bytes::from(code.into()))
@@ -70,6 +70,7 @@ impl std::fmt::Display for TopicCode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct WaitAckError {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
@@ -77,6 +78,7 @@ pub struct WaitAckError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct WaitAckSuccess {
     pub status: HashMap<EndpointAddr, MessageStatusKind>,
@@ -93,6 +95,7 @@ impl WaitAckError {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub enum WaitAckErrorException {
     MessageDropped = 0,

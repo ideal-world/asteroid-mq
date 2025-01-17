@@ -45,7 +45,7 @@ k8s-openapi = { version = "0.22.0" }
 ciborium = { version = "0.2" }
 serde = { version = "1" }
 serde_json = { version = "1" }
-bincode = "1"
+bincode = "2.0.0-rc.3"
 typeshare = { version = "1" }
 base64 = "0.22"
 

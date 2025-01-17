@@ -9,6 +9,7 @@ use std::{
     },
 };
 
+use asteroid_mq_model::bincode::BINCODE_CONFIG;
 use node::NodeData;
 use openraft::{
     storage::RaftStateMachine, EntryPayload, LogId, RaftSnapshotBuilder, RaftTypeConfig, Snapshot,
@@ -106,7 +107,7 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<StateMachineStore> {
             last_membership,
             snapshot_id,
         };
-        let bytes = bincode::serialize(&snapshot).unwrap();
+        let bytes = bincode::serde::encode_to_vec(&snapshot, BINCODE_CONFIG).unwrap();
         let stored = StoredSnapshot {
             meta: meta.clone(),
             data: snapshot,
@@ -227,7 +228,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
     {
         match &*self.current_snapshot.read().await {
             Some(snapshot) => {
-                let bytes = bincode::serialize(&snapshot.data).unwrap();
+                let bytes = bincode::serde::encode_to_vec(&snapshot.data, BINCODE_CONFIG).unwrap();
                 Ok(Some(Snapshot {
                     meta: snapshot.meta.clone(),
                     snapshot: Box::new(Cursor::new(bytes)),
@@ -253,7 +254,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
             { snapshot_size = snapshot.get_ref().len(), meta= ?meta },
             "decoding snapshot for installation"
         );
-        let new_data: NodeData = bincode::deserialize_from(&mut snapshot).map_err(|e| {
+        let new_data: NodeData = bincode::serde::decode_from_std_read::<NodeData, _, _>(&mut snapshot, BINCODE_CONFIG).map_err(|e| {
             StorageError::from_io_error(
                 openraft::ErrorSubject::Snapshot(None),
                 openraft::ErrorVerb::Read,

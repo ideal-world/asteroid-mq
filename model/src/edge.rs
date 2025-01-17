@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-
+pub mod connection;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -12,9 +12,11 @@ use crate::{
     proposal::{EndpointInterest, SetState},
     topic::{TopicCode, WaitAckError, WaitAckSuccess},
     util::MaybeBase64Bytes,
+    NodeId,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[repr(u8)]
 #[typeshare]
 #[serde(tag = "kind", content = "content")]
@@ -27,6 +29,7 @@ pub enum EdgeRequestEnum {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[typeshare]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 
 pub struct EdgeEndpointOnline {
     pub topic_code: TopicCode,
@@ -35,13 +38,14 @@ pub struct EdgeEndpointOnline {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[typeshare]
-
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 pub struct EdgeEndpointOffline {
     pub topic_code: TopicCode,
     pub endpoint: EndpointAddr,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 #[serde(tag = "kind", content = "content")]
 pub enum EdgePayload {
@@ -52,6 +56,7 @@ pub enum EdgePayload {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 #[serde(tag = "kind", content = "content")]
 pub enum EdgePush {
@@ -62,6 +67,7 @@ pub enum EdgePush {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct EdgeRequest {
     pub seq_id: u32,
@@ -69,6 +75,7 @@ pub struct EdgeRequest {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct EdgeResponse {
     pub seq_id: u32,
@@ -76,6 +83,7 @@ pub struct EdgeResponse {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 #[serde(tag = "kind", content = "content")]
 pub enum EdgeResponseEnum {
@@ -86,6 +94,7 @@ pub enum EdgeResponseEnum {
     SetState,
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 #[serde(tag = "kind", content = "content")]
 pub enum EdgeResult<T, E> {
@@ -147,6 +156,7 @@ impl EdgeError {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub enum EdgeErrorKind {
     Decode = 0x00,
@@ -157,6 +167,7 @@ pub enum EdgeErrorKind {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct EdgeMessageHeader {
     pub ack_kind: MessageAckExpectKind,
@@ -181,6 +192,7 @@ impl EdgeMessageHeader {
     }
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct EdgeMessage {
     pub header: EdgeMessageHeader,
@@ -253,4 +265,15 @@ impl EdgeMessageBuilder {
             payload: MaybeBase64Bytes(self.payload),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeConfig {
+    pub peer_id: NodeId,
+    pub peer_auth: EdgeAuth,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EdgeAuth {
+    pub payload: MaybeBase64Bytes,
 }

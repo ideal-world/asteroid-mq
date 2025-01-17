@@ -1,4 +1,8 @@
+use asteroid_mq_model::{
+    connection::EdgeNodeConnection, Codec, CodecKind, DynCodec, EdgeAuth, EdgePayload,
+};
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
@@ -16,10 +20,8 @@ use asteroid_mq::{
     prelude::{Node, NodeConfig, NodeId, TopicCode},
     protocol::node::{
         edge::{
-            codec::CodecKind,
-            connection::{NodeConnection, NodeConnectionError, NodeConnectionErrorKind},
+            connection::{EdgeConnectionError, EdgeConnectionErrorKind},
             middleware::{EdgeConnectionHandler, EdgeConnectionMiddleware},
-            packet::{Auth, EdgePacket},
             EdgeConfig,
         },
         raft::cluster::{this_pod_id, K8sClusterProvider, StaticClusterProvider},
@@ -29,38 +31,41 @@ use asteroid_mq::{
 
 pin_project_lite::pin_project! {
     #[derive(Debug)]
-    pub struct AxumWs {
+    pub struct AxumWs<C: Codec> {
         #[pin]
         inner: WebSocket,
+        codec: C,
     }
 }
-impl AxumWs {
-    pub fn new(inner: WebSocket) -> Self {
-        Self { inner }
+impl<C: Codec> AxumWs<C> {
+    pub fn new(inner: WebSocket, codec: C) -> Self {
+        Self { inner, codec }
     }
 }
-impl Sink<EdgePacket> for AxumWs {
-    type Error = NodeConnectionError;
+impl<C: Codec> Sink<EdgePayload> for AxumWs<C> {
+    type Error = EdgeConnectionError;
 
     fn poll_ready(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.project().inner.poll_ready(cx).map_err(|e| {
-            NodeConnectionError::new(
-                NodeConnectionErrorKind::Underlying(Box::new(e)),
+            EdgeConnectionError::new(
+                EdgeConnectionErrorKind::Underlying(Box::new(e)),
                 "web socket poll ready failed",
             )
         })
     }
 
-    fn start_send(self: std::pin::Pin<&mut Self>, item: EdgePacket) -> Result<(), Self::Error> {
-        self.project()
-            .inner
-            .start_send(Message::Binary(item.payload.to_vec()))
+    fn start_send(self: std::pin::Pin<&mut Self>, item: EdgePayload) -> Result<(), Self::Error> {
+        let this = self.project();
+        this.inner
+            .start_send(Message::Binary(this.codec.encode(&item).map_err(
+                EdgeConnectionError::codec("web socket start send failed"),
+            )?))
             .map_err(|e| {
-                NodeConnectionError::new(
-                    NodeConnectionErrorKind::Underlying(Box::new(e)),
+                EdgeConnectionError::new(
+                    EdgeConnectionErrorKind::Underlying(Box::new(e)),
                     "web socket start send failed",
                 )
             })
@@ -71,8 +76,8 @@ impl Sink<EdgePacket> for AxumWs {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.project().inner.poll_flush(cx).map_err(|e| {
-            NodeConnectionError::new(
-                NodeConnectionErrorKind::Underlying(Box::new(e)),
+            EdgeConnectionError::new(
+                EdgeConnectionErrorKind::Underlying(Box::new(e)),
                 "web socket poll flush failed",
             )
         })
@@ -83,30 +88,37 @@ impl Sink<EdgePacket> for AxumWs {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.project().inner.poll_close(cx).map_err(|e| {
-            NodeConnectionError::new(
-                NodeConnectionErrorKind::Underlying(Box::new(e)),
+            EdgeConnectionError::new(
+                EdgeConnectionErrorKind::Underlying(Box::new(e)),
                 "web socket poll close failed",
             )
         })
     }
 }
 
-impl Stream for AxumWs {
-    type Item = Result<EdgePacket, NodeConnectionError>;
+impl<C: Codec> Stream for AxumWs<C> {
+    type Item = Result<EdgePayload, EdgeConnectionError>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        let next = ready!(self.project().inner.poll_next(cx));
+        let this = self.project();
+        let next = ready!(this.inner.poll_next(cx));
         match next {
             Some(Ok(Message::Binary(data))) => {
-                let packet = EdgePacket::new(CodecKind::JSON, data);
-                std::task::Poll::Ready(Some(Ok(packet)))
+                let payload_result = this
+                    .codec
+                    .decode(&data)
+                    .map_err(EdgeConnectionError::codec("axum ws poll next failed"));
+                std::task::Poll::Ready(Some(payload_result))
             }
             Some(Ok(Message::Text(data))) => {
-                let packet = EdgePacket::new(CodecKind::JSON, data);
-                std::task::Poll::Ready(Some(Ok(packet)))
+                let payload_result = this
+                    .codec
+                    .decode(data.as_bytes())
+                    .map_err(EdgeConnectionError::codec("axum ws poll next failed"));
+                std::task::Poll::Ready(Some(payload_result))
             }
             Some(Ok(Message::Close(_))) => {
                 tracing::debug!("received close message");
@@ -118,8 +130,8 @@ impl Stream for AxumWs {
                 cx.waker().wake_by_ref();
                 std::task::Poll::Pending
             }
-            Some(Err(e)) => std::task::Poll::Ready(Some(Err(NodeConnectionError::new(
-                NodeConnectionErrorKind::Underlying(Box::new(e)),
+            Some(Err(e)) => std::task::Poll::Ready(Some(Err(EdgeConnectionError::new(
+                EdgeConnectionErrorKind::Underlying(Box::new(e)),
                 "web socket poll next failed",
             )))),
             None => std::task::Poll::Ready(None),
@@ -127,11 +139,12 @@ impl Stream for AxumWs {
     }
 }
 
-impl NodeConnection for AxumWs {}
+impl<C: Codec> EdgeNodeConnection for AxumWs<C> {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectQuery {
     pub node_id: String,
+    pub codec: String,
 }
 async fn handler(
     ws: WebSocketUpgrade,
@@ -145,18 +158,35 @@ async fn handler(
         .unwrap();
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&id);
+    let codec = match query.0.codec.as_str() {
+        "json" => CodecKind::JSON,
+        "bincode" => CodecKind::BINCODE,
+        _ => {
+            let response = Response::builder()
+                .status(axum::http::StatusCode::BAD_REQUEST)
+                .body(Body::from("unsupported codec"))
+                .expect("response builder failed");
+            return response;
+        }
+    };
+    let Some(codec) = DynCodec::form_kind(codec) else {
+        let response = Response::builder()
+            .status(axum::http::StatusCode::BAD_REQUEST)
+            .body(Body::from("unsupported codec"))
+            .expect("response builder failed");
+        return response;
+    };
     let config = EdgeConfig {
         peer_id: NodeId { bytes },
-        supported_codec_kinds: vec![CodecKind::JSON].into_iter().collect(),
-        peer_auth: Auth::default(),
+        peer_auth: EdgeAuth::default(),
     };
     tracing::info!(?config, "new edge connection");
-    ws.on_upgrade(|ws| async move { handle_socket(ws, state.0, config).await })
+    ws.on_upgrade(|ws| async move { handle_socket(ws, state.0, config, codec).await })
 }
 
-async fn handle_socket(socket: WebSocket, node: Node, config: EdgeConfig) {
+async fn handle_socket(socket: WebSocket, node: Node, config: EdgeConfig, codec: DynCodec) {
     let Ok(node_id) = node
-        .create_edge_connection(AxumWs::new(socket), config)
+        .create_edge_connection(AxumWs::new(socket, codec), config)
         .await
         .inspect_err(|e| {
             tracing::error!(?e, "failed to create edge connection");
@@ -240,14 +270,14 @@ async fn main() -> asteroid_mq::Result<()> {
         }
     });
     use axum::serve;
-    let tcp_listener = tokio::net::TcpListener::bind("localhost:8080")
+    let http_tcp_listener = tokio::net::TcpListener::bind("localhost:8080")
         .await
         .unwrap();
-    tracing::info!("listening on {}", tcp_listener.local_addr().unwrap());
+    tracing::info!("listening on {}", http_tcp_listener.local_addr().unwrap());
     let route = axum::Router::new()
         .route("/connect", axum::routing::get(handler))
         .route("/node_id", axum::routing::put(get_node_id))
         .with_state(node);
-    serve(tcp_listener, route).await.unwrap();
+    serve(http_tcp_listener, route).await.unwrap();
     Ok(())
 }

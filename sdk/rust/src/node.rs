@@ -6,13 +6,13 @@ use std::{
 use crate::endpoint::{ClientEndpoint, EndpointMailbox};
 pub use crate::error::*;
 use asteroid_mq_model::{
-    EdgeEndpointOffline, EdgeEndpointOnline, EdgeError, EdgeMessage, EdgePayload, EdgePush,
-    EdgeRequest, EdgeRequestEnum, EdgeResponseEnum, EndpointAddr, EndpointInterest, Interest,
-    Message, MessageAck, MessageStateUpdate, SetState, TopicCode, WaitAckSuccess,
+    connection::EdgeNodeConnection, EdgeEndpointOffline, EdgeEndpointOnline, EdgeError,
+    EdgeMessage, EdgePayload, EdgePush, EdgeRequest, EdgeRequestEnum, EdgeResponseEnum,
+    EndpointAddr, EndpointInterest, Interest, Message, MessageAck, MessageStateUpdate, SetState,
+    TopicCode, WaitAckSuccess,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{oneshot, RwLock};
-use tokio_tungstenite::tungstenite;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 type Responder = oneshot::Sender<Result<EdgeResponseEnum, EdgeError>>;
@@ -84,11 +84,11 @@ impl ClientNode {
             message_rx,
         })
     }
-    pub async fn connect<R>(request: R) -> Result<Self, ClientNodeError>
+    pub async fn connect<C>(connect: C) -> Result<Self, ClientNodeError>
     where
-        R: tokio_tungstenite::tungstenite::client::IntoClientRequest + Unpin,
+        C: EdgeNodeConnection,
     {
-        let inner = ClientNodeInner::connect(request).await?;
+        let inner = ClientNodeInner::connect(connect).await?;
         Ok(ClientNode {
             inner: Arc::new(inner),
         })
@@ -234,14 +234,12 @@ impl ClientNodeInner {
         let response_handle = self.send_request(request).await?;
         Self::wait_handle(response_handle).await
     }
-    #[tracing::instrument(skip(url))]
-    pub(crate) async fn connect<R>(url: R) -> Result<ClientNodeInner, ClientNodeError>
+    pub(crate) async fn connect<C>(connection: C) -> Result<ClientNodeInner, ClientNodeError>
     where
-        R: tokio_tungstenite::tungstenite::client::IntoClientRequest + Unpin,
+        C: EdgeNodeConnection,
     {
         let response_pool: ResponsePool = Default::default();
-        let (stream, resp) = tokio_tungstenite::connect_async(url).await?;
-        tracing::debug!(response_code = %resp.status(), "connected to server");
+
         let endpoint_map = EndpointMailboxMap::default();
         let ct = CancellationToken::new();
         let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel::<(
@@ -249,7 +247,7 @@ impl ClientNodeInner {
             oneshot::Sender<Result<EdgeResponseEnum, EdgeError>>,
         )>();
 
-        let (mut sink, mut stream) = stream.split();
+        let (mut sink, mut stream) = connection.split();
         let tx_ct = ct.child_token();
         let tx_task = {
             let response_pool = response_pool.clone();
@@ -273,10 +271,8 @@ impl ClientNodeInner {
                     };
                     let seq_id = request.seq_id;
                     response_pool.write().await.insert(seq_id, responder);
-                    let payload = serde_json::to_string(&EdgePayload::Request(request))
-                        .expect("failed to serialize message");
-                    let message = tungstenite::Message::Text(payload);
-                    let send_result = sink.send(message).await;
+
+                    let send_result = sink.send(EdgePayload::Request(request)).await;
                     if let Err(e) = send_result {
                         tracing::error!("failed to send message: {:?}", e);
                         break;
@@ -291,7 +287,7 @@ impl ClientNodeInner {
             let endpoints_map = endpoint_map.clone();
             async move {
                 loop {
-                    let message = tokio::select! {
+                    let edge_pld = tokio::select! {
                         _ = rx_ct.cancelled() => {
                             endpoints_map.write().await.clear();
                             tracing::debug!("task cancelled");
@@ -299,8 +295,8 @@ impl ClientNodeInner {
                         }
                         received = stream.next() => {
                             match received {
-                                Some(Ok(message)) => {
-                                    message
+                                Some(Ok(edge_pld)) => {
+                                    edge_pld
                                 }
                                 Some(Err(e)) => {
                                     tracing::error!("failed to receive message: {:?}", e);
@@ -313,15 +309,8 @@ impl ClientNodeInner {
                             }
                         }
                     };
-                    let Ok(text) = message.into_text() else {
-                        continue;
-                    };
-                    let Ok(payload) = serde_json::from_str::<EdgePayload>(&text).inspect_err(|e| {
-                        tracing::error!("failed to parse message: {:?}", e);
-                    }) else {
-                        continue;
-                    };
-                    match payload {
+
+                    match edge_pld {
                         EdgePayload::Push(EdgePush::Message { endpoints, message }) => {
                             tracing::trace!(endpoints = ?endpoints, ?message, "received message");
                             let mut wg = endpoints_map.write().await;
