@@ -50,7 +50,7 @@ pub fn hex<B: AsRef<[u8]> + ?Sized>(bytes: &B) -> Hex<'_> {
 
 pub struct Hex<'a>(&'a [u8]);
 
-impl<'a> std::fmt::Debug for Hex<'a> {
+impl std::fmt::Debug for Hex<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for byte in self.0 {
             write!(f, "{:02x}", byte)?;
@@ -59,7 +59,7 @@ impl<'a> std::fmt::Debug for Hex<'a> {
     }
 }
 
-impl<'a> std::fmt::Display for Hex<'a> {
+impl std::fmt::Display for Hex<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for byte in self.0 {
             write!(f, "{:02x}", byte)?;

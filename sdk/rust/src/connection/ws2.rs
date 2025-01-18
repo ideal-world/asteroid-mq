@@ -168,6 +168,7 @@ impl<C: Codec + Clone> ReconnectableConnection for Ws2Client<C> {
     type ReconnectFuture = std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<Self, EdgeConnectionError>> + Send>,
     >;
+    type SleepFuture = tokio::time::Sleep;
     fn is_closed(&self) -> bool {
         self.inner.is_terminated()
     }
@@ -178,5 +179,8 @@ impl<C: Codec + Clone> ReconnectableConnection for Ws2Client<C> {
             let client = Ws2Client::create_by_request(request, codec).await?;
             Ok(client)
         })
+    }
+    fn sleep(&self, duration: std::time::Duration) -> Self::SleepFuture {
+        tokio::time::sleep(duration)
     }
 }

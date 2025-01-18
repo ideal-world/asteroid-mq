@@ -1,9 +1,7 @@
+use futures_util::{Sink, Stream};
 use std::borrow::Cow;
 
-use bytes::Bytes;
-use futures_util::{Sink, Stream};
-
-use crate::{CodecError, CodecKind};
+use crate::CodecError;
 
 use super::EdgePayload;
 
@@ -11,6 +9,12 @@ use super::EdgePayload;
 pub struct EdgeConnectionError {
     pub kind: EdgeConnectionErrorKind,
     pub context: Cow<'static, str>,
+}
+
+impl std::fmt::Display for EdgeConnectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.context, self.kind)
+    }
 }
 
 impl EdgeConnectionError {
@@ -40,64 +44,39 @@ pub enum EdgeConnectionErrorKind {
     Existed,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EdgePacketId {
-    pub bytes: [u8; 16],
-}
-
-impl std::fmt::Debug for EdgePacketId {
+impl std::fmt::Display for EdgeConnectionErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("N2NEventId")
-            .field(&crate::util::hex(&self.bytes))
-            .finish()
-    }
-}
-
-impl EdgePacketId {
-    pub fn new_snowflake() -> Self {
-        thread_local! {
-            static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        match self {
+            EdgeConnectionErrorKind::Io(e) => write!(f, "io error: {}", e),
+            EdgeConnectionErrorKind::Underlying(e) => write!(f, "underlying error: {}", e),
+            EdgeConnectionErrorKind::Codec(e) => write!(f, "codec error: {}", e),
+            EdgeConnectionErrorKind::Closed => write!(f, "connection closed"),
+            EdgeConnectionErrorKind::Timeout => write!(f, "timeout"),
+            EdgeConnectionErrorKind::Protocol => write!(f, "protocol error"),
+            EdgeConnectionErrorKind::Existed => write!(f, "existed"),
         }
-        let timestamp = crate::util::timestamp_sec();
-        let counter = COUNTER.with(|c| {
-            let v = c.get();
-            c.set(v.wrapping_add(1));
-            v
-        });
-        let eid = crate::util::executor_digest() as u32;
-        let mut bytes = [0; 16];
-        bytes[0..8].copy_from_slice(&timestamp.to_be_bytes());
-        bytes[8..12].copy_from_slice(&counter.to_be_bytes());
-        bytes[12..16].copy_from_slice(&eid.to_be_bytes());
-        Self { bytes }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct EdgePacket {
-    pub header: EdgePacketHeader,
-    pub payload: Bytes,
-}
-
-#[derive(Debug, Clone)]
-pub struct EdgePacketHeader {
-    pub id: EdgePacketId,
-    pub codec: CodecKind,
-}
-
-impl EdgePacket {
-    pub fn codec(&self) -> CodecKind {
-        self.header.codec
+impl std::error::Error for EdgeConnectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.kind {
+            EdgeConnectionErrorKind::Io(e) => Some(e),
+            EdgeConnectionErrorKind::Underlying(e) => Some(&**e),
+            EdgeConnectionErrorKind::Codec(e) => Some(e),
+            _ => None,
+        }
     }
-    pub fn id(&self) -> EdgePacketId {
-        self.header.id
-    }
-    pub fn new(codec: CodecKind, payload: impl Into<Bytes>) -> Self {
-        let id = EdgePacketId::new_snowflake();
-        let header = EdgePacketHeader { id, codec };
-        Self {
-            header,
-            payload: payload.into(),
+
+    fn description(&self) -> &str {
+        match &self.kind {
+            EdgeConnectionErrorKind::Io(_) => "io error",
+            EdgeConnectionErrorKind::Underlying(_) => "underlying error",
+            EdgeConnectionErrorKind::Codec(_) => "codec error",
+            EdgeConnectionErrorKind::Closed => "connection closed",
+            EdgeConnectionErrorKind::Timeout => "timeout",
+            EdgeConnectionErrorKind::Protocol => "protocol error",
+            EdgeConnectionErrorKind::Existed => "existed",
         }
     }
 }

@@ -55,11 +55,13 @@ pub struct CodecError {
     reason: Cow<'static, str>,
 }
 
+
 impl std::fmt::Display for CodecError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "codec error: {}", self.reason)
     }
 }
+impl std::error::Error for CodecError {}
 
 impl CodecError {
     pub fn decode_error<E: std::fmt::Display>(e: E) -> Self {
