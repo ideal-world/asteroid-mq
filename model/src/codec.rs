@@ -6,10 +6,15 @@ use std::{
     sync::Arc,
 };
 #[cfg(feature = "bincode")]
-pub mod bincode;
+mod bincode;
+#[cfg(feature = "bincode")]
+pub use bincode::*;
 #[cfg(feature = "cbor")]
-pub mod cbor;
-pub mod json;
+mod cbor;
+#[cfg(feature = "cbor")]
+pub use cbor::*;
+mod json;
+pub use json::*;
 
 use crate::EdgePayload;
 

@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use asteroid_mq_model::bincode::BINCODE_CONFIG;
+use asteroid_mq_model::codec::BINCODE_CONFIG;
 use openraft::{error::Unreachable, raft::ClientWriteResponse, Raft, RaftNetworkFactory};
 use serde::{Deserialize, Serialize};
 use tokio::{

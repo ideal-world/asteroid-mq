@@ -1,5 +1,7 @@
 use asteroid_mq_model::{
-    connection::EdgeNodeConnection, Codec, CodecKind, DynCodec, EdgeAuth, EdgePayload,
+    codec::{Codec, CodecKind, DynCodec},
+    connection::EdgeNodeConnection,
+    EdgeAuth, EdgePayload,
 };
 use axum::{
     body::Body,

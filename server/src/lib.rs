@@ -10,7 +10,7 @@ pub use openraft;
 pub type Result<T> = std::result::Result<T, Error>;
 pub mod prelude {
     pub use crate::error::Error;
-    pub use crate::event_handler::{Event, EventAttribute, EventCodec, HandleEventLoop, Handler};
+    pub use crate::event_handler::HandleEventLoop;
     pub use crate::protocol::endpoint::{EndpointAddr, LocalEndpoint, LocalEndpointRef};
     pub use crate::protocol::interest::{Interest, Subject};
     pub use crate::protocol::message::*;
@@ -24,7 +24,7 @@ pub mod prelude {
     };
     pub use crate::util::MaybeBase64Bytes;
 }
-
+pub use asteroid_mq_model as model;
 pub const DEFAULT_TCP_PORT: u16 = 9559;
 pub const DEFAULT_TCP_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 pub const DEFAULT_TCP_SOCKET_ADDR: SocketAddr = SocketAddr::new(DEFAULT_TCP_ADDR, DEFAULT_TCP_PORT);

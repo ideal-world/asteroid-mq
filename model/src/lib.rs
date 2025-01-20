@@ -1,5 +1,4 @@
-mod codec;
-pub use codec::*;
+pub mod codec;
 mod durable;
 pub use durable::*;
 mod edge;
@@ -18,3 +17,4 @@ mod topic;
 pub use topic::*;
 mod util;
 pub use util::*;
+pub mod event;

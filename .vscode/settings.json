@@ -11,6 +11,7 @@
     "openraft",
     "Protobuf",
     "Reconnectable",
+    "respawn",
     "Sharded",
     "subsec",
     "typeshare",

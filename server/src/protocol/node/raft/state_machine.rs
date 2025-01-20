@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use asteroid_mq_model::bincode::BINCODE_CONFIG;
+use asteroid_mq_model::codec::BINCODE_CONFIG;
 use node::NodeData;
 use openraft::{
     storage::RaftStateMachine, EntryPayload, LogId, RaftSnapshotBuilder, RaftTypeConfig, Snapshot,

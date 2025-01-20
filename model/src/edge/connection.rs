@@ -1,7 +1,7 @@
 use futures_util::{Sink, Stream};
 use std::borrow::Cow;
 
-use crate::CodecError;
+use crate::codec::CodecError;
 
 use super::EdgePayload;
 
@@ -42,6 +42,7 @@ pub enum EdgeConnectionErrorKind {
     Timeout,
     Protocol,
     Existed,
+    Reconnect,
 }
 
 impl std::fmt::Display for EdgeConnectionErrorKind {
@@ -54,6 +55,7 @@ impl std::fmt::Display for EdgeConnectionErrorKind {
             EdgeConnectionErrorKind::Timeout => write!(f, "timeout"),
             EdgeConnectionErrorKind::Protocol => write!(f, "protocol error"),
             EdgeConnectionErrorKind::Existed => write!(f, "existed"),
+            EdgeConnectionErrorKind::Reconnect => write!(f, "reconnect"),
         }
     }
 }
@@ -77,6 +79,7 @@ impl std::error::Error for EdgeConnectionError {
             EdgeConnectionErrorKind::Timeout => "timeout",
             EdgeConnectionErrorKind::Protocol => "protocol error",
             EdgeConnectionErrorKind::Existed => "existed",
+            EdgeConnectionErrorKind::Reconnect => "reconnect",
         }
     }
 }

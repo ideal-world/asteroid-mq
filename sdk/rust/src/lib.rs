@@ -8,3 +8,4 @@ pub use node::{ClientNode, MessageAckHandle};
 
 pub mod connection;
 
+pub mod event;

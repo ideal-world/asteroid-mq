@@ -1,7 +1,6 @@
+use super::{EventAttribute, EventCodec};
 use bytes::Bytes;
 use serde::{de::DeserializeOwned, Serialize};
-
-use super::{EventAttribute, EventCodec};
 
 #[derive(Debug)]
 pub struct Json<T: Serialize + DeserializeOwned>(pub T);
@@ -19,7 +18,7 @@ impl<T> EventAttribute for Json<T>
 where
     T: Serialize + DeserializeOwned + EventAttribute,
 {
-    const SUBJECT: crate::prelude::Subject = T::SUBJECT;
+    const SUBJECT: crate::Subject = T::SUBJECT;
     const BROADCAST: bool = T::BROADCAST;
-    const EXPECT_ACK_KIND: crate::prelude::MessageAckExpectKind = T::EXPECT_ACK_KIND;
+    const EXPECT_ACK_KIND: crate::MessageAckExpectKind = T::EXPECT_ACK_KIND;
 }

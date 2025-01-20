@@ -1,29 +1,44 @@
-/// This is a extension layer upon the mq. The user can create a loop to dispatch event to
-/// corresponded handlers.
-use crate::{
-    prelude::{Subject, Topic},
-    protocol::{
-        endpoint::LocalEndpoint, message::*,
-        node::raft::state_machine::topic::wait_ack::WaitAckHandle,
-    },
-};
-use asteroid_mq_model::event::EventAttribute;
-use asteroid_mq_model::event::EventCodec;
-use asteroid_mq_model::event::{Event, Handler};
-pub use asteroid_mq_model::MessageDurableConfig;
 use std::{collections::HashMap, future::Future, pin::Pin};
+
+use crate::{ClientEndpoint, ClientNode, ClientNodeError, ClientReceivedMessage, MessageAckHandle};
+use asteroid_mq_model::{
+    event::{Event, EventAttribute, EventCodec, Handler},
+    MessageAckExpectKind, Subject, TopicCode, WaitAckSuccess,
+};
 use tracing::Instrument;
 
-type InnerEventHandler =
-    dyn Fn(Message) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send>> + Send;
+impl ClientNode {
+    pub async fn send_event<E: Event>(
+        &self,
+        topic: TopicCode,
+        event: E,
+    ) -> Result<MessageAckHandle, ClientNodeError> {
+        let handle = self.send_message(event.into_edge_message(topic)).await?;
+        Ok(handle)
+    }
+    pub async fn send_event_and_wait<E: Event>(
+        &self,
+        topic: TopicCode,
+        event: E,
+    ) -> Result<WaitAckSuccess, ClientNodeError> {
+        let handle = self.send_event(topic, event).await?;
+        let success = handle.wait().await?;
+        Ok(success)
+    }
+}
+
+type InnerEventHandler = dyn Fn(
+        ClientReceivedMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<(), crate::error::ClientNodeError>> + Send>>
+    + Send;
 
 pub struct HandleEventLoop {
-    ep: LocalEndpoint,
+    ep: ClientEndpoint,
     handlers: HashMap<Subject, Box<InnerEventHandler>>,
 }
 
 impl HandleEventLoop {
-    pub fn new(ep: LocalEndpoint) -> Self {
+    pub fn new(ep: ClientEndpoint) -> Self {
         Self {
             ep,
             handlers: Default::default(),
@@ -39,23 +54,21 @@ impl HandleEventLoop {
         H: Handler<A>,
     {
         let subject = H::Event::SUBJECT;
-        let ep = self.ep.clone();
         tracing::debug!(?subject, "register event handler");
-        let inner_handler = Box::new(move |message: Message| {
+        let inner_handler = Box::new(move |message: ClientReceivedMessage| {
             let handler = handler.clone();
-            let ep = ep.clone();
             Box::pin(async move {
                 if H::Event::EXPECT_ACK_KIND == MessageAckExpectKind::Received
                     || H::Event::EXPECT_ACK_KIND == MessageAckExpectKind::Processed
                 {
-                    ep.ack_received(&message.header).await?;
+                    message.ack_received().await?;
                 }
-                let event = match H::Event::from_bytes(message.payload.into_inner()) {
+                let event = match H::Event::from_bytes(message.payload.clone().into_inner()) {
                     Some(msg) => msg,
                     None => {
                         tracing::debug!("failed to decode event, this message will be ignored");
                         if H::Event::EXPECT_ACK_KIND == MessageAckExpectKind::Processed {
-                            ep.ack_failed(&message.header).await?;
+                            message.ack_failed().await?;
                         }
                         return Ok(());
                     }
@@ -64,21 +77,22 @@ impl HandleEventLoop {
                 if H::Event::EXPECT_ACK_KIND == MessageAckExpectKind::Processed {
                     if let Err(e) = handle_result {
                         tracing::warn!("failed to handle event: {:?}", e);
-                        ep.ack_failed(&message.header).await?;
+                        message.ack_failed().await?;
                     } else {
-                        ep.ack_processed(&message.header).await?;
+                        message.ack_processed().await?;
                     }
                 }
 
                 Ok(())
-            }) as Pin<Box<dyn Future<Output = crate::Result<()>> + Send>>
+            })
+                as Pin<Box<dyn Future<Output = Result<(), crate::error::ClientNodeError>> + Send>>
         });
         self.handlers.insert(subject, inner_handler);
     }
 
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         loop {
-            let Some(message) = self.ep.next_message().await else {
+            let Ok(message) = self.ep.next_message_and_auto_respawn().await else {
                 break;
             };
             tracing::trace!(?message, "handle message");
@@ -107,34 +121,8 @@ impl HandleEventLoop {
     }
 }
 
-
-impl LocalEndpoint {
-    pub fn create_event_loop(&self) -> HandleEventLoop {
-        HandleEventLoop::new(self.clone())
-    }
-}
-
-impl Topic {
-    pub async fn send_event<E: Event>(&self, event: E) -> Result<WaitAckHandle, crate::Error> {
-        let bytes = event.to_bytes();
-        let mut header_builder = MessageHeader::builder([E::SUBJECT]);
-        if let Some(durable_config) = E::durable_config() {
-            header_builder = header_builder.mode_durable(durable_config);
-        } else if E::BROADCAST {
-            header_builder = header_builder.mode_online();
-        } else {
-            header_builder = header_builder.mode_push();
-        }
-        header_builder = header_builder.ack_kind(E::EXPECT_ACK_KIND);
-        let message = Message::new(header_builder.build(), bytes);
-        let handle = self.send_message(message).await?;
-        Ok(handle)
-    }
-    pub async fn send_event_and_wait<E: Event>(&self, event: E) -> Result<(), crate::Error> {
-        let handle = self.send_event(event).await?;
-        let _ = handle
-            .await
-            .map_err(crate::Error::contextual("waiting event ack"))?;
-        Ok(())
+impl ClientEndpoint {
+    pub fn into_event_loop(self) -> HandleEventLoop {
+        HandleEventLoop::new(self)
     }
 }

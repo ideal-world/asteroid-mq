@@ -4,7 +4,7 @@ use std::{
     sync::Weak,
 };
 
-use asteroid_mq_model::{EndpointAddr, Interest, Message, TopicCode};
+use asteroid_mq_model::{EdgeEndpointOnline, EndpointAddr, Interest, Message, TopicCode};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::Instrument;
 
@@ -12,6 +12,8 @@ use crate::{
     node::{ClientNodeError, ClientNodeInner},
     ClientNode,
 };
+
+// CliEp -> NodeProxy -> Ep
 #[derive(Debug)]
 pub struct ClientEndpoint {
     pub(crate) addr: EndpointAddr,
@@ -20,7 +22,7 @@ pub struct ClientEndpoint {
     pub(crate) node: Weak<ClientNodeInner>,
     pub(crate) message_rx: UnboundedReceiver<Message>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClientReceivedMessage {
     ep_addr: EndpointAddr,
     topic_code: TopicCode,
@@ -116,6 +118,36 @@ impl ClientEndpoint {
                 node: self.node.clone(),
                 message,
             })
+    }
+
+    pub async fn respawn(&mut self) -> Result<(), ClientNodeError> {
+        let Some(node) = self.node.upgrade() else {
+            return Err(ClientNodeError::disconnected());
+        };
+        let new_addr = node
+            .send_ep_online(EdgeEndpointOnline {
+                topic_code: self.topic_code.clone(),
+                interests: self.interests.iter().cloned().collect(),
+            })
+            .await?;
+        self.addr = new_addr;
+        Ok(())
+    }
+
+    pub async fn next_message_and_auto_respawn(
+        &mut self,
+    ) -> Result<ClientReceivedMessage, ClientNodeError> {
+        loop {
+            let message = self.next_message().await;
+            let message = match message {
+                Some(message) => message,
+                None => {
+                    self.respawn().await?;
+                    continue;
+                }
+            };
+            return Ok(message);
+        }
     }
 }
 

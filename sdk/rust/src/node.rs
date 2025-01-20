@@ -6,10 +6,10 @@ use std::{
 use crate::endpoint::{ClientEndpoint, EndpointMailbox};
 pub use crate::error::*;
 use asteroid_mq_model::{
-    connection::EdgeNodeConnection, EdgeEndpointOffline, EdgeEndpointOnline, EdgeError,
-    EdgeMessage, EdgePayload, EdgePush, EdgeRequest, EdgeRequestEnum, EdgeResponseEnum,
-    EndpointAddr, EndpointInterest, Interest, Message, MessageAck, MessageStateUpdate, SetState,
-    TopicCode, WaitAckSuccess,
+    connection::{EdgeConnectionErrorKind, EdgeNodeConnection},
+    EdgeEndpointOffline, EdgeEndpointOnline, EdgeError, EdgeMessage, EdgePayload, EdgePush,
+    EdgeRequest, EdgeRequestEnum, EdgeResponseEnum, EndpointAddr, EndpointInterest, Interest,
+    Message, MessageAck, MessageStateUpdate, SetState, TopicCode, WaitAckSuccess,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{oneshot, RwLock};
@@ -126,7 +126,7 @@ impl ClientNodeInner {
             .await?;
         Ok(MessageAckHandle { response_handle })
     }
-    async fn send_ep_online(
+    pub(crate) async fn send_ep_online(
         &self,
         request: EdgeEndpointOnline,
     ) -> Result<EndpointAddr, ClientNodeError> {
@@ -299,7 +299,20 @@ impl ClientNodeInner {
                                     edge_pld
                                 }
                                 Some(Err(e)) => {
-                                    tracing::error!("failed to receive message: {:?}", e);
+                                    match e.kind {
+                                        EdgeConnectionErrorKind::Reconnect => {
+                                            // clear ep map, so the endpoint will know there is going to have a new connection
+                                            endpoints_map.write().await.clear();
+                                        },
+                                        EdgeConnectionErrorKind::Closed => {
+                                            endpoints_map.write().await.clear();
+                                            tracing::debug!("connection closed");
+                                            break;
+                                        }
+                                        _ => {
+                                            tracing::error!("failed to receive message: {:?}", e);
+                                        }
+                                    }
                                     continue
                                 }
                                 None => {
@@ -337,6 +350,9 @@ impl ClientNodeInner {
                             if let Some(responder) = response_pool.write().await.remove(&seq_id) {
                                 let _ = responder.send(edge_response.result.into_std());
                             }
+                        }
+                        EdgePayload::Error(e) => {
+                            tracing::error!(?e, "received error");
                         }
                         _ => {}
                     }

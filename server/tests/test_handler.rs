@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
-use asteroid_mq::event_handler::json::Json;
-use asteroid_mq::event_handler::EventAttribute;
+use asteroid_mq::model::event::{json::Json, EventAttribute};
 use asteroid_mq::prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, Subject, TopicCode};
 use asteroid_mq::protocol::node::raft::cluster::StaticClusterProvider;
 use serde::{Deserialize, Serialize};

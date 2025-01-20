@@ -71,6 +71,7 @@ pin_project_lite::pin_project! {
         retry_times: u64,
     }
 }
+
 impl<C> AutoReconnect<C>
 where
     C: EdgeNodeConnection + ReconnectableConnection,
@@ -183,6 +184,20 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         // check if it is reconnecting
+        let retry_times_before_poll = self.retry_times;
+        let reconnecting = self.as_mut().poll_reconnecting(cx)?;
+        let retry_times_after_poll = self.retry_times;
+        if reconnecting.is_pending() {
+            if retry_times_after_poll > retry_times_before_poll {
+                // if the retry times is increased, it means the connection is closed
+                return std::task::Poll::Ready(Some(Err(EdgeConnectionError::new(
+                    asteroid_mq_model::connection::EdgeConnectionErrorKind::Reconnect,
+                    "poll_next",
+                ))));
+            } else {
+                return std::task::Poll::Pending;
+            }
+        }
         ready!(self.as_mut().poll_reconnecting(cx)?);
         let this = self.project();
         this.connection.poll_next(cx)

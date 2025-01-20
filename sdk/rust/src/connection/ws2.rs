@@ -1,6 +1,7 @@
+use asteroid_mq_model::codec::Json;
 use asteroid_mq_model::connection::EdgeNodeConnection;
 use asteroid_mq_model::{
-    bincode::Bincode, connection::EdgeConnectionError, json::Json, Codec, EdgePayload,
+    codec::{Bincode, Codec}, connection::EdgeConnectionError, EdgePayload,
 };
 use futures_util::stream::FusedStream;
 use futures_util::{Sink, Stream};

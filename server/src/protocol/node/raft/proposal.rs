@@ -138,7 +138,6 @@ impl ProposalContext {
             return;
         };
         let Some(topic) = self.node.get_topic(code) else {
-            // TODO: recover snapshot here
             tracing::warn!(?code, "topic not found");
             return;
         };

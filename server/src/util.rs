@@ -3,13 +3,6 @@ use std::hash::Hash;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub fn timestamp_sec() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time never goes backward")
-        .as_secs()
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timed<T> {
     pub time: DateTime<Utc>,
@@ -52,4 +45,4 @@ pub fn hash64<T: Hash>(value: &T) -> u64 {
     Hasher::finish(&hasher)
 }
 
-pub use asteroid_mq_model::{executor_digest, hex, MaybeBase64Bytes};
+pub use asteroid_mq_model::MaybeBase64Bytes;

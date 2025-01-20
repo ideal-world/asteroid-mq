@@ -1,5 +1,5 @@
 use asteroid_mq_model::{
-    CodecKind, DynCodec, EdgeMessage, Interest, MessageAckExpectKind, MessageDurableConfig,
+    codec::{CodecKind, DynCodec}, EdgeMessage, Interest, MessageAckExpectKind, MessageDurableConfig,
     Subject, TopicCode,
 };
 use asteroid_mq_sdk::ClientNode;
