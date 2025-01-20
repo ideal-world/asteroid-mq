@@ -121,6 +121,7 @@ impl ClientEndpoint {
     }
 
     pub async fn respawn(&mut self) -> Result<(), ClientNodeError> {
+        tracing::debug!(ep = ?self, "respawn endpoint");
         let Some(node) = self.node.upgrade() else {
             return Err(ClientNodeError::disconnected());
         };
