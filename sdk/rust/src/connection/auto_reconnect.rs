@@ -19,15 +19,18 @@ pub trait ReconnectableConnectionExt: Sized
 where
     Self: EdgeNodeConnection + ReconnectableConnection,
 {
-    fn auto_reconnect(self) -> AutoReconnect<Self>;
+    fn auto_reconnect(self) -> AutoReconnect<Self> {
+        Self::auto_reconnect_with_config(self, Default::default())
+    }
+    fn auto_reconnect_with_config(self, config: ReconnectConfig) -> AutoReconnect<Self>;
 }
 
 impl<C> ReconnectableConnectionExt for C
 where
     C: EdgeNodeConnection + ReconnectableConnection,
 {
-    fn auto_reconnect(self) -> AutoReconnect<Self> {
-        AutoReconnect::new(self)
+    fn auto_reconnect_with_config(self, config: ReconnectConfig) -> AutoReconnect<Self> {
+        AutoReconnect::new_with_config(self, config)
     }
 }
 #[derive(Clone, Debug)]
@@ -64,7 +67,7 @@ pin_project_lite::pin_project! {
         connection: C,
         #[pin]
         reconnect_status: ReconnectStatus<C::ReconnectFuture, C::SleepFuture>,
-        reconnect_config: ReconnectConfig,
+        pub reconnect_config: ReconnectConfig,
         retry_times: u64,
     }
 }
@@ -73,10 +76,14 @@ where
     C: EdgeNodeConnection + ReconnectableConnection,
 {
     pub fn new(connection: C) -> Self {
+        Self::new_with_config(connection, Default::default())
+    }
+
+    pub fn new_with_config(connection: C, reconnect_config: ReconnectConfig) -> Self {
         Self {
             connection,
             reconnect_status: ReconnectStatus::Connected,
-            reconnect_config: Default::default(),
+            reconnect_config,
             retry_times: 0,
         }
     }
