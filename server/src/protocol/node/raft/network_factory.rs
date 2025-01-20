@@ -378,14 +378,16 @@ impl RaftTcpConnection {
         let info = service.info.clone();
         let pending_raft = service.raft.clone();
         let local_id = info.id;
-        let packet = bincode::serde::encode_to_vec(&info, BINCODE_CONFIG).map_err(|_| std::io::ErrorKind::InvalidData)?;
+        let packet = bincode::serde::encode_to_vec(&info, BINCODE_CONFIG)
+            .map_err(|_| std::io::ErrorKind::InvalidData)?;
         stream.write_u32(packet.len() as u32).await?;
         stream.write_all(&packet).await?;
         let hello_size = stream.read_u32().await?;
         let mut hello_data = vec![0; hello_size as usize];
         stream.read_exact(&mut hello_data).await?;
-        let peer: RaftNodeInfo =
-            bincode::serde::decode_from_slice(&hello_data, BINCODE_CONFIG).map_err(|_| std::io::ErrorKind::InvalidData)?.0;
+        let peer: RaftNodeInfo = bincode::serde::decode_from_slice(&hello_data, BINCODE_CONFIG)
+            .map_err(|_| std::io::ErrorKind::InvalidData)?
+            .0;
         let peer_id = peer.id;
         tracing::info!(peer=%peer_id, local=%local_id, "hello received");
         let (mut read, mut write) = stream.into_split();
@@ -463,9 +465,12 @@ impl RaftTcpConnection {
                     // }
                     let data = &mut buffer[..len];
                     read.read_exact(data).await?;
-                    let Ok((payload, _)) = bincode::serde::decode_from_slice::<Payload, _>(data, BINCODE_CONFIG).inspect_err(|e| {
-                        tracing::error!(?e);
-                    }) else {
+                    let Ok((payload, _)) =
+                        bincode::serde::decode_from_slice::<Payload, _>(data, BINCODE_CONFIG)
+                            .inspect_err(|e| {
+                                tracing::error!(?e);
+                            })
+                    else {
                         continue;
                     };
                     tracing::trace!(?seq_id, ?payload, "received");

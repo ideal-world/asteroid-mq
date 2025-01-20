@@ -1,4 +1,6 @@
-use asteroid_mq_model::{connection::EdgeConnectionError, EdgeError, EdgeRequestEnum, EdgeResponseEnum, WaitAckError};
+use asteroid_mq_model::{
+    connection::EdgeConnectionError, EdgeError, EdgeRequestEnum, EdgeResponseEnum, WaitAckError,
+};
 #[derive(Debug)]
 pub struct ClientNodeError {
     pub kind: ClientErrorKind,

@@ -6,10 +6,7 @@ use super::Codec;
 pub struct Cbor;
 
 impl Codec for Cbor {
-    fn decode(
-        &self,
-        mut bytes: &[u8],
-    ) -> Result<EdgePayload, super::CodecError> {
+    fn decode(&self, mut bytes: &[u8]) -> Result<EdgePayload, super::CodecError> {
         ciborium::from_reader(&mut bytes).map_err(super::CodecError::decode_error)
     }
     fn encode(&self, value: &EdgePayload) -> Result<Vec<u8>, super::CodecError> {

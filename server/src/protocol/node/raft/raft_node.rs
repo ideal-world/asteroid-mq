@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 
 use crate::DEFAULT_TCP_SOCKET_ADDR;

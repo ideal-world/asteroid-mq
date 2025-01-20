@@ -107,7 +107,6 @@ impl HandleEventLoop {
     }
 }
 
-
 impl LocalEndpoint {
     pub fn create_event_loop(&self) -> HandleEventLoop {
         HandleEventLoop::new(self.clone())

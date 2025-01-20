@@ -1,8 +1,6 @@
 use asteroid_mq_model::EdgeAuth;
 use bytes::Bytes;
 
-
-
 #[derive(Debug, Clone, Default)]
 pub struct Auth {
     pub payload: Bytes,
@@ -16,9 +14,10 @@ impl Auth {
     }
 }
 
-
 impl From<EdgeAuth> for Auth {
     fn from(value: EdgeAuth) -> Self {
-        Auth { payload: value.payload.0 }
+        Auth {
+            payload: value.payload.0,
+        }
     }
 }

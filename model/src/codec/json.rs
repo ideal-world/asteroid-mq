@@ -6,10 +6,7 @@ use super::Codec;
 pub struct Json;
 
 impl Codec for Json {
-    fn decode(
-        &self,
-        bytes: &[u8],
-    ) -> Result<EdgePayload, super::CodecError> {
+    fn decode(&self, bytes: &[u8]) -> Result<EdgePayload, super::CodecError> {
         serde_json::from_slice(bytes).map_err(super::CodecError::decode_error)
     }
     fn encode(&self, value: &EdgePayload) -> Result<Vec<u8>, super::CodecError> {

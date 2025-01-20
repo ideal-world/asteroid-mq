@@ -58,7 +58,8 @@ async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
         )
         .init();
     let node = Node::new(NodeConfig::default());
-    let cluster_provider = StaticClusterProvider::singleton(node.id(), node.config().addr.to_string());
+    let cluster_provider =
+        StaticClusterProvider::singleton(node.id(), node.config().addr.to_string());
     node.start(cluster_provider).await?;
     let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
     topic

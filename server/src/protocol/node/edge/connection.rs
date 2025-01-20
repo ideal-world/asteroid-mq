@@ -3,7 +3,7 @@ use std::{ops::Deref, sync::Arc};
 pub use asteroid_mq_model::connection::{
     EdgeConnectionError, EdgeConnectionErrorKind, EdgeNodeConnection,
 };
-use tracing::{warn};
+use tracing::warn;
 
 use crate::protocol::{
     endpoint::EndpointAddr,

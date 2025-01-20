@@ -254,13 +254,15 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
             { snapshot_size = snapshot.get_ref().len(), meta= ?meta },
             "decoding snapshot for installation"
         );
-        let new_data: NodeData = bincode::serde::decode_from_std_read::<NodeData, _, _>(&mut snapshot, BINCODE_CONFIG).map_err(|e| {
-            StorageError::from_io_error(
-                openraft::ErrorSubject::Snapshot(None),
-                openraft::ErrorVerb::Read,
-                io::Error::other(e),
-            )
-        })?;
+        let new_data: NodeData =
+            bincode::serde::decode_from_std_read::<NodeData, _, _>(&mut snapshot, BINCODE_CONFIG)
+                .map_err(|e| {
+                StorageError::from_io_error(
+                    openraft::ErrorSubject::Snapshot(None),
+                    openraft::ErrorVerb::Read,
+                    io::Error::other(e),
+                )
+            })?;
         let new_snapshot = StoredSnapshot {
             meta: meta.clone(),
             data: new_data.clone(),

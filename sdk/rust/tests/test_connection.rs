@@ -1,6 +1,6 @@
 use asteroid_mq_model::{
-    codec::{CodecKind, DynCodec}, EdgeMessage, Interest, MessageAckExpectKind, MessageDurableConfig,
-    Subject, TopicCode,
+    codec::{CodecKind, DynCodec},
+    EdgeMessage, Interest, MessageAckExpectKind, MessageDurableConfig, Subject, TopicCode,
 };
 use asteroid_mq_sdk::ClientNode;
 use chrono::{TimeDelta, Utc};
