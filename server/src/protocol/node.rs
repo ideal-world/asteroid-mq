@@ -15,21 +15,17 @@ use super::{
         Topic, TopicCode,
     },
 };
+use asteroid_mq_model::connection::EdgeNodeConnection;
 pub use asteroid_mq_model::NodeId;
 use edge::{
     auth::EdgeAuthService,
-    codec::CodecRegistry,
     connection::{
-        ConnectionConfig, EdgeConnectionInstance, EdgeConnectionRef, NodeConnection,
-        NodeConnectionError,
+        ConnectionConfig, EdgeConnectionError, EdgeConnectionInstance, EdgeConnectionRef,
     },
     middleware::EdgeConnectionHandlerObject,
     EdgeConfig, EdgeResult,
 };
-use edge::{
-    packet::{Auth, EdgePacket},
-    EdgeError, EdgeErrorKind,
-};
+use edge::{packet::Auth, EdgeError, EdgeErrorKind};
 use futures_util::TryFutureExt;
 use openraft::Raft;
 use raft::{
@@ -78,7 +74,6 @@ pub struct NodeInner {
     edge_connections: RwLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
     edge_routing: RwLock<HashMap<EndpointAddr, (NodeId, TopicCode)>>,
     pub edge_handler: tokio::sync::RwLock<EdgeConnectionHandlerObject>,
-    codec_registry: Arc<CodecRegistry>,
     topics: RwLock<HashMap<TopicCode, Topic>>,
     durable_commands_queue: std::sync::RwLock<VecDeque<DurableCommand>>,
     /// ensure operations on the same topic are linearizable
@@ -161,7 +156,6 @@ impl Node {
             edge_handler: tokio::sync::RwLock::new(EdgeConnectionHandlerObject::basic()),
             config,
             raft,
-            codec_registry: Arc::new(CodecRegistry::new_preloaded()),
             network,
             durable_commands_queue: Default::default(),
             durable_syncs: Default::default(),
@@ -369,25 +363,14 @@ impl Node {
     }
 
     /// Create a connection to a edge node.
-    pub async fn create_edge_connection<C: NodeConnection>(
+    pub async fn create_edge_connection<C: EdgeNodeConnection>(
         &self,
         conn: C,
         edge_config: EdgeConfig,
-    ) -> Result<NodeId, NodeConnectionError> {
-        let preferred = self
-            .codec_registry
-            .pick_preferred_codec(&edge_config.supported_codec_kinds)
-            .ok_or_else(|| {
-                NodeConnectionError::new(
-                    edge::connection::NodeConnectionErrorKind::Protocol,
-                    "no codec available",
-                )
-            })?;
+    ) -> Result<NodeId, EdgeConnectionError> {
         let config = ConnectionConfig {
             attached_node: self.node_ref(),
-            auth: edge_config.peer_auth,
-            codec_registry: self.codec_registry.clone(),
-            preferred_codec: preferred,
+            auth: edge_config.peer_auth.into(),
             peer_id: edge_config.peer_id,
         };
         let conn_inst = EdgeConnectionInstance::init(config, conn).await?;

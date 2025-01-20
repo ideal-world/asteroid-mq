@@ -11,7 +11,7 @@ rules:
 - apiGroups: [""]
   resources: ["services", "endpoints", "pods"]
   verbs: ["get", "list", "watch"]
-- apiGroups: ["apps"]  # 添加 apps API组
+- apiGroups: ["apps"]
   resources: ["statefulsets"]
   verbs: ["get", "list", "watch"]
 ---

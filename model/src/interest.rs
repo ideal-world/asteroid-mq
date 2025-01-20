@@ -115,7 +115,7 @@ impl<'a> Iterator for SubjectSegments<'a> {
 /// (/)?(<path>|<*>|<**>)/*
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[typeshare(serialized_as = "String")]
-pub struct Interest(Bytes);
+pub struct Interest(pub(crate) Bytes);
 
 impl Serialize for Interest {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

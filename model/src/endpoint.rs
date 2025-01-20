@@ -4,6 +4,7 @@ use typeshare::typeshare;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[typeshare(serialized_as = "String")]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 pub struct EndpointAddr {
     pub bytes: [u8; 16],
 }

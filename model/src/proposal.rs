@@ -11,6 +11,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct EndpointInterest {
     pub topic_code: TopicCode,
@@ -19,6 +20,7 @@ pub struct EndpointInterest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct SetState {
     pub topic: TopicCode,
@@ -26,6 +28,7 @@ pub struct SetState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct MessageStateUpdate {
     pub message_id: MessageId,
