@@ -139,11 +139,11 @@ async fn test_raft() {
 
     // now restart node 1
     cluster
-    .update(map!(
-        node_id(2) => node_addr(2),
-        node_id(3) => node_addr(3),
-    ))
-    .await;
+        .update(map!(
+            node_id(2) => node_addr(2),
+            node_id(3) => node_addr(3),
+        ))
+        .await;
     node_1.shutdown().await;
 
     let node_1 = Node::new(NodeConfig {
@@ -153,12 +153,12 @@ async fn test_raft() {
         ..Default::default()
     });
     cluster
-    .update(map!(
-        node_id(1) => node_addr(1),
-        node_id(2) => node_addr(2),
-        node_id(3) => node_addr(3),
-    ))
-    .await;
+        .update(map!(
+            node_id(1) => node_addr(1),
+            node_id(2) => node_addr(2),
+            node_id(3) => node_addr(3),
+        ))
+        .await;
     node_1.start(cluster.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
 
