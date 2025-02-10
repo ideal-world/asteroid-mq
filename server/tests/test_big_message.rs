@@ -58,7 +58,7 @@ async fn test_big_message() {
     let node_id_2 = NodeId::from(2);
     let static_nodes = [
         (node_id_1, "127.0.0.1:9559".to_string()),
-        (node_id_2, "127.0.0.1:9559".to_string()),
+        (node_id_2, "127.0.0.1:9560".to_string()),
     ];
     let cluster = StaticClusterProvider::new(BTreeMap::from(static_nodes.clone()));
     let mut nodes = HashMap::new();
