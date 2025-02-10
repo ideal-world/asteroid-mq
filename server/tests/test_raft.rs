@@ -44,14 +44,15 @@ async fn test_raft() {
             19000 + index as u16,
         )
     }
-    let cluster = common::TestClusterProvider::new(map!(
-        node_id(2) => node_addr(2),
-    ));
-    cluster
-        .update(map!(
+    let cluster = common::TestClusterProvider::new(
+        map!(
+            node_id(1) => node_addr(1),
             node_id(2) => node_addr(2),
-        ))
-        .await;
+            node_id(3) => node_addr(3),
+        ),
+        map!(),
+    );
+
     let node_1 = Node::new(NodeConfig {
         id: node_id(1),
         addr: node_addr(1),
@@ -73,114 +74,99 @@ async fn test_raft() {
         ..Default::default()
     });
 
-    node_2.start(cluster.clone()).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
     cluster
         .update(map!(
-            node_id(1) => node_addr(1),
             node_id(2) => node_addr(2),
         ))
         .await;
-    node_1.start(cluster.clone()).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    cluster
-        .update(map!(
-            node_id(1) => node_addr(1),
-            node_id(2) => node_addr(2),
-            node_id(3) => node_addr(3),
-        ))
-        .await;
-    let node_3_init_task = {
-        let node_3 = node_3.clone();
+    let node_2_init_task = {
         let cluster = cluster.clone();
-        tokio::spawn(async move { node_3.start(cluster).await })
+        let node_2 = node_2.clone();
+        tokio::spawn(async move {
+            node_2.start(cluster.clone()).await.unwrap();
+        })
     };
     cluster
         .update(map!(
             node_id(1) => node_addr(1),
+            node_id(2) => node_addr(2),
+        ))
+        .await;
+    let node_1_init_task = {
+        let cluster = cluster.clone();
+        let node_1 = node_1.clone();
+        tokio::spawn(async move { node_1.start(cluster).await.unwrap() })
+    };
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let node_3_init_task = {
+        let node_3 = node_3.clone();
+        let cluster = cluster.clone();
+        tokio::spawn(async move { node_3.start(cluster).await.unwrap() })
+    };
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (result_1, result_2, result_3) =
+        tokio::join!(node_1_init_task, node_2_init_task, node_3_init_task,);
+    result_1.expect("node_1 init error");
+    result_2.expect("node_2 init error");
+    result_3.expect("node_3 init error");
+
+    cluster
+        .update(map!(
+            node_id(1) => node_addr(1),
             node_id(3) => node_addr(3),
         ))
         .await;
-    node_3_init_task.await.unwrap().unwrap();
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    tracing::warn!("now shutdown node_2");
+    // now restart node 2
     node_2.shutdown().await;
-
-    // we should trigger a leader election here
-    tokio::time::sleep(Duration::from_secs(10)).await;
-
-    let leader_of_1 = node_1.raft().await.current_leader().await;
-    let leader_of_3 = node_3.raft().await.current_leader().await;
-
-    tracing::warn!("leader of node_1: {:#?}", leader_of_1);
-    tracing::warn!("leader of node_3: {:#?}", leader_of_3);
-
-    tracing::warn!("now restart node_2");
+    cluster
+        .update(map!(
+            node_id(1) => node_addr(1),
+            node_id(2) => node_addr(2),
+            node_id(3) => node_addr(3),
+        ))
+        .await;
     let node_2 = Node::new(NodeConfig {
         id: node_id(2),
         addr: node_addr(2),
         raft: raft_config(),
         ..Default::default()
     });
-    tokio::time::sleep(Duration::from_secs(1)).await;
+
     node_2.start(cluster.clone()).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
 
-    tracing::warn!("now start node_4");
-    let node_4 = Node::new(NodeConfig {
-        id: node_id(4),
-        addr: node_addr(4),
-        raft: raft_config(),
-        ..Default::default()
-    });
-    node_4.start(cluster.clone()).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // now restart node 1
     cluster
-        .update(map!(
-            node_id(1) => node_addr(1),
-            node_id(3) => node_addr(3),
-            node_id(4) => node_addr(4),
-        ))
-        .await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    tracing::warn!("now shutdown node_1");
+    .update(map!(
+        node_id(2) => node_addr(2),
+        node_id(3) => node_addr(3),
+    ))
+    .await;
     node_1.shutdown().await;
-    cluster
-        .update(map!(
-            node_id(3) => node_addr(3),
-            node_id(4) => node_addr(4),
-        ))
-        .await;
-    let node_5 = Node::new(NodeConfig {
-        id: node_id(5),
-        addr: node_addr(5),
+
+    let node_1 = Node::new(NodeConfig {
+        id: node_id(1),
+        addr: node_addr(1),
         raft: raft_config(),
         ..Default::default()
     });
-    node_5.start(cluster.clone()).await.unwrap();
     cluster
-        .update(map!(
-            node_id(3) => node_addr(3),
-            node_id(4) => node_addr(4),
-            node_id(5) => node_addr(5),
-        ))
-        .await;
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    .update(map!(
+        node_id(1) => node_addr(1),
+        node_id(2) => node_addr(2),
+        node_id(3) => node_addr(3),
+    ))
+    .await;
+    node_1.start(cluster.clone()).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
-    tracing::warn!(
-        "node_4 leader: {:#?}",
-        node_4.raft().await.current_leader().await
-    );
-    tracing::warn!(
-        "node_3 leader: {:#?}",
-        node_3.raft().await.current_leader().await
-    );
-    tracing::warn!(
-        "node_5 leader: {:#?}",
-        node_5.raft().await.current_leader().await
-    );
+    // check the leaders is the same
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let leader_1 = node_1.raft().await.current_leader().await.unwrap();
+    let leader_2 = node_2.raft().await.current_leader().await.unwrap();
+    let leader_3 = node_3.raft().await.current_leader().await.unwrap();
+    assert_eq!(leader_1, leader_2);
+    assert_eq!(leader_2, leader_3);
 }

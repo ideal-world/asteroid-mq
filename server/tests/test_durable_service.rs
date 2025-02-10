@@ -171,9 +171,14 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
             size: std::num::NonZeroU32::new(500).unwrap(),
         }),
     };
-    let cluster = common::TestClusterProvider::new(map!(
-        NodeId::new_indexed(1) => DEFAULT_TCP_SOCKET_ADDR
-    ));
+    let cluster = common::TestClusterProvider::new(
+        map!(
+            NodeId::new_indexed(1) => DEFAULT_TCP_SOCKET_ADDR
+        ),
+        map!(
+            NodeId::new_indexed(1) => DEFAULT_TCP_SOCKET_ADDR
+        ),
+    );
 
     let node = Node::new(NodeConfig {
         id: NodeId::new_indexed(1),

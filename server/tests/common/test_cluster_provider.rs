@@ -15,9 +15,9 @@ pub struct TestClusterProvider {
 }
 
 impl TestClusterProvider {
-    pub fn new(nodes: BTreeMap<NodeId, String>) -> Self {
+    pub fn new(pristine_nodes: BTreeMap<NodeId, String>, nodes: BTreeMap<NodeId, String>) -> Self {
         Self {
-            pristine_nodes: Arc::new(nodes.clone()),
+            pristine_nodes: Arc::new(pristine_nodes),
             nodes: Arc::new(Mutex::new(nodes)),
             latest: Arc::new(AtomicU64::new(0)),
             version: 0,
@@ -50,6 +50,7 @@ impl ClusterProvider for TestClusterProvider {
 macro_rules! map {
     ($($key:expr => $value:expr),* $(,)?) => {
         {
+            #[allow(unused_mut)]
             let mut map = std::collections::BTreeMap::new();
             $(
                 map.insert($key, ($value).to_string());
