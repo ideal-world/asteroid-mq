@@ -137,7 +137,7 @@ jobs:
           name: code-coverage-report
           path: cobertura.xml
   rust-sdk:
-    needs: [model]
+    needs: [model, server]
     runs-on: ubuntu-22.04
     steps:
       - name: Check out the repo
