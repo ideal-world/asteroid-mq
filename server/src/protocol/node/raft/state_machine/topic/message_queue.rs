@@ -3,6 +3,7 @@ use std::{
     task::Poll,
 };
 
+use asteroid_mq_model::WaitAckErrorException;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -42,47 +43,81 @@ impl HoldMessage {
             }
         }
     }
-    pub(crate) fn is_resolved(&self) -> bool {
+    pub(crate) fn poll_resolved(&self) -> Poll<Result<(), WaitAckErrorException>> {
         match self.message.header.target_kind {
             MessageTargetKind::Durable => {
                 let Some(durability_config) = self.message.header.durability.as_ref() else {
-                    return true;
+                    return Poll::Ready(Err(WaitAckErrorException::DurableMessageWithoutConfig));
                 };
                 let now = Utc::now();
                 if now > durability_config.expire {
-                    return true;
+                    // message expired
+                    tracing::debug!(
+                        id = %self.message.id(),
+                        "message resolved for expired reason"
+                    );
+                    return Poll::Ready(Err(WaitAckErrorException::DurableMessageExpired));
                 }
                 if let Some(max_receiver) = durability_config.max_receiver {
                     let resolved_count = self
                         .wait_ack
                         .status
                         .values()
-                        .filter(|status| status.is_resolved(self.wait_ack.expect))
+                        .filter(|status| status.is_fulfilled(self.wait_ack.expect))
                         .count();
                     if resolved_count >= max_receiver as usize {
-                        return true;
+                        return Poll::Ready(Ok(()));
                     }
                 }
-                false
+                Poll::Pending
             }
-            MessageTargetKind::Online | MessageTargetKind::Push => self
-                .wait_ack
-                .status
-                .values()
-                .all(|status| status.is_resolved(self.wait_ack.expect)),
+            MessageTargetKind::Push => {
+                let ok = self
+                    .wait_ack
+                    .status
+                    .values()
+                    .any(|status| status.is_fulfilled(self.wait_ack.expect));
+                if ok {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            }
+            MessageTargetKind::Online => {
+                let ok = self
+                    .wait_ack
+                    .status
+                    .values()
+                    .all(|status| status.is_resolved(self.wait_ack.expect));
+                if ok {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            }
         }
     }
-    pub(crate) fn resolve(self) -> WaitAckResult {
+    pub(crate) fn resolve(self, exception: Option<WaitAckErrorException>) -> WaitAckResult {
         tracing::trace!("resolved: {self:?}");
         let wait_ack = self.wait_ack;
         let status = wait_ack.status;
-        if status.iter().any(|(_, ack)| ack.is_failed()) {
-            Err(WaitAckError {
-                status,
-                exception: None,
-            })
-        } else {
-            Ok(WaitAckSuccess { status })
+        let expect = wait_ack.expect;
+        if exception.is_some() {
+            return Err(WaitAckError { status, exception });
+        }
+        match self.message.header.target_kind {
+            MessageTargetKind::Push => {
+                if status.iter().any(|(_, ack)| ack.is_fulfilled(expect)) {
+                    Ok(WaitAckSuccess { status })
+                } else {
+                    Err(WaitAckError {
+                        status,
+                        exception: None,
+                    })
+                }
+            }
+            MessageTargetKind::Durable => Ok(WaitAckSuccess { status }),
+            MessageTargetKind::Online => Ok(WaitAckSuccess { status }),
         }
     }
 }
@@ -93,7 +128,7 @@ pub(crate) struct MessageQueue {
     pub(crate) hold_messages: HashMap<MessageId, HoldMessage>,
     pub(crate) time_id: BTreeSet<Timed<MessageId>>,
     pub(crate) id_time: HashMap<MessageId, DateTime<Utc>>,
-    pub(crate) resolved: HashSet<MessageId>,
+    pub(crate) resolved: HashMap<MessageId, Result<(), WaitAckErrorException>>,
     pub(crate) size: usize,
 }
 
@@ -104,7 +139,7 @@ impl MessageQueue {
             blocking,
             hold_messages: HashMap::with_capacity(capacity),
             time_id: BTreeSet::new(),
-            resolved: HashSet::with_capacity(capacity),
+            resolved: HashMap::with_capacity(capacity),
             id_time: HashMap::with_capacity(capacity),
             size: 0,
         }
@@ -213,13 +248,14 @@ impl MessageQueue {
         id: MessageId,
         reachable_eps: &HashSet<EndpointAddr>,
         ctx: &mut ProposalContext,
-    ) -> Option<Poll<()>> {
-        if self.resolved.contains(&id) {
-            Some(Poll::Ready(()))
+    ) -> Option<Poll<Result<(), WaitAckErrorException>>> {
+        #[allow(clippy::map_entry)]
+        if self.resolved.contains_key(&id) {
+            Some(Poll::Ready(Ok(())))
         } else {
             let resolved = self.poll_message_inner(id, reachable_eps, ctx)?;
-            if resolved.is_ready() {
-                self.resolved.insert(id);
+            if let Poll::Ready(result) = resolved {
+                self.resolved.insert(id, result);
             }
             Some(resolved)
         }
@@ -229,7 +265,7 @@ impl MessageQueue {
         id: MessageId,
         reachable_eps: &HashSet<EndpointAddr>,
         ctx: &mut ProposalContext,
-    ) -> Option<Poll<()>> {
+    ) -> Option<Poll<Result<(), WaitAckErrorException>>> {
         if self.blocking {
             let front = self.get_front()?;
             // if blocking, check if the message is the first one
@@ -240,18 +276,16 @@ impl MessageQueue {
         let message = self.hold_messages.get_mut(&id)?;
         message.send_unsent(reachable_eps, ctx);
 
-        if message.is_resolved() {
-            Some(Poll::Ready(()))
-        } else {
-            Some(Poll::Pending)
-        }
+        Some(message.poll_resolved())
     }
 
     pub(crate) fn len(&self) -> usize {
         self.size
     }
-    pub(crate) fn swap_out_resolved(&mut self) -> HashSet<MessageId> {
-        let mut swap_out = HashSet::new();
+    pub(crate) fn swap_out_resolved(
+        &mut self,
+    ) -> HashMap<MessageId, Result<(), WaitAckErrorException>> {
+        let mut swap_out = HashMap::new();
         std::mem::swap(&mut swap_out, &mut self.resolved);
         swap_out
     }
@@ -259,11 +293,11 @@ impl MessageQueue {
         &mut self,
         reachable_eps: &HashSet<EndpointAddr>,
         context: &mut ProposalContext,
-    ) -> Option<HoldMessage> {
+    ) -> Option<(HoldMessage, Result<(), WaitAckErrorException>)> {
         let next = self.get_front()?;
         let poll = self.poll_message(next.message.id(), reachable_eps, context)?;
-        if poll.is_ready() {
-            self.pop()
+        if let Poll::Ready(result) = poll {
+            self.pop().map(|m| (m, result))
         } else {
             None
         }
@@ -275,20 +309,20 @@ impl MessageQueue {
     ) {
         tracing::trace!(blocking = self.blocking, "flushing");
         if self.blocking {
-            while let Some(m) = self.blocking_pop(reachable_eps, context) {
+            while let Some((m, result)) = self.blocking_pop(reachable_eps, context) {
                 let id = m.message.id();
                 let is_durable = m.message.header.is_durable();
-                let result = m.resolve();
+                let result = m.resolve(result.err());
                 context.resolve_ack(id, result);
                 if is_durable {
                     context.push_durable_command(DurableCommand::Archive(id));
                 }
             }
         } else {
-            for id in self.swap_out_resolved() {
+            for (id, result) in self.swap_out_resolved() {
                 if let Some(m) = self.remove(id) {
                     let is_durable = m.message.header.is_durable();
-                    let result = m.resolve();
+                    let result = m.resolve(result.err());
                     context.resolve_ack(id, result);
                     if is_durable {
                         context.push_durable_command(DurableCommand::Archive(id));

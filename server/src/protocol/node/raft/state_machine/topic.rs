@@ -147,6 +147,7 @@ impl TopicData {
                                         tracing::trace!("raft not leader, skip durable commands");
                                         return;
                                     }
+                                    tracing::debug!(%message_id, "durable message expired");
                                     let result = node
                                         .propose(Proposal::SetState(SetState {
                                             topic,
@@ -180,13 +181,13 @@ impl TopicData {
         update: MessageStateUpdate,
         ctx: &mut ProposalContext,
     ) {
-        let reachable_eps = self.reachable_eps(&ctx.node.id());
         // check if message is of durable kind
         if let Some(message) = self.queue.hold_messages.get(&update.message_id) {
             if message.message.header.is_durable() {
                 ctx.push_durable_command(DurableCommand::UpdateStatus(update.clone()));
             }
         }
+        let reachable_eps = self.reachable_eps(&ctx.node.id());
         let poll_result = {
             for (from, status) in update.status {
                 self.queue.update_ack(&update.message_id, from, status)
@@ -194,7 +195,7 @@ impl TopicData {
             self.queue
                 .poll_message(update.message_id, &reachable_eps, ctx)
         };
-        if let Some(Poll::Ready(())) = poll_result {
+        if let Some(Poll::Ready(_)) = poll_result {
             self.queue.flush(&reachable_eps, ctx);
         }
     }

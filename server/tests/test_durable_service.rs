@@ -11,7 +11,7 @@ use asteroid_mq::{
     },
     DEFAULT_TCP_SOCKET_ADDR,
 };
-use asteroid_mq_model::MessageDurableConfig;
+use asteroid_mq_model::{MessageAckExpectKind, MessageDurableConfig, WaitAckErrorException};
 use chrono::Utc;
 use tokio::sync::RwLock;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
@@ -140,7 +140,7 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
                 tracing_subscriber::filter::EnvFilter::from_default_env()
                     .add_directive(tracing_subscriber::filter::Directive::from_str("info").unwrap())
                     .add_directive(
-                        tracing_subscriber::filter::Directive::from_str("asteroid_mq=trace")
+                        tracing_subscriber::filter::Directive::from_str("asteroid_mq=debug")
                             .unwrap(),
                     )
                     .add_directive(
@@ -206,24 +206,57 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
     let message = Message::new(
         MessageHeader::builder([Subject::new("event/all")])
             .mode_durable(MessageDurableConfig {
-                expire: Utc::now() + chrono::Duration::seconds(10),
+                expire: Utc::now() + chrono::Duration::seconds(5),
                 max_receiver: Some(3),
             })
             .build(),
         "hello",
     );
     let handle = topic.send_message(message).await?;
+    tracing::info!("now create a newly joined endpoint");
     let newly_joined_endpoint = topic.create_endpoint([Interest::new("event/**")]).await?;
     let pushed_message = newly_joined_endpoint.next_message().await;
     assert!(pushed_message.is_some());
+    // wait for expire
     let result = handle.await;
-    assert!(result.is_ok());
+    let err = result
+        .expect_err("should expire")
+        .exception
+        .expect("should expire");
+    assert_eq!(err, WaitAckErrorException::DurableMessageExpired);
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     let inner = service.downcast_ref::<MemoryDurable>().unwrap();
     let messages = inner.archived.read().await;
     let messages = messages.get(&topic_config.code).unwrap();
-    assert_eq!(messages.len(), 1);
     // check if message is archived
+    assert_eq!(messages.len(), 1);
 
+    // test durable message with processed exception
+    tracing::info!("===test durable message with processed exception===");
+
+    // let us put a message and online the receiver later, and see if the receiver can get the message
+    // after that, receiver will mark this message as failed
+    // and then, a new receiver will online and really received this message
+    let subject = "test-processed-exception";
+
+    let message = Message::new(
+        MessageHeader::builder([subject])
+            .mode_durable(MessageDurableConfig {
+                expire: Utc::now() + chrono::Duration::seconds(10),
+                max_receiver: Some(1),
+            })
+            .ack_kind(MessageAckExpectKind::Processed)
+            .build(),
+        "test durable message with processed exception",
+    );
+    let handle = topic.send_message(message).await?;
+    let endpoint = topic.create_endpoint([Interest::new(subject)]).await?;
+    let s = endpoint.next_message().await.unwrap();
+    endpoint.ack_failed(&s.header).await?;
+    let endpoint = topic.create_endpoint([Interest::new(subject)]).await?;
+    let s = endpoint.next_message().await.unwrap();
+    endpoint.ack_processed(&s.header).await?;
+    let result = handle.await.unwrap();
+    tracing::info!(?result, "wait ack success");
     Ok(())
 }

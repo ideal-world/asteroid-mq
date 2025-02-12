@@ -145,6 +145,8 @@ export enum WaitAckErrorException {
 	MessageDropped = "MessageDropped",
 	Overflow = "Overflow",
 	NoAvailableTarget = "NoAvailableTarget",
+	DurableMessageWithoutConfig = "DurableMessageWithoutConfig",
+	DurableMessageExpired = "DurableMessageExpired",
 }
 
 export interface WaitAckError {

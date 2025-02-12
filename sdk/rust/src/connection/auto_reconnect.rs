@@ -206,5 +206,6 @@ where
         self.connection.size_hint()
     }
 }
+
 impl<C> EdgeNodeConnection for AutoReconnect<C> where C: EdgeNodeConnection + ReconnectableConnection
 {}

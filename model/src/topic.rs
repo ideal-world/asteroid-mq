@@ -94,13 +94,15 @@ impl WaitAckError {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub enum WaitAckErrorException {
     MessageDropped = 0,
     Overflow = 1,
     NoAvailableTarget = 2,
+    DurableMessageWithoutConfig = 3,
+    DurableMessageExpired = 4,
 }
 
 pub enum AckWaitErrorKind {

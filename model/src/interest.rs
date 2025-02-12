@@ -8,6 +8,12 @@ use typeshare::typeshare;
 #[typeshare(serialized_as = "String")]
 pub struct Subject(pub(crate) Bytes);
 
+impl From<&'static str> for Subject {
+    fn from(value: &'static str) -> Self {
+        Subject(Bytes::from_static(value.as_bytes()))
+    }
+}
+
 impl Serialize for Subject {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

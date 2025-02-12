@@ -270,7 +270,6 @@ mod sealed {
         T: Durable,
     {
         #[inline(always)]
-
         fn save(
             &self,
             topic: TopicCode,
@@ -280,7 +279,6 @@ mod sealed {
         }
 
         #[inline(always)]
-
         fn retrieve(
             &self,
             topic: TopicCode,
@@ -290,7 +288,6 @@ mod sealed {
             Box::pin(self.retrieve(topic, message_id))
         }
         #[inline(always)]
-
         fn batch_retrieve(
             &self,
             topic: TopicCode,
@@ -300,7 +297,6 @@ mod sealed {
             Box::pin(self.batch_retrieve(topic, query))
         }
         #[inline(always)]
-
         fn archive(
             &self,
             topic: TopicCode,
@@ -317,28 +313,28 @@ mod sealed {
         ) -> Pin<Box<dyn Future<Output = Result<(), DurableError>> + Send + '_>> {
             Box::pin(self.update_status(topic, update))
         }
-
+        #[inline(always)]
         fn create_topic(
             &self,
             topic: TopicConfig,
         ) -> Pin<Box<dyn Future<Output = Result<(), DurableError>> + Send + '_>> {
             Box::pin(self.create_topic(topic))
         }
-
+        #[inline(always)]
         fn delete_topic(
             &self,
             topic: TopicCode,
         ) -> Pin<Box<dyn Future<Output = Result<(), DurableError>> + Send + '_>> {
             Box::pin(self.delete_topic(topic))
         }
-
+        #[inline(always)]
         fn topic_code_list(
             &self,
         ) -> Pin<Box<dyn Future<Output = Result<Vec<TopicCode>, DurableError>> + Send + '_>>
         {
             Box::pin(self.topic_code_list())
         }
-
+        #[inline(always)]
         fn topic_list(
             &self,
         ) -> Pin<Box<dyn Future<Output = Result<Vec<TopicConfig>, DurableError>> + Send + '_>>

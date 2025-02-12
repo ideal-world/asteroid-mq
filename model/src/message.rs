@@ -95,24 +95,28 @@ impl MessageStatusKind {
     pub fn is_unsent(&self) -> bool {
         *self == MessageStatusKind::Unsent
     }
-    pub fn is_reached(&self, condition: MessageAckExpectKind) -> bool {
+    pub fn is_failed_or_unreachable(&self) -> bool {
+        *self == MessageStatusKind::Failed || *self == MessageStatusKind::Unreachable
+    }
+    pub fn is_fulfilled(&self, condition: MessageAckExpectKind) -> bool {
         match condition {
             MessageAckExpectKind::Sent => {
                 *self == MessageStatusKind::Sent
                     || *self == MessageStatusKind::Received
                     || *self == MessageStatusKind::Processed
+                    || *self == MessageStatusKind::Failed
             }
             MessageAckExpectKind::Received => {
-                *self == MessageStatusKind::Received || *self == MessageStatusKind::Processed
+                *self == MessageStatusKind::Received
+                    || *self == MessageStatusKind::Processed
+                    || *self == MessageStatusKind::Failed
             }
             MessageAckExpectKind::Processed => *self == MessageStatusKind::Processed,
         }
     }
-    pub fn is_failed(&self) -> bool {
-        *self == MessageStatusKind::Failed || *self == MessageStatusKind::Unreachable
-    }
+    /// witch means this state is a acceptable state
     pub fn is_resolved(&self, condition: MessageAckExpectKind) -> bool {
-        self.is_failed() || self.is_reached(condition)
+        self.is_failed_or_unreachable() || self.is_fulfilled(condition)
     }
 }
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -299,19 +303,19 @@ pub struct MessageHeaderBuilder {
 }
 
 impl MessageHeader {
-    pub fn builder(subjects: impl IntoIterator<Item = Subject>) -> MessageHeaderBuilder {
+    pub fn builder<S: Into<Subject>>(subjects: impl IntoIterator<Item = S>) -> MessageHeaderBuilder {
         MessageHeaderBuilder::new(subjects)
     }
 }
 
 impl MessageHeaderBuilder {
     #[inline(always)]
-    pub fn new(subjects: impl IntoIterator<Item = Subject>) -> Self {
+    pub fn new<S: Into<Subject>>(subjects: impl IntoIterator<Item = S>) -> Self {
         Self {
             ack_kind: MessageAckExpectKind::default(),
             target_kind: MessageTargetKind::default(),
             durability: None,
-            subjects: subjects.into_iter().collect(),
+            subjects: subjects.into_iter().map(Into::into).collect(),
         }
     }
     #[inline(always)]

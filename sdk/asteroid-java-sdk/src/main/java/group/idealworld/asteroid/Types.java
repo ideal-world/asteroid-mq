@@ -1009,7 +1009,9 @@ public class Types {
   public enum WaitAckErrorException {
     MessageDropped,
     Overflow,
-    NoAvailableTarget
+    NoAvailableTarget,
+    DurableMessageWithoutConfig,
+    DurableMessageExpired,
   }
 
   public static class WaitAckError {
