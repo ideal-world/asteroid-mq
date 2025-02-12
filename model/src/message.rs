@@ -303,7 +303,9 @@ pub struct MessageHeaderBuilder {
 }
 
 impl MessageHeader {
-    pub fn builder<S: Into<Subject>>(subjects: impl IntoIterator<Item = S>) -> MessageHeaderBuilder {
+    pub fn builder<S: Into<Subject>>(
+        subjects: impl IntoIterator<Item = S>,
+    ) -> MessageHeaderBuilder {
         MessageHeaderBuilder::new(subjects)
     }
 }
