@@ -122,7 +122,7 @@ impl HoldMessage {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct MessageQueue {
     pub(crate) blocking: bool,
     pub(crate) hold_messages: HashMap<MessageId, HoldMessage>,
@@ -130,6 +130,17 @@ pub(crate) struct MessageQueue {
     pub(crate) id_time: HashMap<MessageId, DateTime<Utc>>,
     pub(crate) resolved: HashMap<MessageId, Result<(), WaitAckErrorException>>,
     pub(crate) size: usize,
+}
+
+impl std::fmt::Debug for MessageQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageQueue")
+            .field("blocking", &self.blocking)
+            .field("size", &self.size)
+            .field("hold_count", &self.hold_messages.len())
+            .field("resolved_count", &self.resolved.len())
+            .finish()
+    }
 }
 
 impl MessageQueue {

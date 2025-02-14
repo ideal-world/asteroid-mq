@@ -219,7 +219,12 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         Box<<TypeConfig as RaftTypeConfig>::SnapshotData>,
         StorageError<<TypeConfig as RaftTypeConfig>::NodeId>,
     > {
-        Ok(Box::new(Cursor::new(Vec::new())))
+        // 1 Mb
+        const SNAPSHOT_DEFAULT_CAPACITY: usize = 1 << 20;
+        tracing::info!("begin receiving snapshot");
+        Ok(Box::new(Cursor::new(Vec::with_capacity(
+            SNAPSHOT_DEFAULT_CAPACITY,
+        ))))
     }
 
     async fn get_current_snapshot(

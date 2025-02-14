@@ -25,12 +25,42 @@ impl<T> Default for InterestMap<T> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InterestRadixTreeNode<T> {
     value: HashSet<T>,
     children: BTreeMap<Vec<u8>, InterestRadixTreeNode<T>>,
     any_child: Option<Box<InterestRadixTreeNode<T>>>,
     recursive_any_child: Option<Box<InterestRadixTreeNode<T>>>,
+}
+
+struct ChildrenDebugProxy<'a, T>(&'a InterestRadixTreeNode<T>);
+
+impl<T: std::fmt::Debug> std::fmt::Debug for ChildrenDebugProxy<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_map();
+        debug.entries(
+            self.0
+                .children
+                .iter()
+                .map(|(k, v)| (std::str::from_utf8(k).unwrap_or("<invalid utf8 str>"), v)),
+        );
+        if let Some(any_child) = &self.0.any_child {
+            debug.entry(&"*", any_child);
+        }
+        if let Some(recursive_any_child) = &self.0.recursive_any_child {
+            debug.entry(&"**", recursive_any_child);
+        }
+        debug.finish()
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for InterestRadixTreeNode<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InterestRadixTreeNode")
+            .field("value", &self.value)
+            .field("children", &ChildrenDebugProxy(self))
+            .finish()
+    }
 }
 
 impl<T> Default for InterestRadixTreeNode<T> {

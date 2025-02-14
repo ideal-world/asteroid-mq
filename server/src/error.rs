@@ -48,11 +48,11 @@ impl Error {
     }
     pub fn custom(
         context: impl Into<Cow<'static, str>>,
-        error: impl std::error::Error + Send + Sync + 'static,
+        error: impl Into<Box<dyn std::error::Error + Send + Sync>>,
     ) -> Self {
         Self {
             context: context.into(),
-            kind: ErrorKind::Custom(Box::new(error)),
+            kind: ErrorKind::Custom(error.into()),
         }
     }
     pub fn contextual_custom<E: std::error::Error + Send + Sync + 'static>(
@@ -95,6 +95,7 @@ error_kind! {
         Io: std::io::Error,
         Ack: WaitAckError,
         Custom: Box<dyn std::error::Error + Send + Sync>,
-        RaftClient: openraft::error::RaftError<NodeId, openraft::error::ClientWriteError<NodeId, TcpNode>>
+        RaftClient: openraft::error::RaftError<NodeId, openraft::error::ClientWriteError<NodeId, TcpNode>>,
+        Raft: openraft::error::RaftError<NodeId>
     }
 }

@@ -62,17 +62,12 @@ impl TopicData {
         ep_collect
     }
     pub fn hold_new_message(&mut self, message: Message, ctx: &mut ProposalContext) {
+        let message_id = message.id();
         let ep_collect = match message.header.target_kind {
             MessageTargetKind::Durable | MessageTargetKind::Online => {
                 self.collect_addr_by_subjects(message.header.subjects.iter())
                 // just accept all
             }
-            // #[allow(deprecated)]
-            // MessageTargetKind::Available => {
-            //     tracing::warn!("message target kind available is not supported yet, this message would be ignored");
-            //     return;
-            //     // unsupported
-            // }
             MessageTargetKind::Push => {
                 let message_hash = crate::util::hash64(&message.id());
                 let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
@@ -92,7 +87,7 @@ impl TopicData {
                     return;
                 } else {
                     let ep = hash_ring[(message_hash as usize) % (hash_ring.len())].1;
-                    tracing::debug!(?ep, "select ep");
+                    tracing::debug!(?ep, "pub mode ep selected");
                     HashSet::from([ep])
                 }
             }
@@ -127,9 +122,15 @@ impl TopicData {
             }
             self.queue.push(hold_message);
             'durable_task: {
-                if let Some(durable_config) = &message.header.durability {
-                    if message.header.target_kind != MessageTargetKind::Durable {
+                if message.header.target_kind == MessageTargetKind::Durable {
+                    let Some(durable_config) = &message.header.durability else {
                         tracing::warn!("durable message should have durable target kind");
+                        ctx.resolve_ack(
+                            message_id,
+                            Err(WaitAckError::exception(
+                                WaitAckErrorException::DurableMessageWithoutConfig,
+                            )),
+                        );
                         break 'durable_task;
                     };
                     let topic = ctx.topic_code.clone().expect("topic code not set");

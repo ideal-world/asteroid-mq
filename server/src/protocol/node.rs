@@ -15,8 +15,8 @@ use super::{
         Topic, TopicCode,
     },
 };
-use asteroid_mq_model::connection::EdgeNodeConnection;
 pub use asteroid_mq_model::NodeId;
+use asteroid_mq_model::{codec::BINCODE_CONFIG, connection::EdgeNodeConnection};
 use edge::{
     auth::EdgeAuthService,
     connection::{
@@ -34,7 +34,7 @@ use raft::{
     network_factory::TcpNetworkService,
     proposal::{EndpointOffline, EndpointOnline, LoadTopic, Proposal},
     raft_node::TcpNode,
-    state_machine::{topic::config::TopicConfig, StateMachineStore},
+    state_machine::{node::NodeData, topic::config::TopicConfig, StateMachineStore},
     MaybeLoadingRaft, TypeConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -74,10 +74,15 @@ pub struct NodeInner {
     edge_connections: RwLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
     edge_routing: RwLock<HashMap<EndpointAddr, (NodeId, TopicCode)>>,
     pub edge_handler: tokio::sync::RwLock<EdgeConnectionHandlerObject>,
+
+    // May we delete this and access the node api from edge sdk with tokio channel socket connection?
+    // #[deprecated]
     topics: RwLock<HashMap<TopicCode, Topic>>,
+
     durable_commands_queue: std::sync::RwLock<VecDeque<DurableCommand>>,
     /// ensure operations on the same topic are linearizable
     pub(crate) durable_syncs: tokio::sync::Mutex<HashMap<TopicCode, Arc<tokio::sync::Mutex<()>>>>,
+    /// time scheduler
     pub(crate) scheduler: tsuki_scheduler::AsyncSchedulerClient<tsuki_scheduler::runtime::Tokio>,
     ct: CancellationToken,
 }
@@ -641,6 +646,24 @@ impl Node {
     }
     pub async fn create_new_topic<C: Into<TopicConfig>>(&self, config: C) -> crate::Result<Topic> {
         self.load_topic(config, Vec::new()).await
+    }
+
+    pub async fn snapshot_data(&self) -> Result<NodeData, crate::Error> {
+        let raft = self.raft().await;
+        let mut snapshot = raft
+            .get_snapshot()
+            .await
+            .map_err(crate::Error::contextual_custom("get snapshot"))?
+            .ok_or(crate::Error::custom(
+                "get snapshot",
+                "raft instance missing snapshot",
+            ))?;
+        let data = bincode::serde::decode_from_std_read::<NodeData, _, _>(
+            &mut snapshot.snapshot,
+            BINCODE_CONFIG,
+        )
+        .map_err(crate::Error::contextual_custom("get snapshot"))?;
+        Ok(data)
     }
 }
 

@@ -183,8 +183,8 @@ impl ClusterService {
                     tracing::warn!("leader {} is removed from cluster", leader_node);
                     let trigger_elect_result = raft.trigger().elect().await;
                     match trigger_elect_result {
-                        Ok(resp) => {
-                            tracing::info!(?resp, "leader removed, trigger election");
+                        Ok(_) => {
+                            tracing::info!("leader removed, trigger election");
                         }
                         Err(e) => {
                             tracing::warn!("failed to trigger election: {}", e);
@@ -203,7 +203,7 @@ impl ClusterService {
                     let add_result = raft.add_learner(id, node, true).await;
                     match add_result {
                         Ok(resp) => {
-                            tracing::info!(?resp, "learner {} added", id);
+                            tracing::debug!(?resp, "learner {} added", id);
                         }
                         Err(e) => {
                             tracing::warn!("failed to add learner {}: {}", id, e);
@@ -218,7 +218,7 @@ impl ClusterService {
                     .await;
                 match add_voters_result {
                     Ok(resp) => {
-                        tracing::info!(?resp, "voters added");
+                        tracing::debug!(?resp, "voters added");
                     }
                     Err(e) => {
                         tracing::warn!("failed to add voters: {}", e);

@@ -220,12 +220,27 @@ impl MessageId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 #[typeshare]
 pub struct Message {
     pub header: MessageHeader,
     pub payload: MaybeBase64Bytes,
+}
+
+impl std::fmt::Debug for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const MAX_DEBUG_PAYLOAD_SIZE: usize = 256;
+        let size = self.payload.0.len();
+        let mut debug = f.debug_struct("Message");
+        debug.field("header", &self.header).field("size", &size);
+        if size < MAX_DEBUG_PAYLOAD_SIZE {
+            debug.field("payload", &self.payload);
+            debug.finish()
+        } else {
+            debug.finish_non_exhaustive()
+        }
+    }
 }
 
 impl Message {
