@@ -149,7 +149,7 @@ impl RaftNetwork<TypeConfig> for TcpNetwork {
         let Response::InstallSnapshot(install_snapshot) = response else {
             unreachable!("wrong implementation: expect vote response")
         };
-        
+
         install_snapshot.map_err(|e| RPCError::RemoteError(RemoteError::new(self.peer.id, e)))
     }
 }
