@@ -258,11 +258,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         >,
         mut snapshot: Box<<TypeConfig as RaftTypeConfig>::SnapshotData>,
     ) -> Result<(), StorageError<<TypeConfig as RaftTypeConfig>::NodeId>> {
-        let Some(node) = self.node_ref.upgrade() else {
-            return Ok(());
-        };
-
-        let id = node.id();
+        let id = self.node_ref.upgrade().map(|node| node.id());
 
         tracing::info!(
             { snapshot_size = snapshot.get_ref().len(), ?id },
@@ -291,13 +287,15 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         state_machine.node = new_data;
 
         // flush, we can do this for it's immutable
-        tracing::info!(%id, "installed, ready to flush: {:#?}", state_machine.node);
-        for (topic_code, topic) in &mut state_machine.node.topics {
-            topic.queue.flush_ack(&mut ProposalContext {
-                node: node.clone(),
-                topic_code: Some(topic_code.clone()),
-            });
-        }
+        if let Some(node) = self.node_ref.upgrade() {
+            tracing::info!(?id, "installed, ready to flush: {:#?}", state_machine.node);
+            for (topic_code, topic) in &mut state_machine.node.topics {
+                topic.queue.flush_ack(&mut ProposalContext {
+                    node: node.clone(),
+                    topic_code: Some(topic_code.clone()),
+                });
+            }
+        };
 
         // Lock the current snapshot before releasing the lock on the state machine, to avoid a race
         // condition on the written snapshot
