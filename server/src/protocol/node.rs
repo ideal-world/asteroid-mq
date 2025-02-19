@@ -84,7 +84,6 @@ pub struct NodeInner {
     // May we delete this and access the node api from edge sdk with tokio channel socket connection?
     // #[deprecated]
     // topics: RwLock<HashMap<TopicCode, Topic>>,
-
     /// ack responser pool
     pub(crate) ack_waiting_pool: Arc<tokio::sync::RwLock<HashMap<MessageId, AckSender>>>,
 
