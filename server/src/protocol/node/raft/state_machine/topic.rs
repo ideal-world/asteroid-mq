@@ -4,14 +4,13 @@ pub mod wait_ack;
 use crate::{
     prelude::{DurableMessage, Interest, NodeId, Subject},
     protocol::{
-        endpoint::EndpointAddr,
         interest::InterestMap,
         message::*,
+        node::durable_message::DurableCommand,
         node::raft::proposal::{MessageStateUpdate, Proposal, ProposalContext},
-        topic::durable_message::DurableCommand,
     },
 };
-use asteroid_mq_model::SetState;
+use asteroid_mq_model::{EndpointAddr, SetState};
 use config::TopicConfig;
 use message_queue::{HoldMessage, MessageQueue};
 use serde::{Deserialize, Serialize};
@@ -61,7 +60,12 @@ impl TopicData {
         }
         ep_collect
     }
-    pub fn hold_new_message(&mut self, message: Message, ctx: &mut ProposalContext) {
+    pub fn hold_new_message(
+        &mut self,
+        message: Message,
+        source: NodeId,
+        ctx: &mut ProposalContext,
+    ) {
         let message_id = message.id();
         let ep_collect = match message.header.target_kind {
             MessageTargetKind::Durable | MessageTargetKind::Online => {
@@ -120,7 +124,7 @@ impl TopicData {
                     }
                 }
             }
-            self.queue.push(hold_message);
+            self.queue.push(hold_message, source);
             'durable_task: {
                 if message.header.target_kind == MessageTargetKind::Durable {
                     let Some(durable_config) = &message.header.durability else {
@@ -293,5 +297,9 @@ impl TopicData {
         for id in message_need_poll {
             self.update_and_flush(MessageStateUpdate::new_empty(id), ctx);
         }
+    }
+
+    pub(crate) fn finish_ack(&mut self, message_id: MessageId) {
+        self.queue.finish_ack(message_id);
     }
 }

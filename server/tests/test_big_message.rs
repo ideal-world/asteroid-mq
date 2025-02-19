@@ -6,15 +6,13 @@ use std::{
 };
 
 use asteroid_mq::{
-    prelude::{
-        Interest, Message, MessageAckExpectKind, MessageHeader, Node, NodeConfig, NodeId, Subject,
-        TopicCode,
-    },
+    prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, NodeId, Subject, TopicCode},
     protocol::node::raft::{
         cluster::StaticClusterProvider,
         state_machine::topic::config::{TopicConfig, TopicOverflowConfig, TopicOverflowPolicy},
     },
 };
+use asteroid_mq_model::EdgeMessage;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 /// 1MB message
 static BIG_MESSAGE_1MB: &[u8] = &[0; 1024 * 1024];
@@ -124,11 +122,16 @@ async fn test_big_message() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let event_topic_sender = node_sender.create_new_topic(topic_config()).await.unwrap();
-
-    let event_topic_receiver = node_receiver.get_topic(&CODE).unwrap();
-    let node_receiver_ep = event_topic_receiver
-        .create_endpoint(vec![Interest::new("events/big-message/*")])
+    node_sender.create_new_topic(topic_config()).await.unwrap();
+    let edge_sender = asteroid_mq_sdk::ClientNode::connect_local_without_auth(node_sender.clone())
+        .await
+        .unwrap();
+    let edge_receiver =
+        asteroid_mq_sdk::ClientNode::connect_local_without_auth(node_receiver.clone())
+            .await
+            .unwrap();
+    let mut node_receiver_ep = edge_receiver
+        .create_endpoint(CODE, vec![Interest::new("events/big-message/*")])
         .await
         .unwrap();
 
@@ -136,64 +139,73 @@ async fn test_big_message() {
         while let Some(message) = node_receiver_ep.next_message().await {
             let size = bytes_size_mb(&message.payload.0);
             tracing::info!(size, "recv message");
-            node_receiver_ep
-                .ack_processed(&message.header)
-                .await
-                .unwrap();
+            message.ack_processed().await.unwrap();
         }
     });
-    let ack_handle = event_topic_sender
-        .send_message(Message::new(
-            MessageHeader::builder([Subject::new("events/big-message/1mb")])
-                .ack_kind(MessageAckExpectKind::Processed)
-                .mode_online()
-                .build(),
-            BIG_MESSAGE_1MB,
-        ))
+    let ack_handle = edge_sender
+        .send_message(
+            EdgeMessage::builder(
+                CODE,
+                [Subject::new("events/big-message/1mb")],
+                BIG_MESSAGE_1MB,
+            )
+            .ack_kind(MessageAckExpectKind::Processed)
+            .mode_online()
+            .build(),
+        )
         .await
         .unwrap();
-    let result = ack_handle.await;
+    let result = ack_handle.wait().await;
     assert!(result.is_ok());
-    let ack_handle = event_topic_sender
-        .send_message(Message::new(
-            MessageHeader::builder([Subject::new("events/big-message/5mb")])
-                .ack_kind(MessageAckExpectKind::Processed)
-                .mode_online()
-                .build(),
-            BIG_MESSAGE_5MB,
-        ))
+    let ack_handle = edge_sender
+        .send_message(
+            EdgeMessage::builder(
+                CODE,
+                [Subject::new("events/big-message/5mb")],
+                BIG_MESSAGE_5MB,
+            )
+            .ack_kind(MessageAckExpectKind::Processed)
+            .mode_online()
+            .build(),
+        )
         .await
         .unwrap();
-    let result = ack_handle.await;
+    let result = ack_handle.wait().await;
     assert!(result.is_ok());
-    let ack_handle = event_topic_sender
-        .send_message(Message::new(
-            MessageHeader::builder([Subject::new("events/big-message/10mb")])
-                .ack_kind(MessageAckExpectKind::Processed)
-                .mode_online()
-                .build(),
-            BIG_MESSAGE_10MB,
-        ))
+    let ack_handle = edge_sender
+        .send_message(
+            EdgeMessage::builder(
+                CODE,
+                [Subject::new("events/big-message/10mb")],
+                BIG_MESSAGE_10MB,
+            )
+            .ack_kind(MessageAckExpectKind::Processed)
+            .mode_online()
+            .build(),
+        )
         .await
         .unwrap();
-    let result = ack_handle.await;
+    let result = ack_handle.wait().await;
     assert!(result.is_ok());
     let mut handles = Vec::new();
     for _no in 0..10 {
-        let ack_handle = event_topic_sender
-            .send_message(Message::new(
-                MessageHeader::builder([Subject::new("events/big-message/1mb")])
-                    .ack_kind(MessageAckExpectKind::Processed)
-                    .mode_online()
-                    .build(),
-                BIG_MESSAGE_5MB,
-            ))
+        let ack_handle = edge_sender
+            .send_message(
+                EdgeMessage::builder(
+                    CODE,
+                    [Subject::new("events/big-message/1mb")],
+                    BIG_MESSAGE_1MB,
+                )
+                .ack_kind(MessageAckExpectKind::Processed)
+                .mode_online()
+                .build(),
+            )
             .await
             .unwrap();
         handles.push(ack_handle);
     }
     for ack_handle in handles {
-        let success = ack_handle.await.unwrap();
+        let success = ack_handle.wait().await.unwrap();
         tracing::info!("recv all ack: {success:?}");
     }
 }

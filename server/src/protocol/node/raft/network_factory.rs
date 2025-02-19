@@ -110,7 +110,6 @@ impl TcpNetworkService {
         {
             let tcp_service = self.clone();
             let info = self.info.clone();
-            let info_for_tracing = info.clone();
             let create_task = move || {
                 let ct = tcp_service.ct.clone();
                 let (ensure_connection_tx, mut ensure_connection_rx) =
@@ -269,7 +268,6 @@ impl TcpNetworkService {
                     .instrument(tracing::span!(
                         tracing::Level::INFO,
                         "tcp_network_service",
-                        info=?info_for_tracing
                     )),
                 );
                 ensure_connection_tx
@@ -485,10 +483,16 @@ impl RaftTcpConnection {
                                         Request::Vote(vote) => {
                                             Response::Vote(raft.vote(vote).await)
                                         }
-                                        Request::AppendEntries(append) => Response::AppendEntries(
-                                            raft.append_entries(append).await,
-                                        ),
+                                        Request::AppendEntries(append) => {
+                                            Response::AppendEntries(raft.append_entries(append).await)
+                                        },
                                         Request::InstallSnapshot(install) => {
+                                            let offset = install.offset;
+                                            let installed = asteroid_mq_model::MemUnit(offset as usize);
+                                            let size = asteroid_mq_model::MemUnit(install.data.len());
+                                            let done = install.done;
+
+                                            tracing::info!({offset, %installed, %size, done}, "installing snapshot");
                                             Response::InstallSnapshot(
                                                 raft.install_snapshot(install).await,
                                             )
@@ -503,8 +507,6 @@ impl RaftTcpConnection {
                                 .instrument(tracing::span!(
                                     tracing::Level::INFO,
                                     "tcp_request_handler",
-                                    local=%local_id,
-                                    peer=%peer_id
                                 )),
                             );
                         }

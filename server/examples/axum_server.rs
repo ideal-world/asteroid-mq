@@ -12,7 +12,6 @@ use axum::{
     response::Response,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use std::task::ready;
 
@@ -255,22 +254,7 @@ async fn main() -> asteroid_mq::Result<()> {
         node.start(cluster_provider).await?;
     };
     node.wait_for_leader().await?;
-    let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
-
-    let receiver_endpoint = topic
-        .create_endpoint(vec![asteroid_mq::protocol::interest::Interest::new("*")])
-        .await
-        .unwrap();
-    tokio::spawn(async move {
-        while let Some(message) = receiver_endpoint.next_message().await {
-            let payload: Value = serde_json::from_slice(&message.payload.0).expect("invalid json");
-            tracing::info!(%payload, header=?message.header, "recv message in server node");
-            receiver_endpoint
-                .ack_processed(&message.header)
-                .await
-                .unwrap();
-        }
-    });
+    node.create_new_topic(TopicCode::const_new("test")).await?;
     use axum::serve;
     let http_tcp_listener = tokio::net::TcpListener::bind("localhost:8080")
         .await

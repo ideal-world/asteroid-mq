@@ -3,13 +3,14 @@ use std::{
     sync::Arc,
 };
 
+use asteroid_mq_model::EndpointAddr;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 
 use crate::{
     prelude::{DurableMessage, DurableService, MessageId, Node, TopicCode},
-    protocol::{endpoint::EndpointAddr, message::*, topic::durable_message::DurableCommand},
+    protocol::{message::*, node::durable_message::DurableCommand},
 };
 
 use super::state_machine::topic::wait_ack::WaitAckResult;
@@ -27,6 +28,9 @@ pub(crate) mod unload_topic;
 pub use unload_topic::UnloadTopic;
 pub(crate) mod delegate_message;
 pub use delegate_message::DelegateMessage;
+pub(crate) mod ack_finished;
+pub use ack_finished::AckFinished;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Proposal {
@@ -37,12 +41,14 @@ pub enum Proposal {
     /// Load Queue: load messages into the topic queue.
     LoadTopic(LoadTopic),
     UnloadTopic(UnloadTopic),
-    /// En Online: report endpoint online.
+    /// Ep Online: report endpoint online.
     EpOnline(EndpointOnline),
-    /// En Offline: report endpoint offline.
+    /// Ep Offline: report endpoint offline.
     EpOffline(EndpointOffline),
-    /// En Interest: set endpoint's interests.
+    /// Ep Interest: set endpoint's interests.
     EpInterest(EndpointInterest),
+    /// Ack Finished: ack finished.
+    AckFinished(AckFinished),
 }
 #[derive(Debug, Clone)]
 pub(crate) struct ProposalContext {
@@ -64,10 +70,6 @@ impl ProposalContext {
         if let Some(service) = self.durable_service() {
             let topic_code = self.topic_code.clone().expect("topic code not set");
             let node = self.node.clone();
-            let Some(_topic) = node.get_topic(&topic_code) else {
-                tracing::warn!(?topic_code, "topic not found");
-                return;
-            };
             tokio::spawn(
                 async move {
                     // only one execute task at a time for each topic
@@ -117,16 +119,26 @@ impl ProposalContext {
     pub(crate) fn set_topic_code(&mut self, code: TopicCode) {
         self.topic_code = Some(code);
     }
-    pub(crate) fn resolve_ack(&self, id: MessageId, result: WaitAckResult) {
-        let Some(ref code) = self.topic_code else {
-            return;
-        };
-        let Some(topic) = self.node.get_topic(code) else {
+    pub(crate) fn resolve_ack(&self, message_id: MessageId, result: WaitAckResult) {
+        let node = self.node.clone();
+        let node_id = self.node.id();
+        let Some(topic) = self.topic_code.clone() else {
+            tracing::warn!(?self.topic_code, "topic not found");
             return;
         };
         tokio::spawn(async move {
-            if let Some(tx) = topic.ack_waiting_pool.write().await.remove(&id) {
-                let _ = tx.send(result);
+            let mut wg = node.ack_waiting_pool.write().await;
+            if let Some(mut tx) = wg.remove(&message_id) {
+                drop(wg);
+                tx.send(result);
+                let proposal_result = node
+                    .propose(Proposal::AckFinished(AckFinished { message_id, topic }))
+                    .await;
+                if let Err(e) = proposal_result {
+                    tracing::warn!(error=%e, "ack finished proposal failed");
+                }
+            } else {
+                tracing::trace!(%node_id, %message_id, "ack wait handle not found");
             }
         });
     }
@@ -137,19 +149,22 @@ impl ProposalContext {
             tracing::warn!("topic code is not set");
             return;
         };
-        let Some(topic) = self.node.get_topic(code) else {
-            tracing::warn!(?code, "topic not found");
-            return;
-        };
+
         let message = message.clone();
         let code = code.clone();
         let node = self.node.clone();
         tokio::spawn(async move {
             let message_id = message.id();
-            let status = topic
-                .dispatch_message(message, &endpoint)
-                .await
-                .unwrap_or(MessageStatusKind::Unreachable);
+            let node_id = node.get_edge_routing(&endpoint)?;
+            tracing::debug!(%node_id, ?endpoint, "dispatch message to edge");
+            let edge = node.get_edge_connection(node_id)?;
+            let result = edge.push_message(&endpoint, message);
+            let status = if let Err(err) = result {
+                tracing::warn!(?err, "push message failed");
+                MessageStatusKind::Unreachable
+            } else {
+                MessageStatusKind::Sent
+            };
             let proposal_result = node
                 .propose(Proposal::SetState(SetState {
                     topic: code,
@@ -162,6 +177,7 @@ impl ProposalContext {
             if let Err(err) = proposal_result {
                 tracing::error!(?err, "set state failed");
             }
+            Some(())
         });
     }
 }

@@ -7,15 +7,13 @@ use std::{
 };
 
 use asteroid_mq::{
-    prelude::{
-        Interest, Message, MessageAckExpectKind, MessageHeader, Node, NodeConfig, NodeId, Subject,
-        TopicCode,
-    },
+    prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, NodeId, Subject, TopicCode},
     protocol::node::raft::{
         cluster::StaticClusterProvider,
         state_machine::topic::config::{TopicConfig, TopicOverflowConfig, TopicOverflowPolicy},
     },
 };
+use asteroid_mq_model::EdgeMessage;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 #[tokio::test()]
@@ -116,93 +114,101 @@ async fn test_nodes() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let event_topic = node_server.create_new_topic(topic_config()).await.unwrap();
+    node_server.create_new_topic(topic_config()).await.unwrap();
+    let edge_server_node =
+        asteroid_mq_sdk::ClientNode::connect_local_without_auth(node_server.clone())
+            .await
+            .unwrap();
 
-    let node_server_receiver = event_topic
-        .create_endpoint(vec![Interest::new("events/**")])
+    let mut ep_server = edge_server_node
+        .create_endpoint(CODE, vec![Interest::new("events/**")])
         .await
         .unwrap();
     tokio::spawn(async move {
-        while let Some(message) = node_server_receiver.next_message().await {
+        while let Some(message) = ep_server.next_message().await {
             tracing::info!(?message, "recv message in server node");
-            node_server_receiver
-                .ack_processed(&message.header)
-                .await
-                .unwrap();
+            message.ack_processed().await.unwrap();
         }
     });
+    let edge_client_node =
+        asteroid_mq_sdk::ClientNode::connect_local_without_auth(node_client.clone())
+            .await
+            .unwrap();
 
-    let event_topic = node_client.get_topic(&CODE).unwrap();
-    let node_client_receiver = event_topic
-        .create_endpoint(vec![Interest::new("events/hello-world")])
+    let mut ep_client = edge_client_node
+        .create_endpoint(CODE, vec![Interest::new("events/hello-world")])
         .await
         .unwrap();
 
     tokio::spawn(async move {
-        while let Some(message) = node_client_receiver.next_message().await {
+        while let Some(message) = ep_client.next_message().await {
             tracing::info!(?message, "recv message");
-            node_client_receiver
-                .ack_processed(&message.header)
-                .await
-                .unwrap();
+            message.ack_processed().await.unwrap();
         }
     });
     let mut handles = vec![];
     for no in 0..10 {
-        let ack_handle = event_topic
-            .send_message(Message::new(
-                MessageHeader::builder([Subject::new("events/hello-world")])
-                    .ack_kind(MessageAckExpectKind::Processed)
-                    .mode_online()
-                    .build(),
-                format!("Message No.{no} of {}", MessageAckExpectKind::Processed),
-            ))
+        let ack_handle = edge_server_node
+            .send_message(
+                EdgeMessage::builder(
+                    CODE,
+                    [Subject::new("events/hello-world")],
+                    format!("Message No.{no} of {}", MessageAckExpectKind::Processed),
+                )
+                .ack_kind(MessageAckExpectKind::Processed)
+                .mode_online()
+                .build(),
+            )
             .await
             .unwrap();
         handles.push(ack_handle);
     }
     for ack_handle in handles {
-        let success = ack_handle.await.unwrap();
+        let success = ack_handle.wait().await.unwrap();
         tracing::info!("recv all ack: {success:?}")
     }
 
     let mut handles = vec![];
     for no in 0..10 {
-        let ack_handle = event_topic
-            .send_message(Message::new(
-                MessageHeader::builder([Subject::new("events/hello-world")])
-                    .ack_kind(MessageAckExpectKind::Sent)
-                    .mode_push()
-                    .build(),
-                format!("Message No.{no} of {}", MessageAckExpectKind::Sent),
-            ))
+        let ack_handle = edge_server_node
+            .send_message(
+                EdgeMessage::builder(
+                    CODE,
+                    [Subject::new("events/hello-world")],
+                    format!("Message No.{no} of {}", MessageAckExpectKind::Sent),
+                )
+                .ack_kind(MessageAckExpectKind::Sent)
+                .mode_push()
+                .build(),
+            )
             .await
             .unwrap();
         handles.push(ack_handle);
     }
     for ack_handle in handles {
-        let id = ack_handle.message_id();
-        let success = ack_handle.await.unwrap();
-        tracing::info!("recv all ack: {success:?} for {id}")
+        let success = ack_handle.wait().await.unwrap();
+        tracing::info!("recv all ack: {success:?}")
     }
 
     let mut handles = vec![];
     for no in 0..10 {
-        let ack_handle = event_topic
-            .send_message(Message::new(
-                MessageHeader::builder([Subject::new("events/hello-world")])
-                    .ack_kind(MessageAckExpectKind::Received)
-                    .mode_push()
-                    .build(),
-                format!("Message No.{no} of {}", MessageAckExpectKind::Received),
-            ))
+        let ack_handle = edge_server_node
+            .send_message(
+                EdgeMessage::builder(
+                    CODE,
+                    [Subject::new("events/hello-world")],
+                    format!("Message No.{no} of {}", MessageAckExpectKind::Received),
+                )
+                .ack_kind(MessageAckExpectKind::Received)
+                .mode_push()
+                .build(),
+            )
             .await
             .unwrap();
         handles.push(ack_handle);
     }
     for ack_handle in handles {
-        let id = ack_handle.message_id();
-        let success = ack_handle.await.unwrap();
-        tracing::info!("recv all ack: {success:?} for {id}")
+        let success = ack_handle.wait().await.unwrap();
+        tracing::info!("recv all ack: {success:?}")
     }
 }

@@ -6,8 +6,8 @@ use std::{
 use crate::{
     prelude::NodeId,
     protocol::{
+        node::durable_message::DurableError,
         node::raft::{raft_node::TcpNode, state_machine::topic::wait_ack::WaitAckError},
-        topic::durable_message::DurableError,
     },
 };
 

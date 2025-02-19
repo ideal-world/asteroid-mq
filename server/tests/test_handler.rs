@@ -41,7 +41,7 @@ async fn hello_world_handler(Json(hello_world): Json<HelloWorld>) -> asteroid_mq
 }
 
 #[tokio::test]
-async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
+async fn test_create_handler_loop() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer().with_filter(
@@ -61,41 +61,54 @@ async fn test_create_handler_loop() -> asteroid_mq::Result<()> {
     let cluster_provider =
         StaticClusterProvider::singleton(node.id(), node.config().addr.to_string());
     node.start(cluster_provider).await?;
-    let topic = node.create_new_topic(TopicCode::const_new("test")).await?;
-    topic
-        .create_endpoint([Interest::new("other-test/*")])
+    const TOPIC_CODE: TopicCode = TopicCode::const_new("test");
+    node.create_new_topic(TOPIC_CODE).await?;
+    let edge_sender = asteroid_mq_sdk::ClientNode::connect_local_without_auth(node.clone())
+        .await
+        .unwrap();
+    edge_sender
+        .create_endpoint(TOPIC_CODE, [Interest::new("other-test/*")])
         .await?
-        .create_event_loop()
+        .into_event_loop()
         .with_handler(|event: Json<OtherEvent>| async move {
             println!("Received other event {:?}", event);
             asteroid_mq::Result::Ok(())
         })
         .spawn();
-    let _evt_loop_handle = topic
-        .create_endpoint([Interest::new("test/*")])
+    let _evt_loop_handle = edge_sender
+        .create_endpoint(TOPIC_CODE, [Interest::new("test/*")])
         .await?
-        .create_event_loop()
+        .into_event_loop()
         .with_handler(hello_world_handler)
         .with_handler(|Json(bye_world): Json<ByeWorld>| async move {
             println!("Received bye world: {:?}", bye_world);
             asteroid_mq::Result::Ok(())
         })
         .spawn();
-    topic
-        .send_event(Json(HelloWorld {
-            number: 42,
-            text: "Hello, world!".to_string(),
-        }))
+    edge_sender
+        .send_event(
+            TOPIC_CODE,
+            Json(HelloWorld {
+                number: 42,
+                text: "Hello, world!".to_string(),
+            }),
+        )
         .await?;
-    topic
-        .send_event(Json(ByeWorld {
-            texts: vec!["Goodbye, world!".to_string()],
-        }))
+    edge_sender
+        .send_event(
+            TOPIC_CODE,
+            Json(ByeWorld {
+                texts: vec!["Goodbye, world!".to_string()],
+            }),
+        )
         .await?;
-    topic
-        .send_event(Json(OtherEvent {
-            texts: vec!["Other event".to_string()],
-        }))
+    edge_sender
+        .send_event(
+            TOPIC_CODE,
+            Json(OtherEvent {
+                texts: vec!["Other event".to_string()],
+            }),
+        )
         .await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     Ok(())

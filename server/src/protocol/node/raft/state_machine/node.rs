@@ -1,16 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{
-    prelude::{Topic, TopicCode},
-    protocol::{
-        node::raft::proposal::{
-            DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, LoadTopic,
-            ProposalContext, SetState, UnloadTopic,
-        },
-        topic::TopicInner,
+    prelude::TopicCode,
+    protocol::node::raft::proposal::{
+        AckFinished, DelegateMessage, EndpointInterest, EndpointOffline, EndpointOnline, LoadTopic,
+        ProposalContext, SetState, UnloadTopic,
     },
 };
 
@@ -25,17 +22,22 @@ impl NodeData {
     #[instrument(skip_all, fields(node_id=%ctx.node.id(), topic=%topic, message_id = %message.id()))]
     pub(crate) fn apply_delegate_message(
         &mut self,
-        DelegateMessage { topic, message }: DelegateMessage,
+        DelegateMessage {
+            topic,
+            message,
+            source,
+        }: DelegateMessage,
         mut ctx: ProposalContext,
     ) {
         ctx.set_topic_code(topic.clone());
         if let Some(topic) = self.topics.get_mut(&topic) {
-            topic.hold_new_message(message.clone(), &mut ctx);
+            topic.hold_new_message(message, source, &mut ctx);
         } else {
             tracing::error!(?topic, "topic not found");
         }
         ctx.commit_durable_commands();
     }
+
     pub(crate) fn apply_load_topic(
         &mut self,
         LoadTopic { config, mut queue }: LoadTopic,
@@ -56,16 +58,7 @@ impl NodeData {
                 return;
             }
         }
-        let node = ctx.node.clone();
-        let topic = Topic {
-            inner: Arc::new(TopicInner {
-                code: code.clone(),
-                node: node.clone(),
-                ack_waiting_pool: Default::default(),
-                local_endpoints: Default::default(),
-            }),
-        };
-        node.topics.write().unwrap().insert(code.clone(), topic);
+
         ctx.commit_durable_commands();
     }
     #[instrument(skip_all, fields(node_id=%ctx.node.id(), topic=%topic, message_id=%update.message_id))]
@@ -102,6 +95,7 @@ impl NodeData {
         topic.ep_online(endpoint, interests, host, &mut ctx);
         ctx.commit_durable_commands();
     }
+
     pub(crate) fn apply_ep_offline(
         &mut self,
         EndpointOffline {
@@ -118,6 +112,7 @@ impl NodeData {
         topic.ep_offline(host, &endpoint, &mut ctx);
         ctx.commit_durable_commands();
     }
+
     pub(crate) fn apply_ep_interest(
         &mut self,
         EndpointInterest {
@@ -133,5 +128,17 @@ impl NodeData {
         ctx.set_topic_code(topic_code);
         topic.update_ep_interest(&endpoint, interests, &mut ctx);
         ctx.commit_durable_commands();
+    }
+    #[instrument]
+    pub(crate) fn apply_ack_finished(
+        &mut self,
+        AckFinished { message_id, topic }: AckFinished,
+        mut _ctx: ProposalContext,
+    ) {
+        if let Some(topic_data) = self.topics.get_mut(&topic) {
+            topic_data.finish_ack(message_id);
+        } else {
+            tracing::warn!(%topic, "no such topic")
+        }
     }
 }

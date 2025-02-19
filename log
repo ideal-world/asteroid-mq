@@ -1,0 +1,269 @@
+
+running 1 test
+2025-02-19T08:41:13.280929Z  INFO asteroid_mq::protocol::node: pristine_nodes={NodeId(00-0000000000000001-00-000000000000): "127.0.0.1:9001", NodeId(00-0000000000000002-00-000000000000): "127.0.0.1:9002", NodeId(00-0000000000000003-00-000000000000): "127.0.0.1:9003"}
+2025-02-19T08:41:13.281106Z  INFO asteroid_mq::protocol::node: pristine_nodes={NodeId(00-0000000000000001-00-000000000000): "127.0.0.1:9001", NodeId(00-0000000000000002-00-000000000000): "127.0.0.1:9002", NodeId(00-0000000000000003-00-000000000000): "127.0.0.1:9003"}
+2025-02-19T08:41:13.281233Z  INFO asteroid_mq::protocol::node: pristine_nodes={NodeId(00-0000000000000001-00-000000000000): "127.0.0.1:9001", NodeId(00-0000000000000002-00-000000000000): "127.0.0.1:9002", NodeId(00-0000000000000003-00-000000000000): "127.0.0.1:9003"}
+2025-02-19T08:41:13.281318Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp service started info=RaftNodeInfo { id: NodeId(00-0000000000000001-00-000000000000), node: TcpNode("127.0.0.1:9001") }
+2025-02-19T08:41:13.282830Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connecting req_id=0 local=00-0000000000000001-00-000000000000 peer=00-0000000000000002-00-000000000000 peer_addr=127.0.0.1:9002
+2025-02-19T08:41:13.283106Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp service started info=RaftNodeInfo { id: NodeId(00-0000000000000002-00-000000000000), node: TcpNode("127.0.0.1:9002") }
+2025-02-19T08:41:13.293383Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: waiting for connection(1) local=00-0000000000000002-00-000000000000 peer=00-0000000000000001-00-000000000000
+2025-02-19T08:41:13.293656Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp service started info=RaftNodeInfo { id: NodeId(00-0000000000000003-00-000000000000), node: TcpNode("127.0.0.1:9003") }
+2025-02-19T08:41:13.303897Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: waiting for connection(2) local=00-0000000000000003-00-000000000000 peer=00-0000000000000001-00-000000000000
+2025-02-19T08:41:13.304234Z ERROR tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connection error req_id=0 local=00-0000000000000001-00-000000000000 peer=00-0000000000000002-00-000000000000 peer_addr=127.0.0.1:9002 e=Connection refused (os error 111)
+2025-02-19T08:41:13.304369Z  WARN asteroid_mq::protocol::node: failed to ensure connection to 00-0000000000000002-00-000000000000: service not running
+2025-02-19T08:41:13.304441Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connecting req_id=3 local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000 peer_addr=127.0.0.1:9003
+2025-02-19T08:41:13.304829Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connected req_id=3 local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000 peer_addr=127.0.0.1:9003
+2025-02-19T08:41:13.304917Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connection accepted local=00-0000000000000003-00-000000000000
+2025-02-19T08:41:13.305195Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: hello received peer=00-0000000000000001-00-000000000000 local=00-0000000000000003-00-000000000000
+2025-02-19T08:41:13.305308Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connection established local=00-0000000000000003-00-000000000000 peer=00-0000000000000001-00-000000000000
+2025-02-19T08:41:13.305350Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connection stored local=00-0000000000000003-00-000000000000 peer=00-0000000000000001-00-000000000000
+2025-02-19T08:41:13.305464Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: waiting for connection(4) local=00-0000000000000003-00-000000000000 peer=00-0000000000000002-00-000000000000
+2025-02-19T08:41:13.305538Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: hello received peer=00-0000000000000003-00-000000000000 local=00-0000000000000001-00-000000000000
+2025-02-19T08:41:13.305615Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connected established req_id=3 local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000 peer_addr=127.0.0.1:9003
+2025-02-19T08:41:13.806466Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connecting req_id=5 local=00-0000000000000001-00-000000000000 peer=00-0000000000000002-00-000000000000 peer_addr=127.0.0.1:9002
+2025-02-19T08:41:13.807065Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connected req_id=5 local=00-0000000000000001-00-000000000000 peer=00-0000000000000002-00-000000000000 peer_addr=127.0.0.1:9002
+2025-02-19T08:41:13.807273Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connection accepted local=00-0000000000000002-00-000000000000
+2025-02-19T08:41:13.807716Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: hello received peer=00-0000000000000001-00-000000000000 local=00-0000000000000002-00-000000000000
+2025-02-19T08:41:13.807845Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connection established local=00-0000000000000002-00-000000000000 peer=00-0000000000000001-00-000000000000
+2025-02-19T08:41:13.807890Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connection stored local=00-0000000000000002-00-000000000000 peer=00-0000000000000001-00-000000000000
+2025-02-19T08:41:13.808014Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connecting req_id=6 local=00-0000000000000002-00-000000000000 peer=00-0000000000000003-00-000000000000 peer_addr=127.0.0.1:9003
+2025-02-19T08:41:13.808096Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: hello received peer=00-0000000000000002-00-000000000000 local=00-0000000000000001-00-000000000000
+2025-02-19T08:41:13.808174Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connected established req_id=5 local=00-0000000000000001-00-000000000000 peer=00-0000000000000002-00-000000000000 peer_addr=127.0.0.1:9002
+2025-02-19T08:41:13.808712Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connected req_id=6 local=00-0000000000000002-00-000000000000 peer=00-0000000000000003-00-000000000000 peer_addr=127.0.0.1:9003
+2025-02-19T08:41:13.808790Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connection accepted local=00-0000000000000003-00-000000000000
+2025-02-19T08:41:13.809061Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: hello received peer=00-0000000000000002-00-000000000000 local=00-0000000000000003-00-000000000000
+2025-02-19T08:41:13.809188Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: tcp connection established local=00-0000000000000003-00-000000000000 peer=00-0000000000000002-00-000000000000
+2025-02-19T08:41:13.809240Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connection stored local=00-0000000000000003-00-000000000000 peer=00-0000000000000002-00-000000000000
+2025-02-19T08:41:13.809643Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: hello received peer=00-0000000000000003-00-000000000000 local=00-0000000000000002-00-000000000000
+2025-02-19T08:41:13.809723Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connected established req_id=6 local=00-0000000000000002-00-000000000000 peer=00-0000000000000003-00-000000000000 peer_addr=127.0.0.1:9003
+2025-02-19T08:41:13.810378Z  WARN openraft::core::raft_core: A message will be ignored because vote changed: msg sent by vote: T1-N00-0000000000000003-00-000000000000:uncommitted; current my vote: None; when (VoteResponse)
+2025-02-19T08:41:13.810454Z  WARN openraft::core::raft_core: A message will be ignored because vote changed: msg sent by vote: T1-N00-0000000000000003-00-000000000000:uncommitted; current my vote: None; when (VoteResponse)
+2025-02-19T08:41:13.811099Z  WARN openraft::core::raft_core: A message will be ignored because vote changed: msg sent by vote: T1-N00-0000000000000001-00-000000000000:uncommitted; current my vote: None; when (VoteResponse)
+2025-02-19T08:41:13.811135Z  WARN openraft::core::raft_core: A message will be ignored because vote changed: msg sent by vote: T1-N00-0000000000000001-00-000000000000:uncommitted; current my vote: None; when (VoteResponse)
+2025-02-19T08:41:13.811382Z  WARN openraft::core::raft_core: A message will be ignored because vote changed: msg sent by vote: T1-N00-0000000000000002-00-000000000000:uncommitted; current my vote: None; when (VoteResponse)
+2025-02-19T08:41:13.811548Z  INFO asteroid_mq::protocol::node: node started
+2025-02-19T08:41:13.811583Z ERROR test_install_big_snapshot: node is leader leader=NodeId(00-0000000000000003-00-000000000000)
+2025-02-19T08:41:13.811669Z  INFO cluster_service{cluster_provider_name=TestClusterProvider local_id=00-0000000000000003-00-000000000000}: asteroid_mq::protocol::node::raft::cluster: cluster service started
+2025-02-19T08:41:13.812098Z  WARN openraft::core::raft_core: A message will be ignored because vote changed: msg sent by vote: T1-N00-0000000000000003-00-000000000000:uncommitted; current my vote: None; when (VoteResponse)
+2025-02-19T08:41:13.812340Z  WARN openraft::core::raft_core: A message will be ignored because vote changed: msg sent by vote: T1-N00-0000000000000003-00-000000000000:committed; current my vote: None; when (VoteResponse)
+2025-02-19T08:41:13.812453Z  INFO asteroid_mq::protocol::node: node started
+2025-02-19T08:41:13.812483Z ERROR test_install_big_snapshot: node is leader leader=NodeId(00-0000000000000003-00-000000000000)
+2025-02-19T08:41:13.812564Z  INFO cluster_service{cluster_provider_name=TestClusterProvider local_id=00-0000000000000002-00-000000000000}: asteroid_mq::protocol::node::raft::cluster: cluster service started
+2025-02-19T08:41:13.812734Z  WARN openraft::core::raft_core: A message will be ignored because vote changed: msg sent by vote: T1-N00-0000000000000002-00-000000000000:uncommitted; current my vote: None; when (VoteResponse)
+2025-02-19T08:41:13.860946Z  WARN openraft::core::raft_core: A message will be ignored because vote changed: msg sent by vote: T1-N00-0000000000000003-00-000000000000:committed; current my vote: None; when (VoteResponse)
+2025-02-19T08:41:13.861131Z  INFO asteroid_mq::protocol::node: node started
+2025-02-19T08:41:13.861163Z ERROR test_install_big_snapshot: node is leader leader=NodeId(00-0000000000000003-00-000000000000)
+2025-02-19T08:41:13.861309Z  INFO cluster_service{cluster_provider_name=TestClusterProvider local_id=00-0000000000000001-00-000000000000}: asteroid_mq::protocol::node::raft::cluster: cluster service started
+2025-02-19T08:41:13.861568Z ERROR test_install_big_snapshot: node sender state=Follower
+2025-02-19T08:41:13.861666Z ERROR test_install_big_snapshot: node receiver state=Follower
+2025-02-19T08:41:14.862237Z  INFO asteroid_mq::protocol::node: load_topic config=TopicConfig { code: TopicCode(b"events"), blocking: false, overflow_config: Some(TopicOverflowConfig { policy: RejectNew, size: 99999 }) }
+2025-02-19T08:41:15.611463Z  INFO test_install_big_snapshot: start sending messages
+2025-02-19T08:41:15.611817Z  INFO test_install_big_snapshot: sent 204 messages
+2025-02-19T08:41:15.612082Z  INFO test_install_big_snapshot: sent 408 messages
+2025-02-19T08:41:15.612342Z  INFO test_install_big_snapshot: sent 612 messages
+2025-02-19T08:41:15.612597Z  INFO test_install_big_snapshot: sent 816 messages
+2025-02-19T08:41:15.612852Z  INFO test_install_big_snapshot: sent 1020 messages
+2025-02-19T08:41:15.613114Z  INFO test_install_big_snapshot: sent 1224 messages
+2025-02-19T08:41:15.613368Z  INFO test_install_big_snapshot: sent 1428 messages
+2025-02-19T08:41:15.613828Z  INFO test_install_big_snapshot: sent 1632 messages
+2025-02-19T08:41:15.614103Z  INFO test_install_big_snapshot: sent 1836 messages
+2025-02-19T08:41:15.614371Z  INFO test_install_big_snapshot: sent 2040 messages
+2025-02-19T08:41:15.614415Z  INFO test_install_big_snapshot: sending tasks all spawned
+2025-02-19T08:41:15.621455Z  INFO test_install_big_snapshot: finished sending messages success_count=2048 handle_size=2048
+2025-02-19T08:41:17.023616Z  WARN openraft::replication: error replication to target=00-0000000000000001-00-000000000000 error=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:17.023694Z ERROR openraft::replication: RPCError err=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:17.036529Z  WARN openraft::engine::handler::replication_handler: update progress error request_id=AppendEntries(5) result=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:17.237319Z  INFO test_install_big_snapshot: all messaged received
+2025-02-19T08:41:22.626932Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=0 installed=0 size=3.00MB done=false
+2025-02-19T08:41:22.633121Z  INFO asteroid_mq::protocol::node::raft::state_machine: begin receiving snapshot
+2025-02-19T08:41:23.300863Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=3145728 installed=3.00MB size=3.00MB done=false
+2025-02-19T08:41:23.307985Z  INFO test_install_big_snapshot: all messaged ack total=2048 success_count=2048
+2025-02-19T08:41:23.606467Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=6291456 installed=6.00MB size=3.00MB done=false
+2025-02-19T08:41:23.892449Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=9437184 installed=9.00MB size=3.00MB done=false
+2025-02-19T08:41:24.197427Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=12582912 installed=12.00MB size=3.00MB done=false
+2025-02-19T08:41:24.487425Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=15728640 installed=15.00MB size=3.00MB done=false
+2025-02-19T08:41:24.773920Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=18874368 installed=18.00MB size=3.00MB done=false
+2025-02-19T08:41:25.059283Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=22020096 installed=21.00MB size=3.00MB done=false
+2025-02-19T08:41:25.349165Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=25165824 installed=24.00MB size=3.00MB done=false
+2025-02-19T08:41:25.633001Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=28311552 installed=27.00MB size=3.00MB done=false
+2025-02-19T08:41:25.907473Z  INFO tcp_network_service:tcp_read_loop{local=00-0000000000000001-00-000000000000 peer=00-0000000000000003-00-000000000000}:tcp_request_handler: asteroid_mq::protocol::node::raft::network_factory: installing snapshot offset=31457280 installed=30.00MB size=2.82MB done=true
+2025-02-19T08:41:25.913760Z  INFO asteroid_mq::protocol::node::raft::state_machine: decoding snapshot for installation snapshot_size=34419275 id=NodeId(00-0000000000000001-00-000000000000)
+2025-02-19T08:41:26.130610Z  INFO asteroid_mq::protocol::node::raft::state_machine: installed, ready to flush: NodeData {
+    topics: {
+        TopicCode(
+            b"events",
+        ): TopicData {
+            config: TopicConfig {
+                code: TopicCode(
+                    b"events",
+                ),
+                blocking: false,
+                overflow_config: Some(
+                    TopicOverflowConfig {
+                        policy: RejectNew,
+                        size: 99999,
+                    },
+                ),
+            },
+            ep_routing_table: {
+                NodeId(
+                    00-0000000000000002-00-000000000000,
+                ): {
+                    EndpointAddr(
+                        0000000067b5992b-00000000-f3f9a0cb,
+                    ),
+                },
+            },
+            ep_interest_map: InterestMap {
+                root: InterestRadixTreeNode {
+                    value: {},
+                    children: {
+                        "events": InterestRadixTreeNode {
+                            value: {},
+                            children: {
+                                "message": InterestRadixTreeNode {
+                                    value: {
+                                        EndpointAddr(
+                                            0000000067b5992b-00000000-f3f9a0cb,
+                                        ),
+                                    },
+                                    children: {},
+                                },
+                            },
+                        },
+                    },
+                },
+                raw: {
+                    EndpointAddr(
+                        0000000067b5992b-00000000-f3f9a0cb,
+                    ): {
+                        Interest(
+                            b"events/message",
+                        ),
+                    },
+                },
+            },
+            queue: MessageQueue {
+                blocking: false,
+                size: 1043,
+                hold_count: 1043,
+                resolved_count: 0,
+                pending_ack_count: 1005,
+            },
+        },
+    },
+} id=00-0000000000000001-00-000000000000
+2025-02-19T08:41:26.153315Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=100
+2025-02-19T08:41:26.156842Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=200
+2025-02-19T08:41:26.160067Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=300
+2025-02-19T08:41:26.162681Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=400
+2025-02-19T08:41:26.164755Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=500
+2025-02-19T08:41:26.168447Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=600
+2025-02-19T08:41:26.170363Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=700
+2025-02-19T08:41:27.860100Z  WARN openraft::replication: error replication to target=00-0000000000000001-00-000000000000 error=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:27.860165Z ERROR openraft::replication: RPCError err=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:27.860226Z  WARN openraft::replication: error replication to target=00-0000000000000002-00-000000000000 error=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000002-00-000000000000
+2025-02-19T08:41:27.860254Z ERROR openraft::replication: RPCError err=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000002-00-000000000000
+2025-02-19T08:41:27.861493Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=800
+2025-02-19T08:41:27.862682Z  WARN openraft::engine::handler::replication_handler: update progress error request_id=AppendEntries(11) result=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:27.863076Z  WARN openraft::engine::handler::replication_handler: update progress error request_id=AppendEntries(27) result=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000002-00-000000000000
+2025-02-19T08:41:27.866869Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=900
+2025-02-19T08:41:27.869055Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1000
+2025-02-19T08:41:27.874197Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1100
+2025-02-19T08:41:27.878758Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1200
+2025-02-19T08:41:27.880898Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1300
+2025-02-19T08:41:29.761825Z  WARN openraft::replication: error replication to target=00-0000000000000001-00-000000000000 error=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:29.761880Z ERROR openraft::replication: RPCError err=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:29.764121Z  WARN openraft::engine::handler::replication_handler: update progress error request_id=AppendEntries(13) result=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:29.782584Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1400
+2025-02-19T08:41:29.789004Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1500
+2025-02-19T08:41:29.793257Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1600
+2025-02-19T08:41:32.091683Z  WARN openraft::replication: error replication to target=00-0000000000000001-00-000000000000 error=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:32.091751Z ERROR openraft::replication: RPCError err=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:32.092577Z  WARN openraft::replication: error replication to target=00-0000000000000002-00-000000000000 error=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000002-00-000000000000
+2025-02-19T08:41:32.092606Z ERROR openraft::replication: RPCError err=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000002-00-000000000000
+2025-02-19T08:41:32.095475Z  WARN openraft::engine::handler::replication_handler: update progress error request_id=AppendEntries(15) result=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:32.095536Z  WARN openraft::engine::handler::replication_handler: update progress error request_id=AppendEntries(30) result=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000002-00-000000000000
+2025-02-19T08:41:32.113085Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1700
+2025-02-19T08:41:32.117768Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1800
+2025-02-19T08:41:32.122957Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=1900
+2025-02-19T08:41:33.314005Z  WARN openraft::replication: error replication to target=00-0000000000000001-00-000000000000 error=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:33.314059Z ERROR openraft::replication: RPCError err=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:33.317244Z  WARN openraft::engine::handler::replication_handler: update progress error request_id=AppendEntries(17) result=timeout after 500ms when AppendEntries 00-0000000000000003-00-000000000000->00-0000000000000001-00-000000000000
+2025-02-19T08:41:33.334242Z  INFO test_install_big_snapshot: ack: Ok(WaitAckSuccess { status: {EndpointAddr(0000000067b5992b-00000000-f3f9a0cb): Processed} }) count=2000
+2025-02-19T08:41:33.339639Z  INFO test_install_big_snapshot: recv all ack
+2025-02-19T08:41:33.591765Z  INFO test_install_big_snapshot: snapshot: NodeData {
+    topics: {
+        TopicCode(
+            b"events",
+        ): TopicData {
+            config: TopicConfig {
+                code: TopicCode(
+                    b"events",
+                ),
+                blocking: false,
+                overflow_config: Some(
+                    TopicOverflowConfig {
+                        policy: RejectNew,
+                        size: 99999,
+                    },
+                ),
+            },
+            ep_routing_table: {
+                NodeId(
+                    00-0000000000000002-00-000000000000,
+                ): {
+                    EndpointAddr(
+                        0000000067b5992b-00000000-f3f9a0cb,
+                    ),
+                },
+            },
+            ep_interest_map: InterestMap {
+                root: InterestRadixTreeNode {
+                    value: {},
+                    children: {
+                        "events": InterestRadixTreeNode {
+                            value: {},
+                            children: {
+                                "message": InterestRadixTreeNode {
+                                    value: {
+                                        EndpointAddr(
+                                            0000000067b5992b-00000000-f3f9a0cb,
+                                        ),
+                                    },
+                                    children: {},
+                                },
+                            },
+                        },
+                    },
+                },
+                raw: {
+                    EndpointAddr(
+                        0000000067b5992b-00000000-f3f9a0cb,
+                    ): {
+                        Interest(
+                            b"events/message",
+                        ),
+                    },
+                },
+            },
+            queue: MessageQueue {
+                blocking: false,
+                size: 1043,
+                hold_count: 1043,
+                resolved_count: 0,
+                pending_ack_count: 1005,
+            },
+        },
+    },
+}
+2025-02-19T08:41:34.595047Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connection dropped peer=00-0000000000000003-00-000000000000
+2025-02-19T08:41:34.595138Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connection dropped peer=00-0000000000000002-00-000000000000
+2025-02-19T08:41:34.599112Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connection dropped peer=00-0000000000000003-00-000000000000
+2025-02-19T08:41:34.599171Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connection dropped peer=00-0000000000000001-00-000000000000
+2025-02-19T08:41:34.600970Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connection dropped peer=00-0000000000000001-00-000000000000
+2025-02-19T08:41:34.601023Z  INFO tcp_network_service: asteroid_mq::protocol::node::raft::network_factory: connection dropped peer=00-0000000000000002-00-000000000000
+test test_install_big_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.36s
+

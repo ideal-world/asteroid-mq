@@ -146,6 +146,7 @@ name = "asteroid-mq"
 version = "0.1.0-alpha.11"
 dependencies = [
  "asteroid-mq-model",
+ "asteroid-mq-sdk",
  "axum",
  "base64 0.22.1",
  "bincode",

@@ -90,6 +90,26 @@ where
     }
 }
 
+pub struct MemUnit(pub usize);
+
+impl std::fmt::Display for MemUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let unit = ["", "B", "KB", "MB", "GB"];
+        let unit_base = [0, 1, 1 << 10, 1 << 20, 1 << 30];
+        let uint_index = unit_base
+            .iter()
+            .position(|&base| self.0 < base)
+            .unwrap_or(unit_base.len())
+            - 1;
+        let uint = unit[uint_index];
+        if self.0 == 0 {
+            write!(f, "0")
+        } else {
+            let value = self.0 as f64 / unit_base[uint_index] as f64;
+            write!(f, "{:.2}{}", value, uint)
+        }
+    }
+}
 pub fn executor_digest() -> u64 {
     thread_local! {
         static MACH_ID: std::cell::OnceCell<u64> = const { std::cell::OnceCell::new() };

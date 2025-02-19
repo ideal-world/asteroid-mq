@@ -1,3 +1,4 @@
+pub mod durable_message;
 pub mod edge;
 pub mod raft;
 use std::{
@@ -8,15 +9,13 @@ use std::{
     time::Duration,
 };
 
-use super::{
-    endpoint::EndpointAddr,
-    topic::{
-        durable_message::{DurableCommand, DurableMessageQuery},
-        Topic, TopicCode,
-    },
-};
+use durable_message::{DurableCommand, DurableMessageQuery};
+
 pub use asteroid_mq_model::NodeId;
-use asteroid_mq_model::{codec::BINCODE_CONFIG, connection::EdgeNodeConnection};
+use asteroid_mq_model::{
+    codec::BINCODE_CONFIG, connection::EdgeNodeConnection, EndpointAddr, Message, MessageId,
+    TopicCode,
+};
 use edge::{
     auth::EdgeAuthService,
     connection::{
@@ -32,9 +31,16 @@ use raft::{
     cluster::{ClusterProvider, ClusterService},
     log_storage::LogStorage,
     network_factory::TcpNetworkService,
-    proposal::{EndpointOffline, EndpointOnline, LoadTopic, Proposal},
+    proposal::{DelegateMessage, EndpointOffline, EndpointOnline, LoadTopic, Proposal},
     raft_node::TcpNode,
-    state_machine::{node::NodeData, topic::config::TopicConfig, StateMachineStore},
+    state_machine::{
+        node::NodeData,
+        topic::{
+            config::TopicConfig,
+            wait_ack::{AckSender, WaitAckHandle},
+        },
+        StateMachineStore,
+    },
     MaybeLoadingRaft, TypeConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -77,10 +83,14 @@ pub struct NodeInner {
 
     // May we delete this and access the node api from edge sdk with tokio channel socket connection?
     // #[deprecated]
-    topics: RwLock<HashMap<TopicCode, Topic>>,
+    // topics: RwLock<HashMap<TopicCode, Topic>>,
 
+    /// ack responser pool
+    pub(crate) ack_waiting_pool: Arc<tokio::sync::RwLock<HashMap<MessageId, AckSender>>>,
+
+    /// durable operation commands queue
     durable_commands_queue: std::sync::RwLock<VecDeque<DurableCommand>>,
-    /// ensure operations on the same topic are linearizable
+    /// ensure operations on the same topic are linearized
     pub(crate) durable_syncs: tokio::sync::Mutex<HashMap<TopicCode, Arc<tokio::sync::Mutex<()>>>>,
     /// time scheduler
     pub(crate) scheduler: tsuki_scheduler::AsyncSchedulerClient<tsuki_scheduler::runtime::Tokio>,
@@ -157,7 +167,7 @@ impl Node {
         let inner = NodeInner {
             edge_connections: RwLock::new(HashMap::new()),
             edge_routing: RwLock::new(HashMap::new()),
-            topics: RwLock::new(HashMap::new()),
+            // topics: RwLock::new(HashMap::new()),
             edge_handler: tokio::sync::RwLock::new(EdgeConnectionHandlerObject::basic()),
             config,
             raft,
@@ -165,6 +175,7 @@ impl Node {
             durable_commands_queue: Default::default(),
             durable_syncs: Default::default(),
             scheduler: scheduler_client,
+            ack_waiting_pool: Default::default(),
             ct,
         };
         Self {
@@ -335,7 +346,9 @@ impl Node {
             ))?;
         let leader = metric.current_leader.expect("leader should be elected");
         let this = self.id();
-        let client_write_result = if this == leader {
+        let is_leader = this == leader;
+        tracing::debug!(?proposal, is_leader, "trigger proposal");
+        let client_write_result = if is_leader {
             raft.client_write(proposal)
                 .await
                 .map_err(crate::Error::contextual_custom("client write"))?
@@ -386,6 +399,7 @@ impl Node {
         }
         Ok(peer)
     }
+    #[inline]
     pub fn id(&self) -> NodeId {
         self.config.id
     }
@@ -479,14 +493,8 @@ impl Node {
         match edge_request_kind {
             edge::EdgeRequestEnum::SendMessage(edge_message) => {
                 let (message, topic_code) = edge_message.into_message();
-                let Some(topic) = self.get_topic(&topic_code) else {
-                    return Err(EdgeError::new(
-                        format!("topic ${topic_code} not found"),
-                        EdgeErrorKind::TopicNotFound,
-                    ));
-                };
-                let handle = topic
-                    .send_message(message)
+                let handle = self
+                    .send_message(topic_code, message)
                     .map_err(|e| {
                         EdgeError::with_message(
                             "send message",
@@ -502,13 +510,14 @@ impl Node {
             }
             edge::EdgeRequestEnum::EndpointOnline(online) => {
                 let topic_code = online.topic_code.clone();
-                let topic = self.get_topic(&topic_code).ok_or_else(|| {
-                    EdgeError::new(
-                        format!("topic ${topic_code} not found"),
-                        EdgeErrorKind::TopicNotFound,
-                    )
-                })?;
-                let node = topic.node();
+
+                let Some(node) = self.node_ref().upgrade() else {
+                    return Err(EdgeError::with_message(
+                        "set state",
+                        "node dropped",
+                        EdgeErrorKind::Internal,
+                    ));
+                };
                 let endpoint = EndpointAddr::new_snowflake();
                 self.set_edge_routing(endpoint, from, topic_code.clone());
                 let result = node
@@ -532,13 +541,14 @@ impl Node {
             }
             edge::EdgeRequestEnum::EndpointOffline(offline) => {
                 let topic_code = offline.topic_code.clone();
-                let topic = self.get_topic(&topic_code).ok_or_else(|| {
-                    EdgeError::new(
-                        format!("topic ${topic_code} not found"),
-                        EdgeErrorKind::TopicNotFound,
-                    )
-                })?;
-                let node = topic.node();
+
+                let Some(node) = self.node_ref().upgrade() else {
+                    return Err(EdgeError::with_message(
+                        "set state",
+                        "node dropped",
+                        EdgeErrorKind::Internal,
+                    ));
+                };
                 self.check_ep_auth(&offline.endpoint, &from)?;
                 node.propose(Proposal::EpOffline(EndpointOffline {
                     topic_code: topic_code.clone(),
@@ -557,15 +567,13 @@ impl Node {
                 Ok(edge::EdgeResponseEnum::EndpointOffline)
             }
             edge::EdgeRequestEnum::EndpointInterest(interest) => {
-                let topic_code = interest.topic_code.clone();
-
-                let topic = self.get_topic(&topic_code).ok_or_else(|| {
-                    EdgeError::new(
-                        format!("topic ${topic_code} not found"),
-                        EdgeErrorKind::TopicNotFound,
-                    )
-                })?;
-                let node = topic.node();
+                let Some(node) = self.node_ref().upgrade() else {
+                    return Err(EdgeError::with_message(
+                        "set state",
+                        "node dropped",
+                        EdgeErrorKind::Internal,
+                    ));
+                };
                 self.check_ep_auth(&interest.endpoint, &from)?;
                 node.propose(Proposal::EpInterest(interest.clone()))
                     .await
@@ -579,14 +587,13 @@ impl Node {
                 Ok(edge::EdgeResponseEnum::EndpointInterest)
             }
             edge::EdgeRequestEnum::SetState(set_state) => {
-                let topic_code = set_state.topic.clone();
-                let topic = self.get_topic(&topic_code).ok_or_else(|| {
-                    EdgeError::new(
-                        format!("topic ${topic_code} not found"),
-                        EdgeErrorKind::TopicNotFound,
-                    )
-                })?;
-                let node = topic.node();
+                let Some(node) = self.node_ref().upgrade() else {
+                    return Err(EdgeError::with_message(
+                        "set state",
+                        "node dropped",
+                        EdgeErrorKind::Internal,
+                    ));
+                };
                 for ep in set_state.update.status.keys() {
                     self.check_ep_auth(ep, &from)?;
                 }
@@ -600,10 +607,6 @@ impl Node {
         }
     }
 
-    pub fn get_topic(&self, code: &TopicCode) -> Option<Topic> {
-        let topics = self.topics.read().unwrap();
-        topics.get(code).cloned()
-    }
     pub async fn is_leader(&self) -> bool {
         let raft = self.raft().await;
         raft.ensure_linearizable().await.is_ok()
@@ -621,33 +624,51 @@ impl Node {
         &self,
         config: C,
         queue: Vec<DurableMessage>,
-    ) -> Result<Topic, crate::Error> {
+    ) -> Result<(), crate::Error> {
         let config: TopicConfig = config.into();
-        let config_code = config.code.clone();
-        // check if topic already exists
-        {
-            let topics = self.topics.read().unwrap();
-            if topics.contains_key(&config_code) {
-                return Err(crate::Error::new(
-                    "topic already exists",
-                    crate::error::ErrorKind::TopicAlreadyExists,
-                ));
-            }
-        }
         tracing::info!(?config, "load_topic");
         self.propose(Proposal::LoadTopic(LoadTopic { config, queue }))
             .await?;
-        let topics = self.topics.read().unwrap();
-        let topic = topics
-            .get(&config_code)
-            .cloned()
-            .ok_or_else(|| crate::Error::unknown("topic proposal committed but still not found"))?;
-        Ok(topic)
+        Ok(())
     }
-    pub async fn create_new_topic<C: Into<TopicConfig>>(&self, config: C) -> crate::Result<Topic> {
+    pub async fn create_new_topic<C: Into<TopicConfig>>(&self, config: C) -> crate::Result<()> {
         self.load_topic(config, Vec::new()).await
     }
+    /// Create the wait handle of a specific message
+    pub(crate) async fn remove_wait_ack(&self, id: MessageId) {
+        self.ack_waiting_pool.write().await.remove(&id);
+    }
 
+    /// Create the wait handle of a specific message
+    pub async fn set_wait_ack(&self, id: MessageId) -> WaitAckHandle {
+        let (sender, handle) = WaitAckHandle::new(id);
+        self.ack_waiting_pool.write().await.insert(id, sender);
+        handle
+    }
+
+    /// Send a message out, and get a awaitable handle.
+    pub async fn send_message(
+        &self,
+        topic: TopicCode,
+        message: Message,
+    ) -> Result<WaitAckHandle, crate::Error> {
+        let id = message.id();
+        let source = self.id();
+        let handle = self.set_wait_ack(id).await;
+        let proposal_result = self
+            .propose(Proposal::DelegateMessage(DelegateMessage {
+                topic,
+                message,
+                source,
+            }))
+            .await;
+        if proposal_result.is_err() {
+            self.remove_wait_ack(id).await;
+            tracing::warn!(?proposal_result, "proposal error");
+            proposal_result?;
+        }
+        Ok(handle)
+    }
     pub async fn snapshot_data(&self) -> Result<NodeData, crate::Error> {
         let raft = self.raft().await;
         let mut snapshot = raft

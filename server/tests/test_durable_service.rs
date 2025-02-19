@@ -89,7 +89,7 @@ impl Durable for MemoryDurable {
     async fn batch_retrieve(
         &self,
         topic: TopicCode,
-        query: asteroid_mq::protocol::topic::durable_message::DurableMessageQuery,
+        query: asteroid_mq::prelude::DurableMessageQuery,
     ) -> Result<Vec<DurableMessage>, asteroid_mq::prelude::DurableError> {
         if let Some(queue) = self.messages.read().await.get(&topic) {
             Ok(queue
@@ -163,8 +163,9 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
     let service = DurableService::new(durable);
+    const TOPIC: TopicCode = TopicCode::const_new("test");
     let topic_config = TopicConfig {
-        code: "test".into(),
+        code: TOPIC,
         blocking: false,
         overflow_config: Some(asteroid_mq::prelude::TopicOverflowConfig {
             policy: asteroid_mq::prelude::TopicOverflowPolicy::RejectNew,
@@ -190,14 +191,17 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
     node.start(cluster.clone()).await?;
 
     node.load_from_durable_service().await?;
-    let topic = node.get_topic(&PRELOAD_TOPIC_CODE);
-    assert!(topic.is_some());
+    let edge_sender = asteroid_mq_sdk::ClientNode::connect_local_without_auth(node.clone())
+        .await
+        .unwrap();
     if let Some(durable) = &node.config().durable {
         durable.create_topic(topic_config.clone()).await?;
     }
-    let topic = node.create_new_topic(topic_config.clone()).await?;
+    node.create_new_topic(topic_config.clone()).await?;
 
-    let endpoint = topic.create_endpoint([Interest::new("event/**")]).await?;
+    let mut endpoint = edge_sender
+        .create_endpoint(TOPIC, [Interest::new("event/**")])
+        .await?;
     tokio::spawn(async move {
         while let Some(message) = endpoint.next_message().await {
             tracing::info!(?message);
@@ -212,9 +216,11 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
             .build(),
         "hello",
     );
-    let handle = topic.send_message(message).await?;
+    let handle = node.send_message("test".into(), message).await?;
     tracing::info!("now create a newly joined endpoint");
-    let newly_joined_endpoint = topic.create_endpoint([Interest::new("event/**")]).await?;
+    let mut newly_joined_endpoint = edge_sender
+        .create_endpoint(TOPIC, [Interest::new("event/**")])
+        .await?;
     let pushed_message = newly_joined_endpoint.next_message().await;
     assert!(pushed_message.is_some());
     // wait for expire
@@ -249,13 +255,17 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
             .build(),
         "test durable message with processed exception",
     );
-    let handle = topic.send_message(message).await?;
-    let endpoint = topic.create_endpoint([Interest::new(subject)]).await?;
-    let s = endpoint.next_message().await.unwrap();
-    endpoint.ack_failed(&s.header).await?;
-    let endpoint = topic.create_endpoint([Interest::new(subject)]).await?;
-    let s = endpoint.next_message().await.unwrap();
-    endpoint.ack_processed(&s.header).await?;
+    let handle = node.send_message("test".into(), message).await?;
+    let mut endpoint = edge_sender
+        .create_endpoint(TOPIC, [Interest::new(subject)])
+        .await?;
+    let message = endpoint.next_message().await.unwrap();
+    message.ack_failed().await?;
+    let mut endpoint = edge_sender
+        .create_endpoint(TOPIC, [Interest::new(subject)])
+        .await?;
+    let message = endpoint.next_message().await.unwrap();
+    message.ack_processed().await?;
     let result = handle.await.unwrap();
     tracing::info!(?result, "wait ack success");
     Ok(())

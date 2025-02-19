@@ -1,15 +1,13 @@
 use std::any::TypeId;
 use std::{borrow::Cow, collections::HashMap, future::Future, sync::Arc};
 
+use asteroid_mq_model::{EndpointAddr, MessageStateUpdate, TopicCode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::message::*;
-use crate::protocol::{
-    endpoint::EndpointAddr, node::raft::state_machine::topic::config::TopicConfig,
-};
+use crate::protocol::node::raft::state_machine::topic::config::TopicConfig;
 
-use super::{MessageStateUpdate, TopicCode};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurableMessage {
     pub message: Message,
@@ -213,12 +211,11 @@ pub trait Durable: Send + Sync + 'static {
 mod sealed {
     use std::{future::Future, pin::Pin};
 
+    use asteroid_mq_model::MessageStateUpdate;
+
     use crate::{
         prelude::TopicCode,
-        protocol::{
-            message::*, node::raft::state_machine::topic::config::TopicConfig,
-            topic::MessageStateUpdate,
-        },
+        protocol::{message::*, node::raft::state_machine::topic::config::TopicConfig},
     };
 
     use super::{Durable, DurableError, DurableMessage, DurableMessageQuery};

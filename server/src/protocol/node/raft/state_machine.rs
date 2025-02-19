@@ -18,11 +18,8 @@ use openraft::{
 use tokio::sync::RwLock;
 
 use crate::{
-    prelude::{NodeId, Topic},
-    protocol::{
-        node::{raft::proposal::ProposalContext, NodeRef},
-        topic::TopicInner,
-    },
+    prelude::NodeId,
+    protocol::node::{raft::proposal::ProposalContext, NodeRef},
 };
 
 use super::{raft_node::TcpNode, response::RaftResponse, TypeConfig};
@@ -93,7 +90,6 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<StateMachineStore> {
         // Lock the current snapshot before releasing the lock on the state machine, to avoid a race
         // condition on the written snapshot
         let mut current_snapshot = self.current_snapshot.write().await;
-        drop(state_machine);
 
         let snapshot_idx = self.snapshot_idx.fetch_add(1, Ordering::Relaxed) + 1;
         let snapshot_id = if let Some(last) = last_applied_log {
@@ -113,6 +109,7 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<StateMachineStore> {
             data: snapshot,
         };
         *current_snapshot = Some(stored);
+        drop(state_machine);
         Ok(Snapshot {
             meta,
             snapshot: Box::new(Cursor::new(bytes)),
@@ -140,7 +137,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
             state_machine.last_membership.clone(),
         ))
     }
-
+    #[tracing::instrument(name = "apply", skip_all)]
     async fn apply<I>(
         &mut self,
         entries: I,
@@ -202,6 +199,12 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
                             sm.node.apply_ep_interest(ep_interest.clone(), context);
                             res.push(RaftResponse { result: Ok(()) })
                         }
+                        crate::protocol::node::raft::proposal::Proposal::AckFinished(
+                            ack_finished,
+                        ) => {
+                            sm.node.apply_ack_finished(ack_finished.clone(), context);
+                            res.push(RaftResponse { result: Ok(()) })
+                        }
                     }
                 }
                 EntryPayload::Membership(ref mem) => {
@@ -219,8 +222,8 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         Box<<TypeConfig as RaftTypeConfig>::SnapshotData>,
         StorageError<<TypeConfig as RaftTypeConfig>::NodeId>,
     > {
-        // 1 Mb
-        const SNAPSHOT_DEFAULT_CAPACITY: usize = 1 << 20;
+        // 3 Mb
+        const SNAPSHOT_DEFAULT_CAPACITY: usize = 3 * (1 << 20);
         tracing::info!("begin receiving snapshot");
         Ok(Box::new(Cursor::new(Vec::with_capacity(
             SNAPSHOT_DEFAULT_CAPACITY,
@@ -255,19 +258,26 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         >,
         mut snapshot: Box<<TypeConfig as RaftTypeConfig>::SnapshotData>,
     ) -> Result<(), StorageError<<TypeConfig as RaftTypeConfig>::NodeId>> {
+        let Some(node) = self.node_ref.upgrade() else {
+            return Ok(());
+        };
+
+        let id = node.id();
+
         tracing::info!(
-            { snapshot_size = snapshot.get_ref().len(), meta= ?meta },
+            { snapshot_size = snapshot.get_ref().len(), ?id },
             "decoding snapshot for installation"
         );
-        let new_data: NodeData =
-            bincode::serde::decode_from_std_read::<NodeData, _, _>(&mut snapshot, BINCODE_CONFIG)
+        let (new_data, size) =
+            bincode::serde::decode_from_slice::<NodeData, _>(snapshot.get_ref(), BINCODE_CONFIG)
                 .map_err(|e| {
-                StorageError::from_io_error(
-                    openraft::ErrorSubject::Snapshot(None),
-                    openraft::ErrorVerb::Read,
-                    io::Error::other(e),
-                )
-            })?;
+                    StorageError::from_io_error(
+                        openraft::ErrorSubject::Snapshot(None),
+                        openraft::ErrorVerb::Read,
+                        io::Error::new(io::ErrorKind::InvalidData, e),
+                    )
+                })?;
+        snapshot.set_position(size as u64);
         let new_snapshot = StoredSnapshot {
             meta: meta.clone(),
             data: new_data.clone(),
@@ -280,37 +290,24 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         state_machine.last_applied_log = new_snapshot.meta.last_log_id;
         state_machine.node = new_data;
 
-        // Apply the side effects
-        self.sync_node_from_snapshot(&state_machine.node);
+        // flush, we can do this for it's immutable
+        tracing::info!(%id, "installed, ready to flush: {:#?}", state_machine.node);
+        for (topic_code, topic) in &mut state_machine.node.topics {
+            topic.queue.flush_ack(&mut ProposalContext {
+                node: node.clone(),
+                topic_code: Some(topic_code.clone()),
+            });
+        }
+
         // Lock the current snapshot before releasing the lock on the state machine, to avoid a race
         // condition on the written snapshot
         let mut current_snapshot = self.current_snapshot.write().await;
-        drop(state_machine);
 
         // Update current snapshot.
         *current_snapshot = Some(new_snapshot);
-        Ok(())
-    }
-}
+        drop(current_snapshot);
+        drop(state_machine);
 
-impl StateMachineStore {
-    pub fn sync_node_from_snapshot(&self, data: &NodeData) {
-        let Some(node) = self.node_ref.upgrade() else {
-            return;
-        };
-        let mut topic_write_wg = node.topics.write().unwrap();
-        for code in data.topics.keys() {
-            topic_write_wg.insert(
-                code.clone(),
-                Topic {
-                    inner: Arc::new(TopicInner {
-                        code: code.clone(),
-                        node: node.clone(),
-                        ack_waiting_pool: Default::default(),
-                        local_endpoints: Default::default(),
-                    }),
-                },
-            );
-        }
+        Ok(())
     }
 }

@@ -3,20 +3,19 @@ use std::{
     task::Poll,
 };
 
-use asteroid_mq_model::WaitAckErrorException;
+use asteroid_mq_model::{EndpointAddr, NodeId, WaitAckErrorException};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     prelude::DurableMessage,
     protocol::{
-        endpoint::EndpointAddr,
         message::*,
+        node::durable_message::DurableCommand,
         node::raft::{
             proposal::ProposalContext,
             state_machine::topic::wait_ack::{WaitAckError, WaitAckSuccess},
         },
-        topic::durable_message::DurableCommand,
     },
     util::Timed,
 };
@@ -129,6 +128,8 @@ pub(crate) struct MessageQueue {
     pub(crate) time_id: BTreeSet<Timed<MessageId>>,
     pub(crate) id_time: HashMap<MessageId, DateTime<Utc>>,
     pub(crate) resolved: HashMap<MessageId, Result<(), WaitAckErrorException>>,
+    pub(crate) pending_ack: HashMap<MessageId, WaitAckResult>,
+    pub(crate) ack_handle_location: HashMap<NodeId, HashSet<MessageId>>,
     pub(crate) size: usize,
 }
 
@@ -139,6 +140,7 @@ impl std::fmt::Debug for MessageQueue {
             .field("size", &self.size)
             .field("hold_count", &self.hold_messages.len())
             .field("resolved_count", &self.resolved.len())
+            .field("pending_ack_count", &self.pending_ack.len())
             .finish()
     }
 }
@@ -152,15 +154,21 @@ impl MessageQueue {
             time_id: BTreeSet::new(),
             resolved: HashMap::with_capacity(capacity),
             id_time: HashMap::with_capacity(capacity),
+            pending_ack: HashMap::new(),
+            ack_handle_location: HashMap::new(),
             size: 0,
         }
     }
-    pub(crate) fn push(&mut self, message: HoldMessage) {
+    pub(crate) fn push(&mut self, message: HoldMessage, source: NodeId) {
         let message_id = message.message.header.message_id;
         let time = Utc::now();
         self.hold_messages.insert(message_id, message);
         self.time_id.insert(Timed::new(time, message_id));
         self.id_time.insert(message_id, time);
+        self.ack_handle_location
+            .entry(source)
+            .or_default()
+            .insert(message_id);
         self.size += 1;
     }
     pub(crate) fn push_durable_message(
@@ -313,6 +321,22 @@ impl MessageQueue {
             None
         }
     }
+    pub(crate) fn finish_ack(&mut self, message_id: MessageId) {
+        self.pending_ack.remove(&message_id);
+        self.ack_handle_location.iter_mut().for_each(|(_node, s)| {
+            s.remove(&message_id);
+        });
+    }
+    pub(crate) fn flush_ack(&self, context: &mut ProposalContext) {
+        let local_node_id = context.node.id();
+        for (id, result) in &self.pending_ack {
+            if let Some(message_id_set) = self.ack_handle_location.get(&local_node_id) {
+                if message_id_set.contains(id) {
+                    context.resolve_ack(*id, result.clone());
+                }
+            }
+        }
+    }
     pub(crate) fn flush(
         &mut self,
         reachable_eps: &HashSet<EndpointAddr>,
@@ -324,22 +348,26 @@ impl MessageQueue {
                 let id = m.message.id();
                 let is_durable = m.message.header.is_durable();
                 let result = m.resolve(result.err());
-                context.resolve_ack(id, result);
+                self.pending_ack.insert(id, result);
                 if is_durable {
                     context.push_durable_command(DurableCommand::Archive(id));
                 }
             }
         } else {
-            for (id, result) in self.swap_out_resolved() {
+            let resolved = self.swap_out_resolved();
+            for (id, result) in resolved {
                 if let Some(m) = self.remove(id) {
                     let is_durable = m.message.header.is_durable();
                     let result = m.resolve(result.err());
-                    context.resolve_ack(id, result);
+                    self.pending_ack.insert(id, result);
                     if is_durable {
                         context.push_durable_command(DurableCommand::Archive(id));
                     }
+                } else {
+                    tracing::warn!(id = %id, "message not found");
                 }
             }
         }
+        self.flush_ack(context);
     }
 }
