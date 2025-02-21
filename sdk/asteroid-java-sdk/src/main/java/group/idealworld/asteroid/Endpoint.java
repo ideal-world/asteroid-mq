@@ -146,6 +146,12 @@ public class Endpoint implements AutoCloseable {
     }
   }
 
+  /**
+   * Get next message from message queue
+   * 
+   * @return Optional<EndpointReceivedMessage> if return empty, it means the
+   *         endpoint is closed
+   */
   public Optional<EndpointReceivedMessage> nextMessage() {
     try {
       Types.Message message = messageQueue.take();
@@ -161,7 +167,7 @@ public class Endpoint implements AutoCloseable {
 
   @Override
   public void close() {
-    closeEndpoint();
+    closeEndpoint().run();
   }
 
   protected Thread closeEndpoint() {
@@ -169,12 +175,16 @@ public class Endpoint implements AutoCloseable {
       try {
         node.sendEndpointsOffline(new Types.EdgeEndpointOffline(topic, address));
         node.getEndpoints().remove(address);
-        messageQueue.put(new Types.PoisonMessage());
+        forceCloseEndpoint();
         log.info("[Endpoint offline] topic:{},address:{}", topic, address);
       } catch (InterruptedException e) {
         log.error("[Endpoint offline] topic:{},address:{},error:{}", topic, address, e);
       }
     });
+  }
+
+  protected void forceCloseEndpoint() throws InterruptedException {
+    messageQueue.put(new Types.PoisonMessage());
   }
 
 }

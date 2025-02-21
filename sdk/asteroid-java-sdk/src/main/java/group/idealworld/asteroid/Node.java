@@ -129,6 +129,7 @@ public class Node implements AutoCloseable {
         public void onOpen(ServerHandshake handshakedata) {
           node.setAlive(true);
           node.socketConnectLatch.countDown();
+          log.info("[Node] socket onOpen");
         }
 
         public void onMessage(ByteBuffer bytes) {
@@ -186,14 +187,15 @@ public class Node implements AutoCloseable {
         public void onClose(int code, String reason, boolean remote) {
           node.setAlive(false);
           node.socketConnectLatch.countDown();
+          log.info("[Node] socket onClose");
         }
 
         @Override
         public void onError(Exception ex) {
-          this.close();
+          node.errorClose();
           node.setAlive(false);
           node.socketConnectLatch.countDown();
-          log.warn("socket onError", ex);
+          log.warn("[Node] onError", ex);
           onError.ifPresent(fn -> fn.apply(ex));
         }
       };
@@ -325,5 +327,15 @@ public class Node implements AutoCloseable {
       }
     }
     socket.close();
+  }
+
+  public void errorClose() {
+    try {
+      for (Endpoint ep : this.endpoints.values()) {
+        ep.forceCloseEndpoint();
+      }
+    } catch (InterruptedException e) {
+      log.error("[Node errorClose] error", e);
+    }
   }
 }
