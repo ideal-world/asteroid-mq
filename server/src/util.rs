@@ -3,6 +3,8 @@ use std::hash::Hash;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+
+/// A data with utc time
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timed<T> {
     pub time: DateTime<Utc>,
@@ -44,5 +46,3 @@ pub fn hash64<T: Hash>(value: &T) -> u64 {
     value.hash(&mut hasher);
     Hasher::finish(&hasher)
 }
-
-pub use asteroid_mq_model::MaybeBase64Bytes;

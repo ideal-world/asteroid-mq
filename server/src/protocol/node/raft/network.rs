@@ -47,6 +47,27 @@ pub(super) enum Response {
         >,
     ),
 }
+
+impl Response {
+    #[tracing::instrument(skip_all)]
+    pub(crate) fn panic_when_fatal(&self) {
+        let fatal = match self {
+            Response::Vote(Err(RaftError::Fatal(f))) => f,
+            Response::AppendEntries(Err(RaftError::Fatal(f))) => f,
+            Response::InstallSnapshot(Err(RaftError::Fatal(f))) => f,
+            Response::Proposal(Err(RaftError::Fatal(f))) => f,
+            _ => {
+                return;
+            }
+        };
+        tracing::error!(?fatal, "⚠⚠⚠ FATAL ⚠⚠⚠");
+
+        panic!(
+            "encounter an unrecoverable error, panic to prevent further damage: {}",
+            fatal
+        );
+    }
+}
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) enum Payload {
     Request(Request),

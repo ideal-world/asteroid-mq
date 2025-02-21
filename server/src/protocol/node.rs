@@ -273,7 +273,7 @@ impl Node {
     /// load existed topic from durable service
     #[tracing::instrument(skip_all)]
     pub async fn load_from_durable_service(&self) -> Result<(), crate::Error> {
-        const PAGE_SIZE: u32 = 100;
+        const PAGE_SIZE: u32 = 1000;
         let Some(durable) = self.config.durable.as_ref().cloned() else {
             return Ok(());
         };
@@ -300,8 +300,10 @@ impl Node {
                     let page_len = page.len();
                     queue.extend(page);
                     if page_len < PAGE_SIZE as usize {
+                        tracing::info!(size = ?queue.len(), "message chunk loading finished");
                         break;
                     } else {
+                        tracing::info!(size = ?queue.len(), "message chunk loaded");
                         query = query.next_page()
                     }
                 }

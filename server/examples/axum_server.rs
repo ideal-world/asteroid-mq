@@ -18,7 +18,7 @@ use std::task::ready;
 use futures_util::{Sink, Stream};
 
 use asteroid_mq::{
-    prelude::{Node, NodeConfig, NodeId, TopicCode},
+    prelude::{Node, NodeConfig, NodeId, TopicCode, TopicConfig, TopicOverflowConfig},
     protocol::node::{
         edge::{
             connection::{EdgeConnectionError, EdgeConnectionErrorKind},
@@ -254,7 +254,12 @@ async fn main() -> asteroid_mq::Result<()> {
         node.start(cluster_provider).await?;
     };
     node.wait_for_leader().await?;
-    node.create_new_topic(TopicCode::const_new("test")).await?;
+    node.create_new_topic(TopicConfig {
+        code: TopicCode::const_new("test"),
+        blocking: false,
+        overflow_config: Some(TopicOverflowConfig::new_reject_new(1_000_000)),
+    })
+    .await?;
     use axum::serve;
     let http_tcp_listener = tokio::net::TcpListener::bind("localhost:8080")
         .await

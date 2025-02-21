@@ -154,8 +154,8 @@ impl MessageQueue {
             time_id: BTreeSet::new(),
             resolved: HashMap::with_capacity(capacity),
             id_time: HashMap::with_capacity(capacity),
-            pending_ack: HashMap::new(),
-            ack_handle_location: HashMap::new(),
+            pending_ack: HashMap::with_capacity(capacity),
+            ack_handle_location: HashMap::with_capacity(capacity),
             size: 0,
         }
     }

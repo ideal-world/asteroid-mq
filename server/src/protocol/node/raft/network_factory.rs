@@ -42,8 +42,8 @@ pub struct TcpNetworkService {
 //     api: tokio::sync::mpsc::UnboundedSender<TcpNetworkServiceRequest>,
 // }
 
-/// 4KB for each connection, this should be enough
-const BUFFER_CAPACITY: usize = 4096;
+/// 16MB for each connection, this should be enough
+const DEFAULT_BUFFER_SIZE: usize = 1024 * 1024 * 16;
 #[derive(Debug)]
 
 pub struct GetConnection {
@@ -442,7 +442,7 @@ impl RaftTcpConnection {
             let packet_tx = packet_tx.clone();
             let alive = alive.clone();
             let inner_task = async move {
-                let mut buffer = Vec::with_capacity(BUFFER_CAPACITY);
+                let mut buffer = Vec::with_capacity(DEFAULT_BUFFER_SIZE);
                 loop {
                     let seq_id = tokio::select! {
                         seq_id = read.read_u64() => {
@@ -501,6 +501,9 @@ impl RaftTcpConnection {
                                             Response::Proposal(raft.client_write(proposal).await)
                                         }
                                     };
+                                    
+                                    resp.panic_when_fatal();
+                                    
                                     let payload = Payload::Response(resp);
                                     let _ = packet_tx.send(Packet { seq_id, payload }).await;
                                 }
