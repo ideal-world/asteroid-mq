@@ -66,6 +66,17 @@ impl TopicData {
         source: NodeId,
         ctx: &mut ProposalContext,
     ) {
+        let max_payload_size = self.config.max_payload_size as usize;
+        if message.payload.0.len() >= max_payload_size {
+            ctx.resolve_ack(
+                message.id(),
+                Err(WaitAckError::exception(
+                    WaitAckErrorException::PayloadToLarge,
+                )),
+            );
+            return;
+        }
+
         let message_id = message.id();
         let ep_collect = match message.header.target_kind {
             MessageTargetKind::Durable | MessageTargetKind::Online => {

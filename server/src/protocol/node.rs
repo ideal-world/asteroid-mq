@@ -494,6 +494,7 @@ impl Node {
         match edge_request_kind {
             edge::EdgeRequestEnum::SendMessage(edge_message) => {
                 let (message, topic_code) = edge_message.into_message();
+                
                 let handle = self
                     .send_message(topic_code, message)
                     .map_err(|e| {

@@ -103,6 +103,7 @@ pub enum WaitAckErrorException {
     NoAvailableTarget = 2,
     DurableMessageWithoutConfig = 3,
     DurableMessageExpired = 4,
+    PayloadToLarge = 5,
 }
 
 pub enum AckWaitErrorKind {
