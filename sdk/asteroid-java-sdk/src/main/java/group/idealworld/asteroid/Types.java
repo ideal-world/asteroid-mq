@@ -921,7 +921,7 @@ public class Types {
     }
   }
 
-  /// Poison pill message, used to close node
+  /// Poison pill message, used to close endpoint
   public static class PoisonMessage extends Message {
 
   }

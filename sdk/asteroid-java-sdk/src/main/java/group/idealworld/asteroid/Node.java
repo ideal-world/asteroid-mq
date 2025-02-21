@@ -192,7 +192,7 @@ public class Node implements AutoCloseable {
 
         @Override
         public void onError(Exception ex) {
-          this.close();
+          node.errorClose();
           node.setAlive(false);
           node.socketConnectLatch.countDown();
           log.warn("[Node] onError", ex);
@@ -327,5 +327,15 @@ public class Node implements AutoCloseable {
       }
     }
     socket.close();
+  }
+
+  public void errorClose() {
+    try {
+      for (Endpoint ep : this.endpoints.values()) {
+        ep.forceCloseEndpoint();
+      }
+    } catch (InterruptedException e) {
+      log.error("[Node errorClose] error", e);
+    }
   }
 }
