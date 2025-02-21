@@ -185,6 +185,7 @@ public class Node implements AutoCloseable {
 
         @Override
         public void onClose(int code, String reason, boolean remote) {
+          node.closeEndpointsOnNodeDisconnected();
           node.setAlive(false);
           node.socketConnectLatch.countDown();
           log.info("[Node] socket onClose");
@@ -192,7 +193,7 @@ public class Node implements AutoCloseable {
 
         @Override
         public void onError(Exception ex) {
-          node.errorClose();
+          node.closeEndpointsOnNodeDisconnected();
           node.setAlive(false);
           node.socketConnectLatch.countDown();
           log.warn("[Node] onError", ex);
@@ -329,13 +330,18 @@ public class Node implements AutoCloseable {
     socket.close();
   }
 
-  public void errorClose() {
+  /**
+   * Close all endpoints locally when node connection is lost unexpectedly.
+   * This method is called when the node connection is broken,
+   * so it skips server notification and only closes endpoints locally.
+   */
+  public void closeEndpointsOnNodeDisconnected() {
     try {
       for (Endpoint ep : this.endpoints.values()) {
-        ep.forceCloseEndpoint();
+        ep.closeEndpointLocally();
       }
     } catch (InterruptedException e) {
-      log.error("[Node errorClose] error", e);
+      log.error("[Node closeEndpointsOnNodeDisconnected] error", e);
     }
   }
 }
