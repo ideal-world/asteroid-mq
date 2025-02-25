@@ -170,12 +170,19 @@ public class Endpoint implements AutoCloseable {
     closeEndpoint().run();
   }
 
+  /**
+   * Close endpoint with server notification.
+   * This method should be called when the node connection is still alive,
+   * as it needs to send offline message to server.
+   * 
+   * @return Thread handling the close operation
+   */
   protected Thread closeEndpoint() {
     return Thread.ofVirtual().name("close-endpoint-thread").start(() -> {
       try {
         node.sendEndpointsOffline(new Types.EdgeEndpointOffline(topic, address));
         node.getEndpoints().remove(address);
-        forceCloseEndpoint();
+        closeEndpointLocally();
         log.info("[Endpoint offline] topic:{},address:{}", topic, address);
       } catch (InterruptedException e) {
         log.error("[Endpoint offline] topic:{},address:{},error:{}", topic, address, e);
@@ -183,7 +190,14 @@ public class Endpoint implements AutoCloseable {
     });
   }
 
-  protected void forceCloseEndpoint() throws InterruptedException {
+  /**
+   * Close endpoint locally without server notification.
+   * This method is called when the node is already disconnected
+   * or after server notification has been sent.
+   * 
+   * @throws InterruptedException if interrupted while putting poison message
+   */
+  protected void closeEndpointLocally() throws InterruptedException {
     messageQueue.put(new Types.PoisonMessage());
   }
 
