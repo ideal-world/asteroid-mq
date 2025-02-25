@@ -11,7 +11,7 @@ pub struct HelloMessage {
     pub message: String,
 }
 const CODEC: &str = "bincode";
-const SIZE: usize = 5_000;
+const SIZE: usize = 50_000;
 fn get_codec() -> DynCodec {
     let codec_kind = CODEC.parse::<CodecKind>().unwrap();
     DynCodec::form_kind(codec_kind).unwrap()
@@ -31,30 +31,32 @@ async fn test_million_messages() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     if std::env::var("K8S_PROVIDER").is_err() {
-        let build_serve_result = tokio::process::Command::new("cargo")
-            .arg("build")
-            .arg("-p")
-            .arg("asteroid-mq")
-            .arg("--example")
-            .arg("axum-server")
-            .arg("--features")
-            .arg("cluster-k8s")
-            .spawn()?
-            .wait()
-            .await?;
-        if !build_serve_result.success() {
-            return Err("Failed to build axum-server example".into());
-        }
-        let _server_process = tokio::process::Command::new("cargo")
-            .arg("run")
-            .arg("-p")
-            .arg("asteroid-mq")
-            .arg("--example")
-            .arg("axum-server")
-            .arg("--features")
-            .arg("cluster-k8s")
-            .spawn()?;
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        // let build_serve_result = tokio::process::Command::new("cargo")
+        //     .arg("build")
+        //     .arg("-p")
+        //     .arg("asteroid-mq")
+        //     .arg("--example")
+        //     .arg("axum-server")
+        //     .arg("--features")
+        //     .arg("cluster-k8s")
+        //     .arg("--release")
+        //     .spawn()?
+        //     .wait()
+        //     .await?;
+        // if !build_serve_result.success() {
+        //     return Err("Failed to build axum-server example".into());
+        // }
+        // let _server_process = tokio::process::Command::new("cargo")
+        //     .arg("run")
+        //     .arg("-p")
+        //     .arg("asteroid-mq")
+        //     .arg("--example")
+        //     .arg("axum-server")
+        //     .arg("--features")
+        //     .arg("cluster-k8s")
+        //     .arg("--release")
+        //     .spawn()?;
+        // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
     let url_a = get_ws_url().await?;
     let url_b = get_ws_url().await?;
@@ -62,9 +64,6 @@ async fn test_million_messages() -> Result<(), Box<dyn std::error::Error>> {
     let node_b = ClientNode::connect_ws2(url_b, get_codec()).await?;
     const TOPIC_CODE: TopicCode = TopicCode::const_new("test");
     const SUBJECT: Subject = Subject::const_new("event/millions-must-send");
-    fn message(message: &'static str) -> EdgeMessage {
-        EdgeMessage::builder(TOPIC_CODE, [SUBJECT], message).build()
-    }
 
     let mut endpoint_b = node_b
         .create_endpoint(TOPIC_CODE, [Interest::new("event/*")])
@@ -74,14 +73,33 @@ async fn test_million_messages() -> Result<(), Box<dyn std::error::Error>> {
         .update_interests([Interest::new("event/*")])
         .await?;
     let recv_task = tokio::spawn(async move {
+        let mut ack_join_set = tokio::task::JoinSet::new();
+        let mut recv_count = 0;
         while let Some(message) = endpoint_b.next_message().await {
-            tracing::info!("Received message in b1: {:?}", &message.payload.0);
-            let _result = message.ack_processed().await;
+            recv_count += 1;
+            if recv_count % (SIZE / 10) == 0 {
+                tracing::info!("recv {recv_count} message");
+            }
+            ack_join_set.spawn(async move {
+                let result = message.ack_processed().await;
+                if result.is_err() {
+                    tracing::error!(?result);
+                }
+            });
+            if recv_count == SIZE {
+                break;
+            }
         }
+        tracing::info!("message sent finished, wait for ack finished");
+        let mut join_count = 0;
+        while let Some(_result) = ack_join_set.join_next().await {
+            join_count += 1;
+            if join_count % (SIZE / 10) == 0 {
+                tracing::info!("join {join_count} message");
+            }
+        }
+        tracing::info!("waiting ack finished")
     });
-    node_a.send_message(message("world")).await?;
-    node_a.send_message(message("alice")).await?;
-    node_a.send_message(message("bob")).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     let mut send_task_set = tokio::task::JoinSet::new();
     for _ in 0..SIZE {
@@ -104,7 +122,7 @@ async fn test_million_messages() -> Result<(), Box<dyn std::error::Error>> {
 
     send_task_set.join_all().await;
 
-    drop(node_b);
     recv_task.await?;
+    drop(node_b);
     Ok(())
 }

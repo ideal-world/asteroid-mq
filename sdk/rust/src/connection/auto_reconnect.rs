@@ -198,9 +198,18 @@ where
                 return std::task::Poll::Pending;
             }
         }
-        ready!(self.as_mut().poll_reconnecting(cx)?);
-        let this = self.project();
-        this.connection.poll_next(cx)
+        let mut this = self.project();
+        let poll_next_result = ready!(this.connection.as_mut().poll_next(cx)?);
+        if poll_next_result.is_none() {
+            // if the connection is closed, reconnect
+            let reconnect_future = this.connection.reconnect();
+            this.reconnect_status.set(ReconnectStatus::Reconnecting {
+                future: reconnect_future,
+            });
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(poll_next_result.map(Ok))
+        }
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.connection.size_hint()

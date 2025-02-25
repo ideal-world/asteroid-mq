@@ -7,7 +7,7 @@ use std::{
 use asteroid_mq::{
     prelude::{
         Durable, DurableMessage, DurableService, Interest, Message, MessageHeader, MessageId, Node,
-        NodeConfig, NodeId, Subject, TopicCode, TopicConfig,
+        NodeConfig, NodeId, Subject, TopicCode, TopicConfig, MB,
     },
     DEFAULT_TCP_SOCKET_ADDR,
 };
@@ -131,7 +131,7 @@ impl Durable for MemoryDurable {
             .collect::<Vec<_>>())
     }
 }
-
+const PRELOAD_COUNT: usize = 10000;
 #[tokio::test]
 async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
@@ -140,7 +140,7 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
                 tracing_subscriber::filter::EnvFilter::from_default_env()
                     .add_directive(tracing_subscriber::filter::Directive::from_str("info").unwrap())
                     .add_directive(
-                        tracing_subscriber::filter::Directive::from_str("asteroid_mq=debug")
+                        tracing_subscriber::filter::Directive::from_str("asteroid_mq=info")
                             .unwrap(),
                     )
                     .add_directive(
@@ -158,9 +158,32 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
             blocking: false,
             overflow_config: Some(asteroid_mq::prelude::TopicOverflowConfig {
                 policy: asteroid_mq::prelude::TopicOverflowPolicy::RejectNew,
-                size: std::num::NonZeroU32::new(500).unwrap(),
+                size: std::num::NonZeroU32::new(50000).unwrap(),
             }),
+            max_payload_size: 16 * MB as u32,
         },
+    );
+    durable.messages.write().await.insert(
+        PRELOAD_TOPIC_CODE,
+        BTreeMap::from_iter((0..PRELOAD_COUNT).map(|i| {
+            let message = Message::new(
+                MessageHeader::builder([Subject::new("preload")])
+                    .mode_durable(MessageDurableConfig {
+                        expire: Utc::now() + chrono::Duration::hours(1),
+                        max_receiver: Some(1),
+                    })
+                    .build(),
+                format!("message {}", i),
+            );
+            (
+                message.id(),
+                DurableMessage {
+                    message,
+                    status: Default::default(),
+                    time: Utc::now(),
+                },
+            )
+        })),
     );
     let service = DurableService::new(durable);
     const TOPIC: TopicCode = TopicCode::const_new("test");
@@ -171,6 +194,7 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
             policy: asteroid_mq::prelude::TopicOverflowPolicy::RejectNew,
             size: std::num::NonZeroU32::new(500).unwrap(),
         }),
+        max_payload_size: 16 * MB as u32,
     };
     let cluster = common::TestClusterProvider::new(
         map!(
@@ -191,9 +215,29 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
     node.start(cluster.clone()).await?;
 
     node.load_from_durable_service().await?;
+
     let edge_sender = asteroid_mq_sdk::ClientNode::connect_local_without_auth(node.clone())
         .await
         .unwrap();
+
+    // receive all the preload messages
+    let mut preload_receiver_endpoint = edge_sender
+        .create_endpoint(PRELOAD_TOPIC_CODE, [Interest::new("preload")])
+        .await?;
+
+    let mut count = 0;
+    while let Some(message) = preload_receiver_endpoint.next_message().await {
+        tracing::debug!(?message, "received preloaded message");
+        count += 1;
+        if count % (PRELOAD_COUNT / 10).max(1) == 0 {
+            tracing::info!("received {count} preloaded messages");
+        }
+        if count == PRELOAD_COUNT {
+            tracing::info!("received ALL preloaded messages");
+            break;
+        }
+    }
+
     if let Some(durable) = &node.config().durable {
         durable.create_topic(topic_config.clone()).await?;
     }

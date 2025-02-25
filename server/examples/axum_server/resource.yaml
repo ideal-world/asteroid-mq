@@ -28,6 +28,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+          resources:
+            requests:
+              memory: "1024Mi"
+            limits:
+              memory: "4096Mi"
 ---
 apiVersion: v1
 kind: Service

@@ -3,7 +3,6 @@ use std::hash::Hash;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-
 /// A data with utc time
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timed<T> {
@@ -46,3 +45,6 @@ pub fn hash64<T: Hash>(value: &T) -> u64 {
     value.hash(&mut hasher);
     Hasher::finish(&hasher)
 }
+
+pub const KB: usize = 1024;
+pub const MB: usize = 1024 * KB;

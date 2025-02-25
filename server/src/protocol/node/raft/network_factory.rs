@@ -501,9 +501,12 @@ impl RaftTcpConnection {
                                             Response::Proposal(raft.client_write(proposal).await)
                                         }
                                     };
-                                    
-                                    resp.panic_when_fatal();
-                                    
+                                    if let Some(fatal) = resp.catch_fatal() {
+                                        tracing::error!(?fatal, "⚠⚠⚠ FATAL ⚠⚠⚠");
+                                        // it's over
+                                        raft.shutdown().await.expect("join error when shutting down raft node");
+                                        std::process::exit(1);
+                                    };
                                     let payload = Payload::Response(resp);
                                     let _ = packet_tx.send(Packet { seq_id, payload }).await;
                                 }

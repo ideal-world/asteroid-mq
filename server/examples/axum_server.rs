@@ -18,7 +18,7 @@ use std::task::ready;
 use futures_util::{Sink, Stream};
 
 use asteroid_mq::{
-    prelude::{Node, NodeConfig, NodeId, TopicCode, TopicConfig, TopicOverflowConfig},
+    prelude::{Node, NodeConfig, NodeId, TopicCode, TopicConfig, TopicOverflowConfig, MB},
     protocol::node::{
         edge::{
             connection::{EdgeConnectionError, EdgeConnectionErrorKind},
@@ -211,10 +211,28 @@ async fn get_node_id() -> String {
 fn is_running_in_k8s() -> bool {
     std::path::Path::new("/var/run/secrets/kubernetes.io").exists()
 }
+
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 #[tokio::main]
+
 async fn main() -> asteroid_mq::Result<()> {
+    // let _profiler = dhat::Profiler::new_heap();
+    // let guard = pprof::ProfilerGuardBuilder::default().frequency(1000).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
+
+
+    let _join_handle = std::thread::spawn(|| {
+        loop {
+            let current_time = chrono::Utc::now();
+            let _profiler = dhat::Profiler::builder().file_name(format!("dhat-{current_time}.log")).build();
+            std::thread::sleep(tokio::time::Duration::from_secs(60));
+            drop(_profiler);
+        }
+    });
+
     tracing_subscriber::fmt()
-        .with_env_filter("debug,kube_client=off,asteroid_mq=debug,openraft=warn,hyper_util=warn,hyper=warn,tower=warn,rustls=off")
+        .with_env_filter("warn,kube_client=off,asteroid_mq=info,openraft=warn,hyper_util=warn,hyper=warn,tower=warn,rustls=off")
         .init();
     let mut node_config = NodeConfig::default();
     if is_running_in_k8s() {
@@ -258,9 +276,10 @@ async fn main() -> asteroid_mq::Result<()> {
         code: TopicCode::const_new("test"),
         blocking: false,
         overflow_config: Some(TopicOverflowConfig::new_reject_new(1_000_000)),
+        max_payload_size: (64 * MB) as u32,
     })
     .await?;
-    use axum::serve;
+    use axum::serve::serve;
     let http_tcp_listener = tokio::net::TcpListener::bind("localhost:8080")
         .await
         .unwrap();
@@ -269,6 +288,16 @@ async fn main() -> asteroid_mq::Result<()> {
         .route("/connect", axum::routing::get(handler))
         .route("/node_id", axum::routing::put(get_node_id))
         .with_state(node);
-    serve(http_tcp_listener, route).await.unwrap();
+    serve(http_tcp_listener, route)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await
+        .unwrap();
+    // drop(_profiler);
+    // if let Ok(report) = guard.report().build() {
+    //     let file = std::fs::File::create("flamegraph.svg").unwrap();
+    //     report.flamegraph(file).unwrap();
+    // };
     Ok(())
 }

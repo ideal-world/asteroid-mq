@@ -1,15 +1,10 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-};
+use std::collections::HashMap;
 
 use asteroid_mq_model::EndpointAddr;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tracing::Instrument;
 
 use crate::{
-    prelude::{DurableMessage, DurableService, MessageId, Node, TopicCode},
+    prelude::{MessageId, Node, TopicCode},
     protocol::{message::*, node::durable_message::DurableCommand},
 };
 
@@ -64,57 +59,9 @@ impl ProposalContext {
         }
     }
     pub(crate) fn push_durable_command(&mut self, command: DurableCommand) {
-        self.node.push_durable_commands(Some(command));
-    }
-    pub(crate) fn commit_durable_commands(&mut self) {
-        if let Some(service) = self.durable_service() {
-            let topic_code = self.topic_code.clone().expect("topic code not set");
-            let node = self.node.clone();
-            tokio::spawn(
-                async move {
-                    // only one execute task at a time for each topic
-                    let sync_lock = node.get_durable_lock(topic_code.clone()).await;
-                    let _sync_guard = sync_lock.lock().await;
-                    let commands = node.swap_out_durable_commands();
-                    if node.raft().await.ensure_linearizable().await.is_err() {
-                        tracing::trace!("raft not leader, skip durable commands");
-                        return;
-                    } else {
-                        tracing::trace!(?commands, "raft is leader, commit durable commands");
-                    };
-                    for command in commands {
-                        let topic = topic_code.clone();
-                        let result = match command {
-                            DurableCommand::Create(command) => {
-                                service
-                                    .save(
-                                        topic,
-                                        DurableMessage {
-                                            message: command,
-                                            status: Default::default(),
-                                            time: Utc::now(),
-                                        },
-                                    )
-                                    .await
-                            }
-                            DurableCommand::UpdateStatus(command) => {
-                                service.update_status(topic, command).await
-                            }
-                            DurableCommand::Archive(command) => {
-                                service.archive(topic, command).await
-                            }
-                        };
-                        if let Err(err) = result {
-                            tracing::error!(?err, "durable command failed");
-                        }
-                    }
-                }
-                .instrument(tracing::info_span!("flush durable commands")),
-            );
+        if let Some(topic_code) = self.topic_code.clone() {
+            self.node.push_durable_commands(Some((topic_code, command)));
         }
-    }
-    pub(crate) fn durable_service(&self) -> Option<DurableService> {
-        self.node.config.durable.clone()
     }
     pub(crate) fn set_topic_code(&mut self, code: TopicCode) {
         self.topic_code = Some(code);
@@ -155,9 +102,15 @@ impl ProposalContext {
         let node = self.node.clone();
         tokio::spawn(async move {
             let message_id = message.id();
-            let node_id = node.get_edge_routing(&endpoint)?;
-            tracing::debug!(%node_id, ?endpoint, "dispatch message to edge");
-            let edge = node.get_edge_connection(node_id)?;
+            let Some(node_id) = node.get_edge_routing(&endpoint) else {
+                tracing::warn!(%message_id, "edge routing not found when trying to dispatch message");
+                return None;
+            };
+            tracing::debug!(%message_id, %node_id, ?endpoint, "dispatch message to edge");
+            let Some(edge) = node.get_edge_connection(node_id) else {
+                tracing::warn!(%message_id, %node_id, "edge connection not found when trying to dispatch message");
+                return None;
+            };
             let result = edge.push_message(&endpoint, message);
             let status = if let Err(err) = result {
                 tracing::warn!(?err, "push message failed");
@@ -183,22 +136,16 @@ impl ProposalContext {
 }
 
 impl Node {
-    pub(self) fn push_durable_commands(&self, commands: impl IntoIterator<Item = DurableCommand>) {
-        self.durable_commands_queue
-            .write()
-            .unwrap()
-            .extend(commands);
-    }
-    pub(self) fn swap_out_durable_commands(&self) -> VecDeque<DurableCommand> {
-        let mut queue = self.durable_commands_queue.write().unwrap();
-        std::mem::take(&mut *queue)
-    }
-    pub(self) async fn get_durable_lock(&self, topic: TopicCode) -> Arc<tokio::sync::Mutex<()>> {
-        self.durable_syncs
-            .lock()
-            .await
-            .entry(topic)
-            .or_default()
-            .clone()
+    pub(self) fn push_durable_commands(
+        &self,
+        commands: impl IntoIterator<Item = (TopicCode, DurableCommand)>,
+    ) {
+        if let Some(service) = &self.durable_commit_service {
+            service
+                .durable_commands_queue
+                .write()
+                .unwrap()
+                .extend(commands);
+        }
     }
 }

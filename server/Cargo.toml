@@ -56,9 +56,11 @@ console-subscriber = "0.4"
 axum = { version = "0.7", features = ["ws"] }
 rand = "0"
 asteroid-mq-sdk = { path = "../sdk/rust", features = ["local"] }
-
-
+dhat = "*"
+pprof = { version = "0.14", features = ["flamegraph"] }
 [[example]]
 path = "examples/axum_server.rs"
 name = "axum-server"
 required-features = ["cluster-k8s"]
+
+

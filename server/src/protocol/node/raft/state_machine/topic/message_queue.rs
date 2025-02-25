@@ -121,7 +121,7 @@ impl HoldMessage {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub(crate) struct MessageQueue {
     pub(crate) blocking: bool,
     pub(crate) hold_messages: HashMap<MessageId, HoldMessage>,
@@ -147,6 +147,7 @@ impl std::fmt::Debug for MessageQueue {
 
 impl MessageQueue {
     pub(crate) const DEFAULT_CAPACITY: usize = 1024;
+
     pub(crate) fn new(blocking: bool, capacity: usize) -> Self {
         Self {
             blocking,
@@ -323,16 +324,22 @@ impl MessageQueue {
     }
     pub(crate) fn finish_ack(&mut self, message_id: MessageId) {
         self.pending_ack.remove(&message_id);
-        self.ack_handle_location.iter_mut().for_each(|(_node, s)| {
-            s.remove(&message_id);
-        });
+        for (_, set) in self.ack_handle_location.iter_mut() {
+            set.remove(&message_id);
+        }
     }
-    pub(crate) fn flush_ack(&self, context: &mut ProposalContext) {
+    pub(crate) fn flush_ack<H: IntoIterator<Item = MessageId>>(
+        &self,
+        context: &mut ProposalContext,
+        hint: H,
+    ) {
         let local_node_id = context.node.id();
-        for (id, result) in &self.pending_ack {
-            if let Some(message_id_set) = self.ack_handle_location.get(&local_node_id) {
-                if message_id_set.contains(id) {
-                    context.resolve_ack(*id, result.clone());
+        for id in hint {
+            if let Some(result) = self.pending_ack.get(&id) {
+                if let Some(message_id_set) = self.ack_handle_location.get(&local_node_id) {
+                    if message_id_set.contains(&id) {
+                        context.resolve_ack(id, result.clone());
+                    }
                 }
             }
         }
@@ -343,12 +350,14 @@ impl MessageQueue {
         context: &mut ProposalContext,
     ) {
         tracing::trace!(blocking = self.blocking, "flushing");
+        let mut flush_ack_list = Vec::new();
         if self.blocking {
             while let Some((m, result)) = self.blocking_pop(reachable_eps, context) {
                 let id = m.message.id();
                 let is_durable = m.message.header.is_durable();
                 let result = m.resolve(result.err());
                 self.pending_ack.insert(id, result);
+                flush_ack_list.push(id);
                 if is_durable {
                     context.push_durable_command(DurableCommand::Archive(id));
                 }
@@ -363,11 +372,12 @@ impl MessageQueue {
                     if is_durable {
                         context.push_durable_command(DurableCommand::Archive(id));
                     }
+                    flush_ack_list.push(id);
                 } else {
                     tracing::warn!(id = %id, "message not found");
                 }
             }
         }
-        self.flush_ack(context);
+        self.flush_ack(context, flush_ack_list);
     }
 }

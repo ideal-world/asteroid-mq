@@ -28,7 +28,7 @@ pub struct StoredSnapshot {
     pub meta: SnapshotMeta<NodeId, TcpNode>,
 
     /// The data of the state machine at the time of this snapshot.
-    pub data: NodeData,
+    pub data: Vec<u8>,
 }
 #[derive(Debug, Clone, Default)]
 pub struct StateMachineData<C: RaftTypeConfig> {
@@ -82,7 +82,7 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<StateMachineStore> {
     async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<NodeId>> {
         // Serialize the data of the state machine.
         let state_machine = self.state_machine.read().await;
-        let snapshot = state_machine.node.clone();
+        let snapshot = &state_machine.node;
 
         let last_applied_log = state_machine.last_applied_log;
         let last_membership = state_machine.last_membership.clone();
@@ -103,10 +103,10 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<StateMachineStore> {
             last_membership,
             snapshot_id,
         };
-        let bytes = bincode::serde::encode_to_vec(&snapshot, BINCODE_CONFIG).unwrap();
+        let bytes = bincode::serde::encode_to_vec(snapshot, BINCODE_CONFIG).unwrap();
         let stored = StoredSnapshot {
             meta: meta.clone(),
-            data: snapshot,
+            data: bytes.clone(),
         };
         *current_snapshot = Some(stored);
         drop(state_machine);
@@ -276,7 +276,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         snapshot.set_position(size as u64);
         let new_snapshot = StoredSnapshot {
             meta: meta.clone(),
-            data: new_data.clone(),
+            data: snapshot.into_inner(),
         };
 
         // Update the state machine.
@@ -290,10 +290,13 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         if let Some(node) = self.node_ref.upgrade() {
             tracing::info!(?id, "installed, ready to flush: {:#?}", state_machine.node);
             for (topic_code, topic) in &mut state_machine.node.topics {
-                topic.queue.flush_ack(&mut ProposalContext {
-                    node: node.clone(),
-                    topic_code: Some(topic_code.clone()),
-                });
+                topic.queue.flush_ack(
+                    &mut ProposalContext {
+                        node: node.clone(),
+                        topic_code: Some(topic_code.clone()),
+                    },
+                    topic.queue.pending_ack.keys().copied(),
+                );
             }
         };
 

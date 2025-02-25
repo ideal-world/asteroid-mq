@@ -15,6 +15,7 @@ use config::TopicConfig;
 use message_queue::{HoldMessage, MessageQueue};
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     task::Poll,
 };
@@ -186,11 +187,12 @@ impl TopicData {
         self.update_and_flush(MessageStateUpdate::new_empty(message.id()), ctx);
         tracing::debug!(?ep_collect, "hold new message");
     }
-    pub(crate) fn reachable_eps(&self, node_id: &NodeId) -> HashSet<EndpointAddr> {
+    pub(crate) fn reachable_eps(&self, node_id: &NodeId) -> Cow<'_, HashSet<EndpointAddr>> {
         self.ep_routing_table
             .get(node_id)
-            .cloned()
-            .unwrap_or_default()
+            .map(Cow::Borrowed)
+            // .cloned()
+            .unwrap_or(Cow::Owned(HashSet::new()))
     }
     pub(crate) fn update_and_flush(
         &mut self,
@@ -203,16 +205,29 @@ impl TopicData {
                 ctx.push_durable_command(DurableCommand::UpdateStatus(update.clone()));
             }
         }
-        let reachable_eps = self.reachable_eps(&ctx.node.id());
-        let poll_result = {
-            for (from, status) in update.status {
-                self.queue.update_ack(&update.message_id, from, status)
+        // hacky here to temporary take queue memory:
+        // let mut queue: MessageQueue = unsafe {
+        //     #[allow(
+        //         clippy::uninit_assumed_init,
+        //         invalid_value,
+        //         reason = "we don't access it anyway"
+        //     )]
+        //     std::mem::MaybeUninit::zeroed().assume_init()
+        // };
+        let mut queue: MessageQueue = MessageQueue::default();
+        {
+            std::mem::swap(&mut queue, &mut self.queue);
+            let reachable_eps = self.reachable_eps(&ctx.node.id());
+            let poll_result = {
+                for (from, status) in update.status {
+                    queue.update_ack(&update.message_id, from, status)
+                }
+                queue.poll_message(update.message_id, &reachable_eps, ctx)
+            };
+            if let Some(Poll::Ready(_)) = poll_result {
+                queue.flush(&reachable_eps, ctx);
             }
-            self.queue
-                .poll_message(update.message_id, &reachable_eps, ctx)
-        };
-        if let Some(Poll::Ready(_)) = poll_result {
-            self.queue.flush(&reachable_eps, ctx);
+            std::mem::swap(&mut queue, &mut self.queue);
         }
     }
     pub(crate) fn update_ep_interest(
@@ -281,9 +296,20 @@ impl TopicData {
             }
         }
         tracing::trace!(?message_need_poll, ?endpoint, "flush durable messages");
+        let message_count = message_need_poll.len();
+        tracing::info!(
+            ?endpoint,
+            "endpoint online, {} messaged will be polled",
+            message_count
+        );
         for id in message_need_poll {
             self.update_and_flush(MessageStateUpdate::new_empty(id), ctx);
         }
+        tracing::info!(
+            ?endpoint,
+            "endpoint online, {} messaged have been polled",
+            message_count
+        );
     }
 
     pub(crate) fn ep_offline(

@@ -78,12 +78,27 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let this = self.project();
-        let message = futures_util::ready!(this
-            .inner
-            .poll_next(cx)
-            .map_err(EdgeConnectionError::underlying("ws poll_next"))?);
-        let Some(message) = message else {
-            return std::task::Poll::Ready(None);
+        let message = futures_util::ready!(this.inner.poll_next(cx));
+        let message = match message {
+            Some(Ok(message)) => message,
+            Some(Err(e)) => {
+                use tokio_tungstenite::tungstenite::{error::ProtocolError, Error};
+                match e {
+                    Error::ConnectionClosed
+                    | Error::AlreadyClosed
+                    | Error::Protocol(ProtocolError::ResetWithoutClosingHandshake) => {
+                        return std::task::Poll::Ready(None);
+                    }
+                    _ => {
+                        return std::task::Poll::Ready(Some(Err(EdgeConnectionError::underlying(
+                            "ws poll_next",
+                        )(e))));
+                    }
+                }
+            }
+            None => {
+                return std::task::Poll::Ready(None);
+            }
         };
         let Message::Binary(payload) = message else {
             // skip

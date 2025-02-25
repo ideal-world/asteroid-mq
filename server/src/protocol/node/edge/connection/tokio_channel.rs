@@ -12,10 +12,14 @@ impl TokioChannelSocket {
             TokioChannelSocket {
                 tx: tx_a_to_b,
                 rx: rx_b_to_a,
+                count: 0,
+                report_every: 1000,
             },
             TokioChannelSocket {
                 tx: tx_b_to_a,
                 rx: rx_a_to_b,
+                count: 0,
+                report_every: 1000,
             },
         )
     }
@@ -27,6 +31,8 @@ pin_project_lite::pin_project! {
         tx: UnboundedSender<EdgePayload>,
         #[pin]
         rx: UnboundedReceiver<EdgePayload>,
+        count: usize,
+        report_every: usize,
     }
 }
 
@@ -70,6 +76,11 @@ impl Sink<EdgePayload> for TokioChannelSocket {
                 EdgeConnectionErrorKind::Closed,
                 "tokio channel closed",
             ));
+        } else {
+            *this.count = this.count.wrapping_add_signed(1);
+            if *this.count % *this.report_every == 0 {
+                tracing::info!(count = *this.count, "tokio channel send count");
+            }
         }
         Ok(())
     }

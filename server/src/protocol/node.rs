@@ -1,21 +1,23 @@
+pub mod durable_commit_service;
 pub mod durable_message;
 pub mod edge;
 pub mod raft;
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap},
     net::SocketAddr,
     ops::Deref,
     sync::{self, Arc, RwLock},
     time::Duration,
 };
 
-use durable_message::{DurableCommand, DurableMessageQuery};
+use durable_message::DurableMessageQuery;
 
 pub use asteroid_mq_model::NodeId;
 use asteroid_mq_model::{
     codec::BINCODE_CONFIG, connection::EdgeNodeConnection, EndpointAddr, Message, MessageId,
     TopicCode,
 };
+use durable_commit_service::DurableCommitService;
 use edge::{
     auth::EdgeAuthService,
     connection::{
@@ -87,10 +89,8 @@ pub struct NodeInner {
     /// ack responser pool
     pub(crate) ack_waiting_pool: Arc<tokio::sync::RwLock<HashMap<MessageId, AckSender>>>,
 
-    /// durable operation commands queue
-    durable_commands_queue: std::sync::RwLock<VecDeque<DurableCommand>>,
     /// ensure operations on the same topic are linearized
-    pub(crate) durable_syncs: tokio::sync::Mutex<HashMap<TopicCode, Arc<tokio::sync::Mutex<()>>>>,
+    pub(crate) durable_commit_service: Option<DurableCommitService>,
     /// time scheduler
     pub(crate) scheduler: tsuki_scheduler::AsyncSchedulerClient<tsuki_scheduler::runtime::Tokio>,
     ct: CancellationToken,
@@ -168,11 +168,13 @@ impl Node {
             edge_routing: RwLock::new(HashMap::new()),
             // topics: RwLock::new(HashMap::new()),
             edge_handler: tokio::sync::RwLock::new(EdgeConnectionHandlerObject::basic()),
+            durable_commit_service: config
+                .durable
+                .as_ref()
+                .map(|ds| DurableCommitService::new(raft.clone(), ds.clone(), ct.child_token())),
             config,
             raft,
             network,
-            durable_commands_queue: Default::default(),
-            durable_syncs: Default::default(),
             scheduler: scheduler_client,
             ack_waiting_pool: Default::default(),
             ct,
@@ -202,6 +204,10 @@ impl Node {
             .validate()
             .map_err(crate::Error::contextual_custom("validate raft config"))?;
         tcp_service.run_service();
+        // start up durable commit service
+        if let Some(durable_commit_service) = &self.durable_commit_service {
+            durable_commit_service.clone().spawn()
+        }
         let raft = Raft::<TypeConfig>::new(
             id,
             Arc::new(raft_config.clone()),
@@ -397,6 +403,7 @@ impl Node {
         {
             let mut wg = self.edge_connections.write().unwrap();
             wg.insert(peer, Arc::new(conn_inst));
+            tracing::info!(?peer, "new edge connection established");
         }
         Ok(peer)
     }
@@ -494,7 +501,7 @@ impl Node {
         match edge_request_kind {
             edge::EdgeRequestEnum::SendMessage(edge_message) => {
                 let (message, topic_code) = edge_message.into_message();
-                
+
                 let handle = self
                     .send_message(topic_code, message)
                     .map_err(|e| {
@@ -512,7 +519,6 @@ impl Node {
             }
             edge::EdgeRequestEnum::EndpointOnline(online) => {
                 let topic_code = online.topic_code.clone();
-
                 let Some(node) = self.node_ref().upgrade() else {
                     return Err(EdgeError::with_message(
                         "set state",
@@ -522,6 +528,7 @@ impl Node {
                 };
                 let endpoint = EndpointAddr::new_snowflake();
                 self.set_edge_routing(endpoint, from, topic_code.clone());
+                tracing::info!(?online, ?endpoint, "edge endpoint online");
                 let result = node
                     .propose(Proposal::EpOnline(EndpointOnline {
                         topic_code,

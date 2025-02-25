@@ -35,7 +35,6 @@ impl NodeData {
         } else {
             tracing::error!(?topic, "topic not found");
         }
-        ctx.commit_durable_commands();
     }
 
     pub(crate) fn apply_load_topic(
@@ -55,11 +54,9 @@ impl NodeData {
             }
             _ => {
                 tracing::warn!(?code, "topic already loaded");
-                return;
             }
         }
 
-        ctx.commit_durable_commands();
     }
     #[instrument(skip_all, fields(node_id=%ctx.node.id(), topic=%topic, message_id=%update.message_id))]
     pub(crate) fn apply_set_state(
@@ -73,7 +70,6 @@ impl NodeData {
         } else {
             tracing::error!(?topic, "topic not found");
         }
-        ctx.commit_durable_commands();
     }
     pub(crate) fn apply_unload_topic(&mut self, UnloadTopic { code }: UnloadTopic) {
         self.topics.remove(&code);
@@ -93,7 +89,6 @@ impl NodeData {
         };
         ctx.set_topic_code(topic_code);
         topic.ep_online(endpoint, interests, host, &mut ctx);
-        ctx.commit_durable_commands();
     }
 
     pub(crate) fn apply_ep_offline(
@@ -110,7 +105,6 @@ impl NodeData {
         };
         ctx.set_topic_code(topic_code);
         topic.ep_offline(host, &endpoint, &mut ctx);
-        ctx.commit_durable_commands();
     }
 
     pub(crate) fn apply_ep_interest(
@@ -127,7 +121,6 @@ impl NodeData {
         };
         ctx.set_topic_code(topic_code);
         topic.update_ep_interest(&endpoint, interests, &mut ctx);
-        ctx.commit_durable_commands();
     }
     #[instrument]
     pub(crate) fn apply_ack_finished(

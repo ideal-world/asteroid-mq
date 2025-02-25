@@ -1,6 +1,7 @@
 use openraft::{
     error::{
-        ClientWriteError, InstallSnapshotError, RPCError, RaftError, RemoteError, Unreachable,
+        ClientWriteError, Fatal, InstallSnapshotError, RPCError, RaftError, RemoteError,
+        Unreachable,
     },
     raft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
@@ -50,22 +51,17 @@ pub(super) enum Response {
 
 impl Response {
     #[tracing::instrument(skip_all)]
-    pub(crate) fn panic_when_fatal(&self) {
+    pub(crate) fn catch_fatal(&self) -> Option<Fatal<NodeId>> {
         let fatal = match self {
             Response::Vote(Err(RaftError::Fatal(f))) => f,
             Response::AppendEntries(Err(RaftError::Fatal(f))) => f,
             Response::InstallSnapshot(Err(RaftError::Fatal(f))) => f,
             Response::Proposal(Err(RaftError::Fatal(f))) => f,
             _ => {
-                return;
+                return None;
             }
         };
-        tracing::error!(?fatal, "⚠⚠⚠ FATAL ⚠⚠⚠");
-
-        panic!(
-            "encounter an unrecoverable error, panic to prevent further damage: {}",
-            fatal
-        );
+        return Some(fatal.clone());
     }
 }
 #[derive(Debug, Serialize, Deserialize)]

@@ -16,6 +16,7 @@ pub mod prelude {
     };
     pub use crate::protocol::node::raft::state_machine::topic::config::*;
     pub use crate::protocol::node::{Node, NodeConfig};
+    pub use crate::util::{KB, MB};
 }
 
 pub use asteroid_mq_model as model;

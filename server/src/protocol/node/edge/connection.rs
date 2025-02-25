@@ -33,7 +33,7 @@ pub struct ConnectionConfig {
 #[derive(Debug)]
 pub struct EdgeConnectionInstance {
     pub config: ConnectionConfig,
-    pub outbound: flume::Sender<EdgePayload>,
+    pub outbound: tokio::sync::mpsc::UnboundedSender<EdgePayload>,
     pub alive: Arc<std::sync::atomic::AtomicBool>,
     pub peer_id: NodeId,
     pub finish_signal: flume::Receiver<()>,
@@ -86,7 +86,7 @@ impl EdgeConnectionInstance {
         let node = config.attached_node.upgrade().ok_or_else(|| {
             EdgeConnectionError::new(EdgeConnectionErrorKind::Closed, "node is already dropped")
         })?;
-        let (outbound_tx, outbound_rx) = flume::bounded::<EdgePayload>(1024);
+        let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<EdgePayload>();
         let task = if true {
             enum PollEvent {
                 PacketIn(EdgePayload),
@@ -103,8 +103,8 @@ impl EdgeConnectionInstance {
                             };
                             PollEvent::PacketIn(next_event?)
                         }
-                        packet = outbound_rx.recv_async().fuse() => {
-                            let Ok(packet) = packet else {
+                        packet = outbound_rx.recv().fuse() => {
+                            let Some(packet) = packet else {
                                 break;
                             };
                             PollEvent::PacketOut(packet)
@@ -123,8 +123,8 @@ impl EdgeConnectionInstance {
                                             handler.handle(node, peer_id, request.request).await;
                                         let resp = EdgeResponse::from_result(seq_id, resp);
                                         let payload = EdgePayload::Response(resp);
-                                        outbound.send(payload).unwrap_or_else(|e| {
-                                            warn!(?e, "failed to send edge response");
+                                        outbound.send(payload).unwrap_or_else(|_e| {
+                                            warn!("failed to send edge response, flume channel closed");
                                         });
                                     });
                                 }

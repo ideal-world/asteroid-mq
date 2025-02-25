@@ -2,7 +2,7 @@ use std::{collections::HashMap, num::NonZeroU32, str::FromStr, time::Duration};
 mod common;
 
 use asteroid_mq::{
-    prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, NodeId, Subject, TopicCode},
+    prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, NodeId, Subject, TopicCode, MB},
     protocol::node::raft::state_machine::topic::config::{
         TopicConfig, TopicOverflowConfig, TopicOverflowPolicy,
     },
@@ -118,6 +118,7 @@ async fn test_install_big_snapshot() {
                 policy: TopicOverflowPolicy::RejectNew,
                 size: NonZeroU32::new(99999).unwrap(),
             }),
+            max_payload_size: 16 * MB as u32
         }
     }
     let node_sender = nodes.get(&node_id_1).unwrap().clone();

@@ -45,7 +45,7 @@ pub struct TopicConfig {
     pub code: TopicCode,
     pub blocking: bool,
     pub overflow_config: Option<TopicOverflowConfig>,
-    pub max_payload_size: u32
+    pub max_payload_size: u32,
 }
 
 const DEFAULT_MAX_PAYLOAD_SIZE: u32 = 1024 * 1024;

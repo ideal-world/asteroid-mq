@@ -7,7 +7,7 @@ use std::{
 };
 
 use asteroid_mq::{
-    prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, NodeId, Subject, TopicCode},
+    prelude::{Interest, MessageAckExpectKind, Node, NodeConfig, NodeId, Subject, TopicCode, MB},
     protocol::node::raft::{
         cluster::StaticClusterProvider,
         state_machine::topic::config::{TopicConfig, TopicOverflowConfig, TopicOverflowPolicy},
@@ -90,6 +90,7 @@ async fn test_nodes() {
                 policy: TopicOverflowPolicy::RejectNew,
                 size: NonZeroU32::new(500).unwrap(),
             }),
+            max_payload_size: 16 * MB as u32
         }
     }
     let node_server = nodes.get(&node_id_1).unwrap().clone();
