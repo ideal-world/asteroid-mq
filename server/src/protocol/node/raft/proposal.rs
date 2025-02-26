@@ -49,6 +49,7 @@ pub enum Proposal {
 pub(crate) struct ProposalContext {
     pub node: Node,
     pub topic_code: Option<TopicCode>,
+    pub debug_ep_online: bool
 }
 
 impl ProposalContext {
@@ -56,6 +57,7 @@ impl ProposalContext {
         Self {
             node,
             topic_code: None,
+            debug_ep_online: false
         }
     }
     pub(crate) fn push_durable_command(&mut self, command: DurableCommand) {
@@ -90,34 +92,38 @@ impl ProposalContext {
         });
     }
     #[tracing::instrument(skip(self))]
-    pub(crate) fn dispatch_message(&self, message: &Message, endpoint: EndpointAddr) {
+    // return true if the message is reachable
+    pub(crate) fn dispatch_message(&self, message: &Message, endpoint: EndpointAddr) -> bool {
         let Some(ref code) = self.topic_code else {
             // topic code is not set
             tracing::warn!("topic code is not set");
-            return;
+            return false;
         };
 
         let message = message.clone();
         let code = code.clone();
         let node = self.node.clone();
-        tokio::spawn(async move {
-            let message_id = message.id();
-            let Some(node_id) = node.get_edge_routing(&endpoint) else {
-                tracing::warn!(%message_id, "edge routing not found when trying to dispatch message");
-                return None;
-            };
+        let message_id = message.id();
+        let status: MessageStatusKind;
+        if let Some(node_id) = node.get_edge_routing(&endpoint) {
             tracing::debug!(%message_id, %node_id, ?endpoint, "dispatch message to edge");
-            let Some(edge) = node.get_edge_connection(node_id) else {
-                tracing::warn!(%message_id, %node_id, "edge connection not found when trying to dispatch message");
-                return None;
-            };
-            let result = edge.push_message(&endpoint, message);
-            let status = if let Err(err) = result {
-                tracing::warn!(?err, "push message failed");
-                MessageStatusKind::Unreachable
+            if let Some(edge) = node.get_edge_connection(node_id) {
+                let result = edge.push_message(&endpoint, message);
+                status = if let Err(err) = result {
+                    tracing::warn!(?err, "push message failed");
+                    MessageStatusKind::Unreachable
+                } else {
+                    MessageStatusKind::Sent
+                };
             } else {
-                MessageStatusKind::Sent
+                tracing::warn!(%message_id, %node_id, "edge connection not found when trying to dispatch message");
+                status = MessageStatusKind::Unreachable;
             };
+        } else {
+            tracing::warn!(%message_id, "edge routing not found when trying to dispatch message");
+            status = MessageStatusKind::Unreachable;
+        }
+        tokio::spawn(async move {
             let proposal_result = node
                 .propose(Proposal::SetState(SetState {
                     topic: code,
@@ -132,6 +138,7 @@ impl ProposalContext {
             }
             Some(())
         });
+        return MessageStatusKind::Sent == status;
     }
 }
 

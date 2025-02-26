@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{collections::VecDeque, sync::Arc};
 
 use asteroid_mq_model::TopicCode;
 use chrono::Utc;
@@ -10,10 +10,10 @@ use super::{durable_message::DurableCommand, raft::MaybeLoadingRaft};
 #[derive(Debug, Clone)]
 pub struct DurableCommitService {
     ct: CancellationToken,
-    pub(crate) durable_commands_queue: Arc<std::sync::RwLock<VecDeque<(TopicCode, DurableCommand)>>>,
+    pub(crate) durable_commands_queue:
+        Arc<std::sync::RwLock<VecDeque<(TopicCode, DurableCommand)>>>,
     raft: MaybeLoadingRaft,
     service: DurableService,
-    duration: Duration,
 }
 
 impl DurableCommitService {
@@ -22,13 +22,11 @@ impl DurableCommitService {
         durable_service: DurableService,
         ct: CancellationToken,
     ) -> Self {
-        const DURABLE_COMMAND_COMMIT_DURATION: Duration = Duration::from_millis(100);
         Self {
             ct,
             durable_commands_queue: Arc::new(std::sync::RwLock::new(VecDeque::new())),
             raft,
             service: durable_service,
-            duration: DURABLE_COMMAND_COMMIT_DURATION
         }
     }
     pub fn spawn(self) {
@@ -37,13 +35,12 @@ impl DurableCommitService {
     pub async fn run(self) -> crate::Result<()> {
         let mut commands = VecDeque::new();
         loop {
-            tokio::select! {
-                _ = self.ct.cancelled() => {
-                    break;
-                }
-                _ = tokio::time::sleep(self.duration) => {
-
-                }
+            if self.ct.is_cancelled() {
+                break;
+            }
+            let is_empty = { self.durable_commands_queue.read().unwrap().is_empty() };
+            if is_empty {
+                tokio::task::yield_now().await;
             }
 
             // only one execute task at a time for each topic

@@ -8,21 +8,22 @@ use asteroid_mq_model::EndpointAddr;
 pub use asteroid_mq_model::{WaitAckError, WaitAckErrorException, WaitAckResult, WaitAckSuccess};
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::message::*;
+use crate::{protocol::message::*, util::FixedHash};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaitAck {
     pub expect: MessageAckExpectKind,
-    pub status: HashMap<EndpointAddr, MessageStatusKind>,
+    pub status: HashMap<EndpointAddr, MessageStatusKind, FixedHash>,
 }
 
 impl WaitAck {
     pub fn new(expect: MessageAckExpectKind, ep_list: HashSet<EndpointAddr>) -> Self {
-        let status = HashMap::<EndpointAddr, MessageStatusKind>::from_iter(
+        let status = HashMap::<EndpointAddr, MessageStatusKind, FixedHash>::from_iter(
             ep_list
                 .into_iter()
                 .map(|ep| (ep, MessageStatusKind::Unsent)),
         );
+
         Self { status, expect }
     }
 }

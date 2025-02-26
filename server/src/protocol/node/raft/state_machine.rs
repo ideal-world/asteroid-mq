@@ -290,11 +290,10 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
         if let Some(node) = self.node_ref.upgrade() {
             tracing::info!(?id, "installed, ready to flush: {:#?}", state_machine.node);
             for (topic_code, topic) in &mut state_machine.node.topics {
+                let mut ctx = ProposalContext::new(node.clone());
+                ctx.set_topic_code(topic_code.clone());
                 topic.queue.flush_ack(
-                    &mut ProposalContext {
-                        node: node.clone(),
-                        topic_code: Some(topic_code.clone()),
-                    },
+                    &mut ctx,
                     topic.queue.pending_ack.keys().copied(),
                 );
             }

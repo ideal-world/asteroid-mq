@@ -31,6 +31,7 @@ pub(crate) struct TopicData {
 }
 
 impl TopicData {
+    // the earlier message should be in front
     pub(crate) fn from_durable(config: TopicConfig, mut messages: Vec<DurableMessage>) -> Self {
         messages.sort_by_key(|f| f.time);
         let mut queue = MessageQueue::new(
@@ -67,6 +68,28 @@ impl TopicData {
         source: NodeId,
         ctx: &mut ProposalContext,
     ) {
+        /// 分布式一致的选出top n节点，如果节点数量小于等于top n则直接返回
+        fn hash_ring<T: std::hash::Hash>(
+            mut set: HashSet<EndpointAddr>,
+            seed: &T,
+            top_n: usize,
+        ) -> HashSet<EndpointAddr> {
+            if set.len() <= top_n {
+                set
+            } else {
+                let seed_u64 = crate::util::hash64(&seed);
+                let mut hash_ring = set
+                    .iter()
+                    .map(|ep| (crate::util::hash64(&(ep, seed_u64)), *ep))
+                    .collect::<Vec<_>>();
+                hash_ring.sort();
+                set.clear();
+                set.extend(hash_ring.into_iter().map(|(_hash, ep)| ep).take(top_n));
+                tracing::debug!(?set, "hash ring ep selected");
+                set
+            }
+        }
+
         let max_payload_size = self.config.max_payload_size as usize;
         if message.payload.0.len() >= max_payload_size {
             ctx.resolve_ack(
@@ -80,20 +103,28 @@ impl TopicData {
 
         let message_id = message.id();
         let ep_collect = match message.header.target_kind {
-            MessageTargetKind::Durable | MessageTargetKind::Online => {
+            MessageTargetKind::Online => {
                 self.collect_addr_by_subjects(message.header.subjects.iter())
                 // just accept all
             }
+            MessageTargetKind::Durable => {
+                let set = self.collect_addr_by_subjects(message.header.subjects.iter());
+                if let Some(max_receiver) = &message
+                    .header
+                    .durability
+                    .as_ref()
+                    .and_then(|d| d.max_receiver)
+                {
+                    // select top n by hash
+                    hash_ring(set, &message.id(), *max_receiver as usize)
+                } else {
+                    set
+                }
+                // just accept all
+            }
             MessageTargetKind::Push => {
-                let message_hash = crate::util::hash64(&message.id());
                 let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
-
-                let mut hash_ring = ep_collect
-                    .iter()
-                    .map(|ep| (crate::util::hash64(ep), *ep))
-                    .collect::<Vec<_>>();
-                hash_ring.sort_by_key(|x| x.0);
-                if hash_ring.is_empty() {
+                if ep_collect.is_empty() {
                     ctx.resolve_ack(
                         message.id(),
                         Err(WaitAckError::exception(
@@ -101,11 +132,8 @@ impl TopicData {
                         )),
                     );
                     return;
-                } else {
-                    let ep = hash_ring[(message_hash as usize) % (hash_ring.len())].1;
-                    tracing::debug!(?ep, "pub mode ep selected");
-                    HashSet::from([ep])
                 }
+                hash_ring(ep_collect, &message.id(), 1)
             }
         };
         let hold_message = HoldMessage {
@@ -201,7 +229,7 @@ impl TopicData {
     ) {
         // check if message is of durable kind
         if let Some(message) = self.queue.hold_messages.get(&update.message_id) {
-            if message.message.header.is_durable() {
+            if message.message.header.is_durable() && !update.status.is_empty() {
                 ctx.push_durable_command(DurableCommand::UpdateStatus(update.clone()));
             }
         }
@@ -289,6 +317,23 @@ impl TopicData {
                             .iter()
                             .any(|s| self.ep_interest_map.find(s).contains(&endpoint))
                     {
+                        if let Some(config) = message.message.header.durability.as_ref() {
+                            if let Some(max_receiver) = config.max_receiver {
+                                if status
+                                    .values()
+                                    .filter(|status| status.is_fulfilled(message.wait_ack.expect))
+                                    .count()
+                                    >= max_receiver as usize
+                                {
+                                    // max receiver reached
+                                    continue;
+                                }
+                            }
+                            if config.expire < chrono::Utc::now() {
+                                // expired
+                                continue;
+                            }
+                        }
                         status.insert(endpoint, MessageStatusKind::Unsent);
                         message_need_poll.insert(*id);
                     }
@@ -303,6 +348,8 @@ impl TopicData {
             message_count
         );
         for id in message_need_poll {
+            // enable to debug online proposal
+            ctx.debug_ep_online = false;
             self.update_and_flush(MessageStateUpdate::new_empty(id), ctx);
         }
         tracing::info!(

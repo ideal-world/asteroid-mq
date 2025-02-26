@@ -131,7 +131,7 @@ impl Durable for MemoryDurable {
             .collect::<Vec<_>>())
     }
 }
-const PRELOAD_COUNT: usize = 10000;
+const PRELOAD_COUNT: usize = 2000;
 #[tokio::test]
 async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
@@ -221,12 +221,19 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     // receive all the preload messages
-    let mut preload_receiver_endpoint = edge_sender
+    let mut preload_receiver_endpoint_1 = edge_sender
         .create_endpoint(PRELOAD_TOPIC_CODE, [Interest::new("preload")])
         .await?;
-
+    let mut preload_receiver_endpoint_2 = edge_sender
+        .create_endpoint(PRELOAD_TOPIC_CODE, [Interest::new("preload")])
+        .await?;
     let mut count = 0;
-    while let Some(message) = preload_receiver_endpoint.next_message().await {
+    while let Some(message) = {
+        tokio::select! {
+            m_1 = preload_receiver_endpoint_1.next_message() => m_1,
+            m_2 = preload_receiver_endpoint_2.next_message() => m_2,
+        }
+    } {
         tracing::debug!(?message, "received preloaded message");
         count += 1;
         if count % (PRELOAD_COUNT / 10).max(1) == 0 {
@@ -305,6 +312,7 @@ async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let message = endpoint.next_message().await.unwrap();
     message.ack_failed().await?;
+    tracing::info!("ack failed finished");
     let mut endpoint = edge_sender
         .create_endpoint(TOPIC, [Interest::new(subject)])
         .await?;

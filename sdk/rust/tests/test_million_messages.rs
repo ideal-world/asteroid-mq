@@ -11,7 +11,7 @@ pub struct HelloMessage {
     pub message: String,
 }
 const CODEC: &str = "bincode";
-const SIZE: usize = 50_000;
+const SIZE: usize = 100_000;
 fn get_codec() -> DynCodec {
     let codec_kind = CODEC.parse::<CodecKind>().unwrap();
     DynCodec::form_kind(codec_kind).unwrap()

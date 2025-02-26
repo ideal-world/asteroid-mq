@@ -56,7 +56,6 @@ impl NodeData {
                 tracing::warn!(?code, "topic already loaded");
             }
         }
-
     }
     #[instrument(skip_all, fields(node_id=%ctx.node.id(), topic=%topic, message_id=%update.message_id))]
     pub(crate) fn apply_set_state(

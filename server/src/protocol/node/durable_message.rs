@@ -186,6 +186,7 @@ pub trait Durable: Send + Sync + 'static {
         topic: TopicCode,
         message_id: MessageId,
     ) -> impl Future<Output = Result<DurableMessage, DurableError>> + Send;
+    /// the earlier message should be in the front
     fn batch_retrieve(
         &self,
         topic: TopicCode,

@@ -34,11 +34,75 @@ impl HoldMessage {
         reachable_eps: &HashSet<EndpointAddr>,
         context: &ProposalContext,
     ) {
-        for (ep, status) in self.wait_ack.status.iter_mut() {
-            tracing::trace!(?ep, %status, ?reachable_eps, "send_unsent");
-            if status.is_unsent() && reachable_eps.contains(ep) {
-                *status = MessageStatusKind::Sending;
-                context.dispatch_message(&self.message, *ep);
+        match self.message.header.target_kind {
+            MessageTargetKind::Durable => {
+                if let Some(max_received_count) = self
+                    .message
+                    .header
+                    .durability
+                    .as_ref()
+                    .and_then(|x| x.max_receiver)
+                {
+                    let not_yet_failed_count = self.not_yet_failed_count();
+                    if not_yet_failed_count >= max_received_count as usize {
+                        if context.debug_ep_online {
+                            tracing::info!("there's {not_yet_failed_count} message is waiting for resolve, so we won't send more");
+                            tracing::info!(?self, "message status here");
+                        }
+                        // wait current sending task finish
+                    } else {
+                        let send_count = max_received_count as usize - not_yet_failed_count;
+                        for (ep, status) in self
+                            .wait_ack
+                            .status
+                            .iter_mut()
+                            .filter(|(_ep, s)| s.is_unsent())
+                            .take(send_count)
+                        {
+                            tracing::trace!(?ep, %status, ?reachable_eps, "send_unsent");
+                            *status = MessageStatusKind::Sending;
+                            if reachable_eps.contains(ep) {
+                                if context.debug_ep_online {
+                                    tracing::info!("going to push {send_count} message(s)")
+                                }
+                                let success = context.dispatch_message(&self.message, *ep);
+                                if context.debug_ep_online {
+                                    tracing::info!("message send call {success}")
+                                }
+                            } else if context.debug_ep_online {
+                                tracing::info!("message not reachable in this endpoint")
+                            }
+                        }
+                    }
+                } else {
+                    for (ep, status) in self.wait_ack.status.iter_mut() {
+                        tracing::trace!(?ep, %status, ?reachable_eps, "send_unsent");
+                        *status = MessageStatusKind::Sending;
+                        if status.is_unsent() && reachable_eps.contains(ep) {
+                            context.dispatch_message(&self.message, *ep);
+                        }
+                    }
+                }
+            }
+            MessageTargetKind::Online => {
+                for (ep, status) in self.wait_ack.status.iter_mut() {
+                    tracing::trace!(?ep, %status, ?reachable_eps, "send_unsent");
+                    if status.is_unsent() && reachable_eps.contains(ep) {
+                        *status = MessageStatusKind::Sending;
+                        context.dispatch_message(&self.message, *ep);
+                    }
+                }
+            }
+            MessageTargetKind::Push => {
+                for (ep, status) in self.wait_ack.status.iter_mut() {
+                    tracing::trace!(?ep, %status, ?reachable_eps, "send_unsent");
+                    if status.is_unsent() && reachable_eps.contains(ep) {
+                        *status = MessageStatusKind::Sending;
+                        if context.dispatch_message(&self.message, *ep) {
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
@@ -58,12 +122,7 @@ impl HoldMessage {
                     return Poll::Ready(Err(WaitAckErrorException::DurableMessageExpired));
                 }
                 if let Some(max_receiver) = durability_config.max_receiver {
-                    let resolved_count = self
-                        .wait_ack
-                        .status
-                        .values()
-                        .filter(|status| status.is_fulfilled(self.wait_ack.expect))
-                        .count();
+                    let resolved_count = self.fulfilled_count();
                     if resolved_count >= max_receiver as usize {
                         return Poll::Ready(Ok(()));
                     }
@@ -99,15 +158,18 @@ impl HoldMessage {
     pub(crate) fn resolve(self, exception: Option<WaitAckErrorException>) -> WaitAckResult {
         tracing::trace!("resolved: {self:?}");
         let wait_ack = self.wait_ack;
-        let status = wait_ack.status;
+        let status = wait_ack.status.into_iter().collect();
         let expect = wait_ack.expect;
+
         if exception.is_some() {
             return Err(WaitAckError { status, exception });
         }
         match self.message.header.target_kind {
             MessageTargetKind::Push => {
                 if status.iter().any(|(_, ack)| ack.is_fulfilled(expect)) {
-                    Ok(WaitAckSuccess { status })
+                    Ok(WaitAckSuccess {
+                        status: status.into_iter().collect(),
+                    })
                 } else {
                     Err(WaitAckError {
                         status,
@@ -118,6 +180,20 @@ impl HoldMessage {
             MessageTargetKind::Durable => Ok(WaitAckSuccess { status }),
             MessageTargetKind::Online => Ok(WaitAckSuccess { status }),
         }
+    }
+    pub fn fulfilled_count(&self) -> usize {
+        self.wait_ack
+            .status
+            .values()
+            .filter(|status| status.is_fulfilled(self.wait_ack.expect))
+            .count()
+    }
+    pub fn not_yet_failed_count(&self) -> usize {
+        self.wait_ack
+            .status
+            .values()
+            .filter(|status| !(status.is_failed_or_unreachable()))
+            .count()
     }
 }
 
@@ -186,7 +262,7 @@ impl MessageQueue {
             HoldMessage {
                 wait_ack: WaitAck {
                     expect: message.header.ack_kind,
-                    status,
+                    status: status.into_iter().collect(),
                 },
                 message,
             },

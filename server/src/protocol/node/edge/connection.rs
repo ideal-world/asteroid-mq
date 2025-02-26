@@ -36,7 +36,7 @@ pub struct EdgeConnectionInstance {
     pub outbound: tokio::sync::mpsc::UnboundedSender<EdgePayload>,
     pub alive: Arc<std::sync::atomic::AtomicBool>,
     pub peer_id: NodeId,
-    pub finish_signal: flume::Receiver<()>,
+    pub finish_signal: Arc<tokio::sync::Notify>,
 }
 
 pub struct EdgeConnectionRef {
@@ -124,7 +124,7 @@ impl EdgeConnectionInstance {
                                         let resp = EdgeResponse::from_result(seq_id, resp);
                                         let payload = EdgePayload::Response(resp);
                                         outbound.send(payload).unwrap_or_else(|_e| {
-                                            warn!("failed to send edge response, flume channel closed");
+                                            warn!("failed to send edge response, tokio mpsc channel closed");
                                         });
                                     });
                                 }
@@ -149,7 +149,8 @@ impl EdgeConnectionInstance {
         };
 
         let alive_flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let (finish_notify, finish_signal) = flume::bounded(1);
+        let finish_signal = Arc::new(tokio::sync::Notify::new());
+        let finish_notify = finish_signal.clone();
         let _handle = {
             let alive_flag = Arc::clone(&alive_flag);
             let attached_node = config.attached_node.clone();
@@ -163,7 +164,7 @@ impl EdgeConnectionInstance {
                     }
                 }
                 alive_flag.store(false, std::sync::atomic::Ordering::Relaxed);
-                let _ = finish_notify.send(());
+                finish_notify.notify_one();
                 if let Some(node) = node {
                     node.remove_edge_connection(peer_id);
                 }

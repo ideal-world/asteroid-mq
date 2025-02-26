@@ -199,7 +199,7 @@ async fn handle_socket(socket: WebSocket, node: Node, config: EdgeConfig, codec:
     let Some(connection) = node.get_edge_connection(node_id) else {
         return;
     };
-    let _ = connection.finish_signal.recv_async().await;
+    let _ = connection.finish_signal.notified().await;
     tracing::info!(?node_id, "edge disconnected");
 }
 
@@ -221,14 +221,13 @@ async fn main() -> asteroid_mq::Result<()> {
     // let _profiler = dhat::Profiler::new_heap();
     // let guard = pprof::ProfilerGuardBuilder::default().frequency(1000).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
 
-
-    let _join_handle = std::thread::spawn(|| {
-        loop {
-            let current_time = chrono::Utc::now();
-            let _profiler = dhat::Profiler::builder().file_name(format!("dhat-{current_time}.log")).build();
-            std::thread::sleep(tokio::time::Duration::from_secs(60));
-            drop(_profiler);
-        }
+    let _join_handle = std::thread::spawn(|| loop {
+        let current_time = chrono::Utc::now().to_rfc3339();
+        let _profiler = dhat::Profiler::builder()
+            .file_name(format!("dhat-{current_time}.json"))
+            .build();
+        std::thread::sleep(tokio::time::Duration::from_secs(60));
+        drop(_profiler);
     });
 
     tracing_subscriber::fmt()

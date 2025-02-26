@@ -118,7 +118,7 @@ async fn test_install_big_snapshot() {
                 policy: TopicOverflowPolicy::RejectNew,
                 size: NonZeroU32::new(99999).unwrap(),
             }),
-            max_payload_size: 16 * MB as u32
+            max_payload_size: 16 * MB as u32,
         }
     }
     let node_sender = nodes.get(&node_id_1).unwrap().clone();

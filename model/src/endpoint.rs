@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use typeshare::typeshare;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[typeshare(serialized_as = "String")]
 #[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
 pub struct EndpointAddr {

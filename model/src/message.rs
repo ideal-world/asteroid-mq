@@ -95,6 +95,7 @@ impl MessageStatusKind {
     pub fn is_unsent(&self) -> bool {
         *self == MessageStatusKind::Unsent
     }
+    #[inline(always)]
     pub fn is_failed_or_unreachable(&self) -> bool {
         *self == MessageStatusKind::Failed || *self == MessageStatusKind::Unreachable
     }
@@ -115,6 +116,7 @@ impl MessageStatusKind {
         }
     }
     /// witch means this state is a acceptable state
+    #[inline(always)]
     pub fn is_resolved(&self, condition: MessageAckExpectKind) -> bool {
         self.is_failed_or_unreachable() || self.is_fulfilled(condition)
     }

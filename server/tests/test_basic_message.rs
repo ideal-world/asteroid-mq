@@ -90,7 +90,7 @@ async fn test_nodes() {
                 policy: TopicOverflowPolicy::RejectNew,
                 size: NonZeroU32::new(500).unwrap(),
             }),
-            max_payload_size: 16 * MB as u32
+            max_payload_size: 16 * MB as u32,
         }
     }
     let node_server = nodes.get(&node_id_1).unwrap().clone();
