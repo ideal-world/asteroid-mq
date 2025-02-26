@@ -292,10 +292,9 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
             for (topic_code, topic) in &mut state_machine.node.topics {
                 let mut ctx = ProposalContext::new(node.clone());
                 ctx.set_topic_code(topic_code.clone());
-                topic.queue.flush_ack(
-                    &mut ctx,
-                    topic.queue.pending_ack.keys().copied(),
-                );
+                topic
+                    .queue
+                    .flush_ack(&mut ctx, topic.queue.pending_ack.keys().copied());
             }
         };
 

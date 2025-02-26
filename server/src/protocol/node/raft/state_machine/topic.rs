@@ -42,7 +42,13 @@ impl TopicData {
                 .map(|x| x.size())
                 .unwrap_or(MessageQueue::DEFAULT_CAPACITY),
         );
-        for message in messages {
+        for mut message in messages {
+            // if message is unsent, mark it unreachable, since it's not possible to send it
+            message.status.values_mut().for_each(|s| {
+                if *s == MessageStatusKind::Unsent {
+                    *s = MessageStatusKind::Unreachable;
+                }
+            });
             queue.push_durable_message(message);
         }
         Self {
@@ -349,7 +355,7 @@ impl TopicData {
         );
         for id in message_need_poll {
             // enable to debug online proposal
-            ctx.debug_ep_online = false;
+            ctx.debug_ep_online = true;
             self.update_and_flush(MessageStateUpdate::new_empty(id), ctx);
         }
         tracing::info!(

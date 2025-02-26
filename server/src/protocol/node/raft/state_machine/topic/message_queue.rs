@@ -192,7 +192,7 @@ impl HoldMessage {
         self.wait_ack
             .status
             .values()
-            .filter(|status| !(status.is_failed_or_unreachable()))
+            .filter(|status| !(status.is_failed_or_unreachable() || status.is_unsent()))
             .count()
     }
 }

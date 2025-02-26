@@ -49,7 +49,7 @@ pub enum Proposal {
 pub(crate) struct ProposalContext {
     pub node: Node,
     pub topic_code: Option<TopicCode>,
-    pub debug_ep_online: bool
+    pub debug_ep_online: bool,
 }
 
 impl ProposalContext {
@@ -57,7 +57,7 @@ impl ProposalContext {
         Self {
             node,
             topic_code: None,
-            debug_ep_online: false
+            debug_ep_online: false,
         }
     }
     pub(crate) fn push_durable_command(&mut self, command: DurableCommand) {
