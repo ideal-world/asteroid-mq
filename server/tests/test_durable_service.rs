@@ -131,7 +131,7 @@ impl Durable for MemoryDurable {
             .collect::<Vec<_>>())
     }
 }
-const PRELOAD_COUNT: usize = 2;
+const PRELOAD_COUNT: usize = 2000;
 #[tokio::test]
 async fn test_durable_service() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
