@@ -355,7 +355,7 @@ impl TopicData {
         );
         for id in message_need_poll {
             // enable to debug online proposal
-            ctx.debug_ep_online = true;
+            ctx.debug_ep_online = false;
             self.update_and_flush(MessageStateUpdate::new_empty(id), ctx);
         }
         tracing::info!(

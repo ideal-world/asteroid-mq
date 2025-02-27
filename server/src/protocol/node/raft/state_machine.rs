@@ -236,7 +236,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachineStore> {
     {
         match &*self.current_snapshot.read().await {
             Some(snapshot) => {
-                let bytes = bincode::serde::encode_to_vec(&snapshot.data, BINCODE_CONFIG).unwrap();
+                let bytes = snapshot.data.clone();
                 Ok(Some(Snapshot {
                     meta: snapshot.meta.clone(),
                     snapshot: Box::new(Cursor::new(bytes)),
