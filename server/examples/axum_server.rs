@@ -212,16 +212,18 @@ fn is_running_in_k8s() -> bool {
     std::path::Path::new("/var/run/secrets/kubernetes.io").exists()
 }
 
-#[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
+// memory debug
+/* #[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc; */
 
 #[tokio::main]
 
 async fn main() -> asteroid_mq::Result<()> {
     // let _profiler = dhat::Profiler::new_heap();
     // let guard = pprof::ProfilerGuardBuilder::default().frequency(1000).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
-
-    let _join_handle = std::thread::spawn(|| loop {
+    
+    // memory debug
+/*     let _join_handle = std::thread::spawn(|| loop {
         let current_time = chrono::Utc::now().to_rfc3339();
         let _profiler = dhat::Profiler::builder()
             .file_name(format!("dhat-{current_time}.json"))
@@ -229,7 +231,7 @@ async fn main() -> asteroid_mq::Result<()> {
         std::thread::sleep(tokio::time::Duration::from_secs(60));
         drop(_profiler);
     });
-
+ */
     tracing_subscriber::fmt()
         .with_env_filter("warn,kube_client=off,asteroid_mq=info,openraft=warn,hyper_util=warn,hyper=warn,tower=warn,rustls=off")
         .init();
