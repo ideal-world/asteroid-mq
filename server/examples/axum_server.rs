@@ -221,17 +221,17 @@ static ALLOC: dhat::Alloc = dhat::Alloc; */
 async fn main() -> asteroid_mq::Result<()> {
     // let _profiler = dhat::Profiler::new_heap();
     // let guard = pprof::ProfilerGuardBuilder::default().frequency(1000).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
-    
+
     // memory debug
-/*     let _join_handle = std::thread::spawn(|| loop {
-        let current_time = chrono::Utc::now().to_rfc3339();
-        let _profiler = dhat::Profiler::builder()
-            .file_name(format!("dhat-{current_time}.json"))
-            .build();
-        std::thread::sleep(tokio::time::Duration::from_secs(60));
-        drop(_profiler);
-    });
- */
+    /*     let _join_handle = std::thread::spawn(|| loop {
+           let current_time = chrono::Utc::now().to_rfc3339();
+           let _profiler = dhat::Profiler::builder()
+               .file_name(format!("dhat-{current_time}.json"))
+               .build();
+           std::thread::sleep(tokio::time::Duration::from_secs(60));
+           drop(_profiler);
+       });
+    */
     tracing_subscriber::fmt()
         .with_env_filter("warn,kube_client=off,asteroid_mq=info,openraft=warn,hyper_util=warn,hyper=warn,tower=warn,rustls=off")
         .init();
