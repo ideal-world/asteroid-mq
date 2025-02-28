@@ -2,7 +2,7 @@
 members = ["model", "server", "sdk/rust"]
 resolver = "2"
 [workspace.package]
-version = "0.1.0-alpha.14"
+version = "0.1.0-alpha.15"
 authors = ["4t145 <u4t145@163.com>", "RWDai <rwdai@foxmail.com>"]
 edition = "2021"
 homepage = "https://github.com/ideal-world/asteroid-mq"

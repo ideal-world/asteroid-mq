@@ -12,7 +12,7 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
-asteroid-mq-model = { version = "0.1.0-alpha.14", path = "../model" }
+asteroid-mq-model = { version = "0.1.0-alpha.15", path = "../model" }
 bytes = { workspace = true, features = ["serde"] }
 chrono.workspace = true
 flume.workspace = true
