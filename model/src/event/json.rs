@@ -21,4 +21,7 @@ where
     const SUBJECT: crate::Subject = T::SUBJECT;
     const BROADCAST: bool = T::BROADCAST;
     const EXPECT_ACK_KIND: crate::MessageAckExpectKind = T::EXPECT_ACK_KIND;
+    fn durable_config() -> Option<crate::MessageDurableConfig> {
+        T::durable_config()
+    }
 }
