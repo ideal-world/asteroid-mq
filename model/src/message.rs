@@ -406,4 +406,14 @@ impl From<u8> for MessageTargetKind {
     }
 }
 
-impl MessageTargetKind {}
+impl MessageTargetKind {
+    pub fn is_online(&self) -> bool {
+        *self == MessageTargetKind::Online
+    }
+    pub fn is_push(&self) -> bool {
+        *self == MessageTargetKind::Push
+    }
+    pub fn is_durable(&self) -> bool {
+        *self == MessageTargetKind::Durable
+    }
+}

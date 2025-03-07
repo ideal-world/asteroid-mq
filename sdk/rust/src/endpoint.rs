@@ -4,7 +4,7 @@ use std::{
     sync::Weak,
 };
 
-use asteroid_mq_model::{EdgeEndpointOnline, EndpointAddr, Interest, Message, TopicCode};
+use asteroid_mq_model::{EndpointAddr, Interest, Message, TopicCode};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::Instrument;
 
@@ -121,17 +121,24 @@ impl ClientEndpoint {
     }
 
     pub async fn respawn(&mut self) -> Result<(), ClientNodeError> {
-        tracing::debug!(ep = ?self, "respawn endpoint");
-        let Some(node) = self.node.upgrade() else {
+        let Some(node_inner) = self.node.upgrade() else {
             return Err(ClientNodeError::disconnected());
         };
-        let new_addr = node
-            .send_ep_online(EdgeEndpointOnline {
-                topic_code: self.topic_code.clone(),
-                interests: self.interests.iter().cloned().collect(),
-            })
+        // offline old point
+        let ep_offline_result = node_inner
+            .send_ep_offline(self.topic_code.clone(), self.addr)
+            .await;
+
+        tracing::info!(?ep_offline_result);
+        // remove old tx
+        node_inner.endpoint_map.write().await.remove(&self.addr);
+        // detach old node, so we won't offline twice in drop
+        self.node = Weak::new();
+        let mut new_ep = node_inner.into_client_node()
+            .create_endpoint(self.topic_code.clone(), self.interests.clone())
             .await?;
-        self.addr = new_addr;
+        std::mem::swap(&mut new_ep, self);
+        tracing::debug!(ep = ?self.addr, "respawn");
         Ok(())
     }
 
@@ -143,7 +150,11 @@ impl ClientEndpoint {
             let message = match message {
                 Some(message) => message,
                 None => {
-                    self.respawn().await?;
+                    let addr = self.addr;
+                    tracing::info!(?addr, "respawn endpoint");
+                    self.respawn().await.inspect_err(|e| {
+                        tracing::info!(?addr, error = ?e, "fail to respawn endpoint");
+                    })?;
                     continue;
                 }
             };

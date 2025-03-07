@@ -488,6 +488,7 @@ impl Node {
         from: NodeId,
         edge_request_kind: edge::EdgeRequestEnum,
     ) -> Result<edge::EdgeResponseEnum, edge::EdgeError> {
+        tracing::error!(?edge_request_kind, "handle edge request");
         // auth check
         if let Some(auth) = self.config.edge_auth.as_ref() {
             if let Err(e) = auth.check(from, &edge_request_kind).await {
@@ -558,7 +559,9 @@ impl Node {
                         EdgeErrorKind::Internal,
                     ));
                 };
+                tracing::error!("node got");
                 self.check_ep_auth(&offline.endpoint, &from)?;
+                tracing::error!("auth checked");
                 node.propose(Proposal::EpOffline(EndpointOffline {
                     topic_code: topic_code.clone(),
                     endpoint: offline.endpoint,
@@ -572,7 +575,9 @@ impl Node {
                         EdgeErrorKind::Internal,
                     )
                 })?;
+                tracing::error!("proposed");
                 self.remove_edge_routing(&offline.endpoint);
+                tracing::error!("finished");
                 Ok(edge::EdgeResponseEnum::EndpointOffline)
             }
             edge::EdgeRequestEnum::EndpointInterest(interest) => {

@@ -106,6 +106,11 @@ pub(crate) struct ClientNodeInner {
 }
 
 impl ClientNodeInner {
+    pub fn into_client_node(self: Arc<ClientNodeInner>) -> ClientNode {
+        ClientNode {
+            inner: self.clone(),
+        }
+    }
     async fn ensure_mailbox_and_take_rx(
         &self,
         addr: EndpointAddr,
@@ -300,15 +305,16 @@ impl ClientNodeInner {
                                 }
                                 Some(Err(e)) => {
                                     match e.kind {
-                                        EdgeConnectionErrorKind::Reconnect => {
+                                        EdgeConnectionErrorKind::Reconnect | EdgeConnectionErrorKind::Closed  => {
+                                            // clear the response pool
+                                            response_pool.write().await.clear();
                                             // clear ep map, so the endpoint will know there is going to have a new connection
                                             endpoints_map.write().await.clear();
-                                        },
-                                        EdgeConnectionErrorKind::Closed => {
-                                            endpoints_map.write().await.clear();
-                                            tracing::debug!("connection closed");
+                                            if matches!(e.kind,EdgeConnectionErrorKind::Closed) {
+                                                tracing::info!("connection closed");
+                                            }
                                             break;
-                                        }
+                                        },
                                         _ => {
                                             tracing::error!("failed to receive message: {:?}", e);
                                         }
@@ -357,7 +363,6 @@ impl ClientNodeInner {
                         _ => {}
                     }
                 }
-                stream.next().await;
             }
             .instrument(tracing::info_span!("client_node_rx"))
         };

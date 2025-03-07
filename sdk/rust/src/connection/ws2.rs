@@ -11,6 +11,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tracing::Instrument;
 
 use crate::{ClientNode, ClientNodeError};
 
@@ -79,6 +80,7 @@ where
     ) -> std::task::Poll<Option<Self::Item>> {
         let this = self.project();
         let message = futures_util::ready!(this.inner.poll_next(cx));
+        tracing::warn!(?message, "do received");
         let message = match message {
             Some(Ok(message)) => message,
             Some(Err(e)) => {
@@ -150,6 +152,7 @@ where
             .codec
             .encode(&item)
             .map_err(EdgeConnectionError::codec("ws start_send"))?;
+        tracing::warn!(?item, "do send payload");
         this.inner
             .start_send(tokio_tungstenite::tungstenite::Message::Binary(payload))
             .map_err(EdgeConnectionError::underlying("ws start_send"))?;
@@ -193,10 +196,19 @@ impl<C: Codec + Clone> ReconnectableConnection for Ws2Client<C> {
     fn reconnect(&self) -> Self::ReconnectFuture {
         let request = self.request.clone();
         let codec = self.codec.clone();
-        Box::pin(async move {
-            let client = Ws2Client::create_by_request(request, codec).await?;
-            Ok(client)
-        })
+        let span = tracing::span!(
+            tracing::Level::INFO,
+            "ws2_reconnect",
+            request = ?request.uri(),
+        );
+        Box::pin(
+            async move {
+                tracing::info!("ws2 connection reconnecting");
+                let client = Ws2Client::create_by_request(request, codec).await?;
+                Ok(client)
+            }
+            .instrument(span),
+        )
     }
     fn sleep(&self, duration: std::time::Duration) -> Self::SleepFuture {
         tokio::time::sleep(duration)

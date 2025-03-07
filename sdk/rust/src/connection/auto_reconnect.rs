@@ -69,6 +69,9 @@ pin_project_lite::pin_project! {
         reconnect_status: ReconnectStatus<C::ReconnectFuture, C::SleepFuture>,
         pub reconnect_config: ReconnectConfig,
         retry_times: u64,
+        reconnected_times: u64,
+        // reconnected signal
+        just_reconnected: u64,
     }
 }
 
@@ -86,6 +89,8 @@ where
             reconnect_status: ReconnectStatus::Connected,
             reconnect_config,
             retry_times: 0,
+            reconnected_times: 0,
+            just_reconnected: 0,
         }
     }
 
@@ -94,50 +99,57 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), C::Error>> {
         let mut this = self.project();
-        let status = this.reconnect_status.as_mut().project();
-        match status {
-            ReconnectStatusProj::Reconnecting { future } => {
-                let reconnect_result = ready!(future.poll(cx));
-                match reconnect_result {
-                    Err(e) => {
-                        tracing::error!(error = ?e, "reconnect failed");
-                        if let Some(max_failure_times) = this.reconnect_config.max_failure_times {
-                            if *this.retry_times >= max_failure_times {
-                                // if the retry times exceed the max failure times, return the reconnect error
-                                return std::task::Poll::Ready(Err(e));
+        loop {
+            let status = this.reconnect_status.as_mut().project();
+            match status {
+                ReconnectStatusProj::Reconnecting { future } => {
+                    let reconnect_result = ready!(future.poll(cx));
+                    match reconnect_result {
+                        Err(e) => {
+                            tracing::error!(error = ?e, "reconnect failed");
+                            if let Some(max_failure_times) = this.reconnect_config.max_failure_times
+                            {
+                                if *this.retry_times >= max_failure_times {
+                                    // if the retry times exceed the max failure times, return the reconnect error
+                                    return std::task::Poll::Ready(Err(e));
+                                }
                             }
+                            *this.retry_times += 1;
+                            this.reconnect_status.set(ReconnectStatus::Sleeping {
+                                future: this.connection.sleep(this.reconnect_config.retry_interval),
+                            });
+                            continue;
                         }
-                        *this.retry_times += 1;
-                        this.reconnect_status.set(ReconnectStatus::Sleeping {
-                            future: this.connection.sleep(this.reconnect_config.retry_interval),
-                        });
-                        std::task::Poll::Pending
-                    }
-                    Ok(new_connection) => {
-                        *this.retry_times = 0;
-                        this.connection.set(new_connection);
-                        this.reconnect_status.set(ReconnectStatus::Connected);
-                        std::task::Poll::Ready(Ok(()))
+                        Ok(new_connection) => {
+                            tracing::info!("reconnect success");
+                            *this.retry_times = 0;
+                            *this.reconnected_times += 1;
+                            *this.just_reconnected += 1;
+                            this.connection.set(new_connection);
+                            this.reconnect_status.set(ReconnectStatus::Connected);
+                            return std::task::Poll::Ready(Ok(()));
+                        }
                     }
                 }
-            }
-            ReconnectStatusProj::Sleeping { future } => {
-                ready!(future.poll(cx));
-                let reconnect_future = this.connection.reconnect();
-                this.reconnect_status.set(ReconnectStatus::Reconnecting {
-                    future: reconnect_future,
-                });
-                std::task::Poll::Pending
-            }
-            ReconnectStatusProj::Connected => {
-                if this.connection.is_closed() {
+                ReconnectStatusProj::Sleeping { future } => {
+                    ready!(future.poll(cx));
                     let reconnect_future = this.connection.reconnect();
                     this.reconnect_status.set(ReconnectStatus::Reconnecting {
                         future: reconnect_future,
                     });
-                    return std::task::Poll::Pending;
+                    continue;
                 }
-                std::task::Poll::Ready(Ok(()))
+                ReconnectStatusProj::Connected => {
+                    if this.connection.is_closed() {
+                        tracing::warn!("connection closed, reconnecting");
+                        let reconnect_future = this.connection.reconnect();
+                        this.reconnect_status.set(ReconnectStatus::Reconnecting {
+                            future: reconnect_future,
+                        });
+                        continue;
+                    }
+                    return std::task::Poll::Ready(Ok(()));
+                }
             }
         }
     }
@@ -164,6 +176,7 @@ where
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
+
         // check if it is reconnecting
         ready!(self.as_mut().poll_reconnecting(cx)?);
         let this = self.project();
@@ -184,32 +197,29 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         // check if it is reconnecting
-        let retry_times_before_poll = self.retry_times;
-        let reconnecting = self.as_mut().poll_reconnecting(cx)?;
-        let retry_times_after_poll = self.retry_times;
-        if reconnecting.is_pending() {
-            if retry_times_after_poll > retry_times_before_poll {
-                // if the retry times is increased, it means the connection is closed
-                return std::task::Poll::Ready(Some(Err(EdgeConnectionError::new(
-                    asteroid_mq_model::connection::EdgeConnectionErrorKind::Reconnect,
-                    "poll_next",
-                ))));
-            } else {
-                return std::task::Poll::Pending;
-            }
+        ready!(self.as_mut().poll_reconnecting(cx)?);
+        let mut this = self.as_mut().project();
+
+        if *this.just_reconnected != 0 {
+            // consume this reconnected signal
+            *this.just_reconnected -= 1;
+            // if the retry times is increased, it means the connection is closed
+            tracing::warn!("sending just reconnect error");
+            return std::task::Poll::Ready(Some(Err(EdgeConnectionError::new(
+                asteroid_mq_model::connection::EdgeConnectionErrorKind::Reconnect,
+                "poll_next",
+            ))));
         }
-        let mut this = self.project();
         let poll_next_result = ready!(this.connection.as_mut().poll_next(cx)?);
-        if poll_next_result.is_none() {
-            // if the connection is closed, reconnect
-            let reconnect_future = this.connection.reconnect();
-            this.reconnect_status.set(ReconnectStatus::Reconnecting {
-                future: reconnect_future,
-            });
-            std::task::Poll::Pending
-        } else {
-            std::task::Poll::Ready(poll_next_result.map(Ok))
+        if poll_next_result.is_some() {
+            return std::task::Poll::Ready(poll_next_result.map(Ok));
         }
+        // if the connection is closed, reconnect
+        let reconnect_future = this.connection.reconnect();
+        this.reconnect_status.set(ReconnectStatus::Reconnecting {
+            future: reconnect_future,
+        });
+        self.poll_next(cx)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.connection.size_hint()

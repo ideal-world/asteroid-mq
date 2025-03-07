@@ -313,7 +313,9 @@ impl TopicData {
             }
             let queue = &mut self.queue;
             for (id, message) in &mut queue.hold_messages {
-                if message.message.header.target_kind == MessageTargetKind::Durable {
+                if message.message.header.target_kind.is_durable()
+                    || message.message.header.target_kind.is_push()
+                {
                     let status = &mut message.wait_ack.status;
                     if !status.contains_key(&endpoint)
                         && message
@@ -323,7 +325,15 @@ impl TopicData {
                             .iter()
                             .any(|s| self.ep_interest_map.find(s).contains(&endpoint))
                     {
-                        if let Some(config) = message.message.header.durability.as_ref() {
+                        if message.message.header.target_kind.is_push() {
+                            if status
+                                .values()
+                                .any(|status| !status.is_failed_or_unreachable())
+                            {
+                                // already has a receiver
+                                continue;
+                            }
+                        } else if let Some(config) = message.message.header.durability.as_ref() {
                             if let Some(max_receiver) = config.max_receiver {
                                 if status
                                     .values()
