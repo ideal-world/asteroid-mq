@@ -49,7 +49,7 @@ impl ClientReceivedMessage {
     }
     pub async fn ack_failed(&self) -> Result<(), ClientNodeError> {
         let Some(node) = self.node.upgrade() else {
-            return Err(ClientNodeError::disconnected());
+            return Err(ClientNodeError::disconnected("ack_failed"));
         };
         let ack = self
             .message
@@ -59,7 +59,7 @@ impl ClientReceivedMessage {
     }
     pub async fn ack_processed(&self) -> Result<(), ClientNodeError> {
         let Some(node) = self.node.upgrade() else {
-            return Err(ClientNodeError::disconnected());
+            return Err(ClientNodeError::disconnected("ack_processed"));
         };
         let ack = self
             .message
@@ -69,7 +69,7 @@ impl ClientReceivedMessage {
     }
     pub async fn ack_received(&self) -> Result<(), ClientNodeError> {
         let Some(node) = self.node.upgrade() else {
-            return Err(ClientNodeError::disconnected());
+            return Err(ClientNodeError::disconnected("ack_received"));
         };
         let ack = self
             .message
@@ -99,7 +99,7 @@ impl ClientEndpoint {
         interests: impl IntoIterator<Item = Interest>,
     ) -> Result<(), ClientNodeError> {
         let Some(node) = self.node.upgrade() else {
-            return Err(ClientNodeError::disconnected());
+            return Err(ClientNodeError::disconnected("update_interests"));
         };
         let interests_vec: Vec<_> = interests.into_iter().collect();
         let interests_set = interests_vec.iter().cloned().collect::<HashSet<_>>();
@@ -122,10 +122,11 @@ impl ClientEndpoint {
 
     pub async fn respawn(&mut self) -> Result<(), ClientNodeError> {
         let Some(node_inner) = self.node.upgrade() else {
-            return Err(ClientNodeError::disconnected());
+            return Err(ClientNodeError::disconnected("respawn"));
         };
+
         // offline old point
-        let ep_offline_result = node_inner
+        let ep_offline_result = node_inner.clone()
             .send_ep_offline(self.topic_code.clone(), self.addr)
             .await;
 

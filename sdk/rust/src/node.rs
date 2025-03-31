@@ -213,6 +213,7 @@ impl ClientNodeInner {
             seq_id: self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             request,
         };
+        tracing::warn!(?request);
         self.sender
             .send((request, responder))
             .map_err(|e| ClientNodeError {
@@ -227,9 +228,7 @@ impl ClientNodeInner {
     async fn wait_handle(
         response_handle: ResponseHandle,
     ) -> Result<EdgeResponseEnum, ClientNodeError> {
-        let response = response_handle.await.map_err(|_| ClientNodeError {
-            kind: ClientErrorKind::Disconnected,
-        })??;
+        let response = response_handle.await.map_err(|_| ClientNodeError::disconnected("wait handle"))??;
         Ok(response)
     }
     async fn send_request_and_wait(
@@ -269,6 +268,7 @@ impl ClientNodeInner {
                                     message
                                 }
                                 None => {
+                                    tracing::warn!("tx dropped");
                                     break;
                                 }
                             }
@@ -276,7 +276,7 @@ impl ClientNodeInner {
                     };
                     let seq_id = request.seq_id;
                     response_pool.write().await.insert(seq_id, responder);
-
+                    tracing::warn!(seq_id, "[debug] request do send");
                     let send_result = sink.send(EdgePayload::Request(request)).await;
                     if let Err(e) = send_result {
                         tracing::error!("failed to send message: {:?}", e);
@@ -312,8 +312,8 @@ impl ClientNodeInner {
                                             endpoints_map.write().await.clear();
                                             if matches!(e.kind,EdgeConnectionErrorKind::Closed) {
                                                 tracing::info!("connection closed");
-                                            }
-                                            break;
+                                                break;
+                                            } 
                                         },
                                         _ => {
                                             tracing::error!("failed to receive message: {:?}", e);
@@ -352,9 +352,13 @@ impl ClientNodeInner {
                             drop(wg);
                         }
                         EdgePayload::Response(edge_response) => {
+                            tracing::warn!(?edge_response, "edge response");
                             let seq_id = edge_response.seq_id;
                             if let Some(responder) = response_pool.write().await.remove(&seq_id) {
+                                tracing::warn!(?edge_response, "[debug] received response from server");
                                 let _ = responder.send(edge_response.result.into_std());
+                            } else {
+                                tracing::error!(seq_id, "response handle not found");
                             }
                         }
                         EdgePayload::Error(e) => {

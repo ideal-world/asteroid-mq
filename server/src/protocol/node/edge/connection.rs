@@ -119,13 +119,17 @@ impl EdgeConnectionInstance {
                                     tokio::spawn(async move {
                                         let seq_id = request.seq_id;
                                         let handler = node.edge_handler.read().await.clone();
+                                        tracing::warn!(?request,"edge request received");
                                         let resp =
                                             handler.handle(node, peer_id, request.request).await;
                                         let resp = EdgeResponse::from_result(seq_id, resp);
+                                        tracing::warn!(?resp,"[debug] edge response going to send");
+                                        let seq_id = resp.seq_id;
                                         let payload = EdgePayload::Response(resp);
                                         outbound.send(payload).unwrap_or_else(|_e| {
                                             warn!("failed to send edge response, tokio mpsc channel closed");
                                         });
+                                        tracing::warn!(?seq_id, "[debug] edge response send out");
                                     });
                                 }
                                 _ => {
@@ -134,7 +138,11 @@ impl EdgeConnectionInstance {
                             }
                         }
                         PollEvent::PacketOut(packet) => {
-                            sink.send(packet).await?;
+                            let _packet = packet.clone();
+                            sink.send(packet).await.inspect_err(|e| {
+                                warn!(?e, "failed to send edge packet");
+                            })?;
+                            tracing::warn!(?_packet, "[debug] ws-level edge response send out");
                         }
                     }
                 }
@@ -166,7 +174,7 @@ impl EdgeConnectionInstance {
                 alive_flag.store(false, std::sync::atomic::Ordering::Relaxed);
                 finish_notify.notify_one();
                 if let Some(node) = node {
-                    node.remove_edge_connection(peer_id);
+                    node.remove_edge_connection(peer_id).await;
                 }
             })
         };

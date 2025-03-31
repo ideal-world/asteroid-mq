@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{future::Future, task::{Poll, Waker}};
 
 use asteroid_mq_model::{
     connection::{EdgeConnectionError, EdgeNodeConnection},
@@ -53,10 +53,12 @@ pin_project_lite::pin_project! {
         Reconnecting {
             #[pin]
             future: R,
+            wakers: Vec<Waker>,
         },
         Sleeping {
             #[pin]
             future: S,
+            wakers: Vec<Waker>,
         },
         Connected,
     }
@@ -93,7 +95,36 @@ where
             just_reconnected: 0,
         }
     }
-
+    pub fn poll_connection_ready(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), C::Error>> {
+        let mut this = self.as_mut().project();
+        let status = this.reconnect_status.as_mut().project();
+        match status {
+            ReconnectStatusProj::Reconnecting { future, wakers } => {
+                wakers.push(cx.waker().clone());
+                Poll::Pending
+            },
+            ReconnectStatusProj::Sleeping { future, wakers } => {
+                wakers.push(cx.waker().clone());
+                Poll::Pending
+            },
+            ReconnectStatusProj::Connected => {
+                if this.connection.is_closed() {
+                    tracing::warn!("connection is not ready, reconnecting");       
+                    let reconnect_future = this.connection.reconnect();
+                    this.reconnect_status.set(ReconnectStatus::Reconnecting {
+                        future: reconnect_future,
+                        wakers: vec![cx.waker().clone()],
+                    });
+                    Poll::Pending
+                } else {
+                    this.connection.as_mut().poll_ready(cx)
+                }
+            }
+        }
+    }
     pub fn poll_reconnecting(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -102,7 +133,7 @@ where
         loop {
             let status = this.reconnect_status.as_mut().project();
             match status {
-                ReconnectStatusProj::Reconnecting { future } => {
+                ReconnectStatusProj::Reconnecting { future, wakers } => {
                     let reconnect_result = ready!(future.poll(cx));
                     match reconnect_result {
                         Err(e) => {
@@ -115,27 +146,36 @@ where
                                 }
                             }
                             *this.retry_times += 1;
+                            let wakers = wakers.clone();
                             this.reconnect_status.set(ReconnectStatus::Sleeping {
                                 future: this.connection.sleep(this.reconnect_config.retry_interval),
+                                wakers,
                             });
                             continue;
                         }
                         Ok(new_connection) => {
-                            tracing::info!("reconnect success");
+                            let retry_times = *this.retry_times;
+                            let reconnected_times = *this.reconnected_times;
+                            tracing::info!(retry_times, reconnected_times, wakers_count = wakers.len(), "reconnect success");
+                            for waker in wakers {
+                                waker.wake_by_ref();
+                            }
                             *this.retry_times = 0;
                             *this.reconnected_times += 1;
                             *this.just_reconnected += 1;
                             this.connection.set(new_connection);
                             this.reconnect_status.set(ReconnectStatus::Connected);
-                            return std::task::Poll::Ready(Ok(()));
+                            continue;
                         }
                     }
                 }
-                ReconnectStatusProj::Sleeping { future } => {
+                ReconnectStatusProj::Sleeping { future, wakers } => {
                     ready!(future.poll(cx));
+                    let wakers = wakers.clone();
                     let reconnect_future = this.connection.reconnect();
                     this.reconnect_status.set(ReconnectStatus::Reconnecting {
                         future: reconnect_future,
+                        wakers
                     });
                     continue;
                 }
@@ -145,6 +185,7 @@ where
                         let reconnect_future = this.connection.reconnect();
                         this.reconnect_status.set(ReconnectStatus::Reconnecting {
                             future: reconnect_future,
+                            wakers: vec![]
                         });
                         continue;
                     }
@@ -176,13 +217,11 @@ where
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
-
         // check if it is reconnecting
-        ready!(self.as_mut().poll_reconnecting(cx)?);
-        let this = self.project();
-        this.connection.poll_ready(cx)
+        self.as_mut().poll_connection_ready(cx)
     }
     fn start_send(self: std::pin::Pin<&mut Self>, item: EdgePayload) -> Result<(), Self::Error> {
+        tracing::warn!(?item, "[debug] ar payload do send");
         self.project().connection.start_send(item)
     }
 }
@@ -199,12 +238,12 @@ where
         // check if it is reconnecting
         ready!(self.as_mut().poll_reconnecting(cx)?);
         let mut this = self.as_mut().project();
-
         if *this.just_reconnected != 0 {
             // consume this reconnected signal
             *this.just_reconnected -= 1;
             // if the retry times is increased, it means the connection is closed
             tracing::warn!("sending just reconnect error");
+            cx.waker().wake_by_ref();
             return std::task::Poll::Ready(Some(Err(EdgeConnectionError::new(
                 asteroid_mq_model::connection::EdgeConnectionErrorKind::Reconnect,
                 "poll_next",
@@ -218,6 +257,7 @@ where
         let reconnect_future = this.connection.reconnect();
         this.reconnect_status.set(ReconnectStatus::Reconnecting {
             future: reconnect_future,
+            wakers: vec![]
         });
         self.poll_next(cx)
     }

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use asteroid_mq_model::{
     connection::EdgeConnectionError, EdgeError, EdgeRequestEnum, EdgeResponseEnum, WaitAckError,
 };
@@ -20,9 +22,9 @@ impl ClientNodeError {
             kind: ClientErrorKind::UnexpectedResponse(response),
         }
     }
-    pub fn disconnected() -> Self {
+    pub fn disconnected(context: &'static str) -> Self {
         ClientNodeError {
-            kind: ClientErrorKind::Disconnected,
+            kind: ClientErrorKind::Disconnected(context.into()),
         }
     }
 }
@@ -55,7 +57,7 @@ pub enum ClientErrorKind {
     Edge(EdgeError),
     Connection(EdgeConnectionError),
     NoConnection(EdgeRequestEnum),
-    Disconnected,
+    Disconnected(Cow<'static, str>),
     Io(std::io::Error),
     WaitAck(WaitAckError),
 }
@@ -69,7 +71,7 @@ impl std::fmt::Display for ClientErrorKind {
             ClientErrorKind::Edge(e) => write!(f, "Edge error: {:?}", e),
             ClientErrorKind::Connection(e) => write!(f, "Edge connection error: {:?}", e),
             ClientErrorKind::NoConnection(req) => write!(f, "No connection for request: {:?}", req),
-            ClientErrorKind::Disconnected => write!(f, "Disconnected"),
+            ClientErrorKind::Disconnected(c) => write!(f, "Disconnected: {c}"),
             ClientErrorKind::Io(e) => write!(f, "IO error: {:?}", e),
             ClientErrorKind::WaitAck(e) => write!(f, "WaitAck error: {:?}", e),
         }

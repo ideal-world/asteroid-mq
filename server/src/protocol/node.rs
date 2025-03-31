@@ -80,7 +80,7 @@ pub struct NodeInner {
     network: TcpNetworkService,
     config: NodeConfig,
     edge_connections: RwLock<HashMap<NodeId, Arc<EdgeConnectionInstance>>>,
-    edge_routing: RwLock<HashMap<EndpointAddr, (NodeId, TopicCode)>>,
+    edge_routing: tokio::sync::RwLock<HashMap<EndpointAddr, (NodeId, TopicCode)>>,
     pub edge_handler: tokio::sync::RwLock<EdgeConnectionHandlerObject>,
 
     // May we delete this and access the node api from edge sdk with tokio channel socket connection?
@@ -165,7 +165,7 @@ impl Node {
         tokio::spawn(scheduler_running);
         let inner = NodeInner {
             edge_connections: RwLock::new(HashMap::new()),
-            edge_routing: RwLock::new(HashMap::new()),
+            edge_routing: tokio::sync::RwLock::new(HashMap::new()),
             // topics: RwLock::new(HashMap::new()),
             edge_handler: tokio::sync::RwLock::new(EdgeConnectionHandlerObject::basic()),
             durable_commit_service: config
@@ -415,18 +415,36 @@ impl Node {
     pub fn is(&self, id: NodeId) -> bool {
         self.id() == id
     }
-    pub(crate) fn get_edge_routing(&self, addr: &EndpointAddr) -> Option<NodeId> {
-        let routing = self.edge_routing.read().unwrap();
-        Some(routing.get(addr)?.0)
+
+    pub(crate) fn blocking_get_edge_routing(&self, addr: &EndpointAddr) -> Option<NodeId> {
+        // we can do this for we never hold write guard across an await point
+        loop {
+            let routing = self.edge_routing.try_read();
+            match routing {
+                Ok(routing) => return Some(routing.get(addr)?.0),
+                Err(_e) => {
+                    continue;
+                }
+            }
+        }
     }
-    pub(crate) fn set_edge_routing(&self, addr: EndpointAddr, edge: NodeId, topic: TopicCode) {
-        self.edge_routing
-            .write()
-            .unwrap()
-            .insert(addr, (edge, topic));
+    // pub(crate) async fn get_edge_routing(&self, addr: &EndpointAddr) -> Option<NodeId> {
+    //     let routing = self.edge_routing.read().await;
+    //     Some(routing.get(addr)?.0)
+    // }
+    pub(crate) async fn set_edge_routing(
+        &self,
+        addr: EndpointAddr,
+        edge: NodeId,
+        topic: TopicCode,
+    ) {
+        self.edge_routing.write().await.insert(addr, (edge, topic));
     }
-    pub(crate) fn remove_edge_routing(&self, addr: &EndpointAddr) {
-        self.edge_routing.write().unwrap().remove(addr);
+    /// Read in sync, write in async
+    pub(crate) async fn remove_edge_routing(&self, addr: &EndpointAddr) {
+        tracing::error!(?addr, "remove_edge_routing start");
+        self.edge_routing.write().await.remove(addr);
+        tracing::error!(?addr, "remove_edge_routing finished");
     }
     pub fn get_edge_connection(&self, to: NodeId) -> Option<EdgeConnectionRef> {
         let connections = self.edge_connections.read().unwrap();
@@ -437,11 +455,11 @@ impl Node {
             None
         }
     }
-    pub fn remove_edge_connection(&self, to: NodeId) {
+    pub async fn remove_edge_connection(&self, to: NodeId) {
         let Some(_connection) = self.edge_connections.write().unwrap().remove(&to) else {
             return;
         };
-        let mut routing = self.edge_routing.write().unwrap();
+        let mut routing = self.edge_routing.write().await;
         let mut offline_eps = Vec::new();
         for (addr, (node_id, topic)) in routing.iter() {
             if node_id == &to {
@@ -465,8 +483,8 @@ impl Node {
             });
         }
     }
-    pub fn check_ep_auth(&self, ep: &EndpointAddr, peer: &NodeId) -> Result<(), EdgeError> {
-        let routing = self.edge_routing.read().unwrap();
+    pub async fn check_ep_auth(&self, ep: &EndpointAddr, peer: &NodeId) -> Result<(), EdgeError> {
+        let routing = self.edge_routing.read().await;
         if let Some((owner, _topic)) = routing.get(ep) {
             if owner == peer {
                 Ok(())
@@ -488,7 +506,6 @@ impl Node {
         from: NodeId,
         edge_request_kind: edge::EdgeRequestEnum,
     ) -> Result<edge::EdgeResponseEnum, edge::EdgeError> {
-        tracing::error!(?edge_request_kind, "handle edge request");
         // auth check
         if let Some(auth) = self.config.edge_auth.as_ref() {
             if let Err(e) = auth.check(from, &edge_request_kind).await {
@@ -528,7 +545,8 @@ impl Node {
                     ));
                 };
                 let endpoint = EndpointAddr::new_snowflake();
-                self.set_edge_routing(endpoint, from, topic_code.clone());
+                self.set_edge_routing(endpoint, from, topic_code.clone())
+                    .await;
                 tracing::info!(?online, ?endpoint, "edge endpoint online");
                 let result = node
                     .propose(Proposal::EpOnline(EndpointOnline {
@@ -540,7 +558,7 @@ impl Node {
                     .await;
                 if let Err(e) = result {
                     // rollback edge routing change
-                    self.remove_edge_routing(&endpoint);
+                    self.remove_edge_routing(&endpoint).await;
                     return Err(EdgeError::with_message(
                         "endpoint online",
                         e.to_string(),
@@ -559,9 +577,7 @@ impl Node {
                         EdgeErrorKind::Internal,
                     ));
                 };
-                tracing::error!("node got");
-                self.check_ep_auth(&offline.endpoint, &from)?;
-                tracing::error!("auth checked");
+                self.check_ep_auth(&offline.endpoint, &from).await?;
                 node.propose(Proposal::EpOffline(EndpointOffline {
                     topic_code: topic_code.clone(),
                     endpoint: offline.endpoint,
@@ -576,7 +592,7 @@ impl Node {
                     )
                 })?;
                 tracing::error!("proposed");
-                self.remove_edge_routing(&offline.endpoint);
+                self.remove_edge_routing(&offline.endpoint).await;
                 tracing::error!("finished");
                 Ok(edge::EdgeResponseEnum::EndpointOffline)
             }
@@ -588,7 +604,7 @@ impl Node {
                         EdgeErrorKind::Internal,
                     ));
                 };
-                self.check_ep_auth(&interest.endpoint, &from)?;
+                self.check_ep_auth(&interest.endpoint, &from).await?;
                 node.propose(Proposal::EpInterest(interest.clone()))
                     .await
                     .map_err(|e| {
@@ -609,7 +625,7 @@ impl Node {
                     ));
                 };
                 for ep in set_state.update.status.keys() {
-                    self.check_ep_auth(ep, &from)?;
+                    self.check_ep_auth(ep, &from).await?;
                 }
                 node.propose(Proposal::SetState(set_state.clone()))
                     .await

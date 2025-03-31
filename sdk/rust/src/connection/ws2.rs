@@ -75,12 +75,11 @@ where
 {
     type Item = Result<EdgePayload, EdgeConnectionError>;
     fn poll_next(
-        self: std::pin::Pin<&mut Self>,
+        mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        let this = self.project();
+        let this = self.as_mut().project();
         let message = futures_util::ready!(this.inner.poll_next(cx));
-        tracing::warn!(?message, "do received");
         let message = match message {
             Some(Ok(message)) => message,
             Some(Err(e)) => {
@@ -104,13 +103,14 @@ where
         };
         let Message::Binary(payload) = message else {
             // skip
-            return std::task::Poll::Pending;
+            return self.poll_next(cx);
         };
 
         let payload = this
             .codec
             .decode(&payload)
             .map_err(EdgeConnectionError::codec("ws poll_next"))?;
+        tracing::error!(?payload, "[debug] got payload");
         std::task::Poll::Ready(Some(Ok(payload)))
     }
 }
@@ -147,12 +147,12 @@ where
             .map_err(EdgeConnectionError::underlying("ws poll_ready"))
     }
     fn start_send(self: std::pin::Pin<&mut Self>, item: EdgePayload) -> Result<(), Self::Error> {
+        tracing::warn!(?item, "[debug] ws payload do send");
         let this = self.project();
         let payload = this
             .codec
             .encode(&item)
             .map_err(EdgeConnectionError::codec("ws start_send"))?;
-        tracing::warn!(?item, "do send payload");
         this.inner
             .start_send(tokio_tungstenite::tungstenite::Message::Binary(payload))
             .map_err(EdgeConnectionError::underlying("ws start_send"))?;
