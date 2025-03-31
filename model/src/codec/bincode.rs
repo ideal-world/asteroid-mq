@@ -37,7 +37,7 @@ impl bincode::Encode for EdgeError {
     }
 }
 
-impl<'de> bincode::BorrowDecode<'de> for EdgeError {
+impl<'de, C> bincode::BorrowDecode<'de, C> for EdgeError {
     fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
@@ -49,7 +49,7 @@ impl<'de> bincode::BorrowDecode<'de> for EdgeError {
     }
 }
 
-impl bincode::Decode for EdgeError {
+impl<C> bincode::Decode<C> for EdgeError {
     fn decode<D: bincode::de::Decoder>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
@@ -71,14 +71,14 @@ macro_rules! derive_bytes_wrapper {
                 self.0.encode(writer)
             }
         }
-        impl bincode::Decode for $T {
+        impl<C> bincode::Decode<C> for $T {
             fn decode<D: bincode::de::Decoder>(
                 decoder: &mut D,
             ) -> Result<Self, bincode::error::DecodeError> {
                 Ok(Self(Bytes::from(<Vec<u8>>::decode(decoder)?)))
             }
         }
-        impl<'de> bincode::BorrowDecode<'de> for $T {
+        impl<'de, C> bincode::BorrowDecode<'de, C> for $T {
             fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
                 decoder: &mut D,
             ) -> Result<Self, bincode::error::DecodeError> {
@@ -103,7 +103,7 @@ impl bincode::Encode for MessageDurableConfig {
     }
 }
 
-impl bincode::Decode for MessageDurableConfig {
+impl<C> bincode::Decode<C> for MessageDurableConfig {
     fn decode<D: bincode::de::Decoder>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
@@ -115,7 +115,7 @@ impl bincode::Decode for MessageDurableConfig {
     }
 }
 
-impl<'de> bincode::BorrowDecode<'de> for MessageDurableConfig {
+impl<'de, C> bincode::BorrowDecode<'de, C> for MessageDurableConfig {
     fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
