@@ -213,7 +213,6 @@ impl ClientNodeInner {
             seq_id: self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             request,
         };
-        tracing::warn!(?request);
         self.sender
             .send((request, responder))
             .map_err(|e| ClientNodeError {
@@ -276,7 +275,7 @@ impl ClientNodeInner {
                     };
                     let seq_id = request.seq_id;
                     response_pool.write().await.insert(seq_id, responder);
-                    tracing::warn!(seq_id, "[debug] request do send");
+                    // tracing::warn!(seq_id, "[debug] request do send");
                     let send_result = sink.send(EdgePayload::Request(request)).await;
                     if let Err(e) = send_result {
                         tracing::error!("failed to send message: {:?}", e);
@@ -352,10 +351,9 @@ impl ClientNodeInner {
                             drop(wg);
                         }
                         EdgePayload::Response(edge_response) => {
-                            tracing::warn!(?edge_response, "edge response");
                             let seq_id = edge_response.seq_id;
                             if let Some(responder) = response_pool.write().await.remove(&seq_id) {
-                                tracing::warn!(?edge_response, "[debug] received response from server");
+                                // tracing::warn!(?edge_response, "[debug] received response from server");
                                 let _ = responder.send(edge_response.result.into_std());
                             } else {
                                 tracing::error!(seq_id, "response handle not found");

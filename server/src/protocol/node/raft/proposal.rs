@@ -106,7 +106,7 @@ impl ProposalContext {
         let message_id = message.id();
         let status: MessageStatusKind;
         if let Some(node_id) = node.blocking_get_edge_routing(&endpoint) {
-            tracing::warn!(%message_id, %node_id, ?endpoint, "dispatch message to edge");
+            tracing::debug!(%message_id, %node_id, ?endpoint, "dispatch message to edge");
             if let Some(edge) = node.get_edge_connection(node_id) {
                 let result = edge.push_message(&endpoint, message);
                 status = if let Err(err) = result {

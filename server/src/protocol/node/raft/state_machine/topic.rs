@@ -130,7 +130,6 @@ impl TopicData {
             }
             MessageTargetKind::Push => {
                 let ep_collect = self.collect_addr_by_subjects(message.header.subjects.iter());
-                tracing::warn!(?ep_collect, "ep_collect");
                 if ep_collect.is_empty() {
                     ctx.resolve_ack(
                         message.id(),

@@ -110,7 +110,7 @@ where
             .codec
             .decode(&payload)
             .map_err(EdgeConnectionError::codec("ws poll_next"))?;
-        tracing::error!(?payload, "[debug] got payload");
+        // tracing::error!(?payload, "[debug] got payload");
         std::task::Poll::Ready(Some(Ok(payload)))
     }
 }
@@ -147,7 +147,7 @@ where
             .map_err(EdgeConnectionError::underlying("ws poll_ready"))
     }
     fn start_send(self: std::pin::Pin<&mut Self>, item: EdgePayload) -> Result<(), Self::Error> {
-        tracing::warn!(?item, "[debug] ws payload do send");
+        // tracing::warn!(?item, "[debug] ws payload do send");
         let this = self.project();
         let payload = this
             .codec

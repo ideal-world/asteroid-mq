@@ -102,11 +102,11 @@ where
         let mut this = self.as_mut().project();
         let status = this.reconnect_status.as_mut().project();
         match status {
-            ReconnectStatusProj::Reconnecting { future, wakers } => {
+            ReconnectStatusProj::Reconnecting { future: _, wakers } => {
                 wakers.push(cx.waker().clone());
                 Poll::Pending
             },
-            ReconnectStatusProj::Sleeping { future, wakers } => {
+            ReconnectStatusProj::Sleeping { future: _, wakers } => {
                 wakers.push(cx.waker().clone());
                 Poll::Pending
             },
@@ -221,7 +221,7 @@ where
         self.as_mut().poll_connection_ready(cx)
     }
     fn start_send(self: std::pin::Pin<&mut Self>, item: EdgePayload) -> Result<(), Self::Error> {
-        tracing::warn!(?item, "[debug] ar payload do send");
+        // tracing::warn!(?item, "[debug] ar payload do send");
         self.project().connection.start_send(item)
     }
 }

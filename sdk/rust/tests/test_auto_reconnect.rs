@@ -99,10 +99,12 @@ async fn test_auto_reconnect() -> Result<(), Box<dyn std::error::Error>> {
     server_process.kill().await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     let mut server_process = run_server()?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     let handle_0= node_a.send_message(message("after-server-error-0")).await?;
     tracing::info!("message send out");
-    let _wait_result = handle_0.wait().await;
+    let wait_result = handle_0.wait().await;
+    tracing::info!(?wait_result, "message 0 result");
     tokio::time::sleep(Duration::from_secs(3)).await;
     let handle_1= node_a.send_message(message("after-server-error-1")).await?;
     let handle_2= node_a.send_message(message("after-server-error-2")).await?;
