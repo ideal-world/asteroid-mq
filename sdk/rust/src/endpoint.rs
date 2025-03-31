@@ -126,7 +126,8 @@ impl ClientEndpoint {
         };
 
         // offline old point
-        let ep_offline_result = node_inner.clone()
+        let ep_offline_result = node_inner
+            .clone()
             .send_ep_offline(self.topic_code.clone(), self.addr)
             .await;
 
@@ -135,7 +136,8 @@ impl ClientEndpoint {
         node_inner.endpoint_map.write().await.remove(&self.addr);
         // detach old node, so we won't offline twice in drop
         self.node = Weak::new();
-        let mut new_ep = node_inner.into_client_node()
+        let mut new_ep = node_inner
+            .into_client_node()
             .create_endpoint(self.topic_code.clone(), self.interests.clone())
             .await?;
         std::mem::swap(&mut new_ep, self);

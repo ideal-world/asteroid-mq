@@ -12,8 +12,8 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
-asteroid-mq-model = { version = "0.1.0-alpha.15", path = "../../model" }
-asteroid-mq = { version = "0.1.0-alpha.15", path = "../../server", optional = true }
+asteroid-mq-model = { version = "0.1.0-alpha.16", path = "../../model" }
+asteroid-mq = { version = "0.1.0-alpha.16", path = "../../server", optional = true }
 futures-util = { workspace = true, features = ["sink"] }
 tokio-tungstenite = { version = "0.24", optional = true }
 tokio-util = "0.7.12"

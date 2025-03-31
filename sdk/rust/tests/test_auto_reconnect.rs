@@ -24,18 +24,18 @@ async fn get_ws_url() -> Result<String, Box<dyn std::error::Error>> {
 #[tokio::test]
 async fn test_auto_reconnect() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
-    .with_max_level(tracing::Level::DEBUG)
-    .init();
-    fn run_server() -> Result<tokio::process::Child, tokio::io::Error>{
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+    fn run_server() -> Result<tokio::process::Child, tokio::io::Error> {
         tokio::process::Command::new("cargo")
-        .arg("run")
-        .arg("-p")
-        .arg("asteroid-mq")
-        .arg("--example")
-        .arg("axum-server")
-        .arg("--features")
-        .arg("cluster-k8s")
-        .spawn()
+            .arg("run")
+            .arg("-p")
+            .arg("asteroid-mq")
+            .arg("--example")
+            .arg("axum-server")
+            .arg("--features")
+            .arg("cluster-k8s")
+            .spawn()
     }
     let build_serve_result = tokio::process::Command::new("cargo")
         .arg("build")
@@ -90,24 +90,29 @@ async fn test_auto_reconnect() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!("Received message in b2: {:?}", &message.payload.0);
             let _result = message.ack_processed().await;
         }
-
     });
-    node_a.send_message(message("before-server-error-0")).await?;
-    node_a.send_message(message("before-server-error-1")).await?;
-    node_a.send_message(message("before-server-error-2")).await?;
+    node_a
+        .send_message(message("before-server-error-0"))
+        .await?;
+    node_a
+        .send_message(message("before-server-error-1"))
+        .await?;
+    node_a
+        .send_message(message("before-server-error-2"))
+        .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     server_process.kill().await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     let mut server_process = run_server()?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let handle_0= node_a.send_message(message("after-server-error-0")).await?;
+    let handle_0 = node_a.send_message(message("after-server-error-0")).await?;
     tracing::info!("message send out");
     let wait_result = handle_0.wait().await;
     tracing::info!(?wait_result, "message 0 result");
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let handle_1= node_a.send_message(message("after-server-error-1")).await?;
-    let handle_2= node_a.send_message(message("after-server-error-2")).await?;
+    let handle_1 = node_a.send_message(message("after-server-error-1")).await?;
+    let handle_2 = node_a.send_message(message("after-server-error-2")).await?;
     let _wait_result = handle_1.wait().await?;
     let _wait_result = handle_2.wait().await?;
     tokio::time::sleep(Duration::from_secs(1)).await;

@@ -227,7 +227,9 @@ impl ClientNodeInner {
     async fn wait_handle(
         response_handle: ResponseHandle,
     ) -> Result<EdgeResponseEnum, ClientNodeError> {
-        let response = response_handle.await.map_err(|_| ClientNodeError::disconnected("wait handle"))??;
+        let response = response_handle
+            .await
+            .map_err(|_| ClientNodeError::disconnected("wait handle"))??;
         Ok(response)
     }
     async fn send_request_and_wait(
@@ -312,7 +314,7 @@ impl ClientNodeInner {
                                             if matches!(e.kind,EdgeConnectionErrorKind::Closed) {
                                                 tracing::info!("connection closed");
                                                 break;
-                                            } 
+                                            }
                                         },
                                         _ => {
                                             tracing::error!("failed to receive message: {:?}", e);

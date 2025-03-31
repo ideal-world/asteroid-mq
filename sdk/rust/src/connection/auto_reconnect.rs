@@ -1,4 +1,7 @@
-use std::{future::Future, task::{Poll, Waker}};
+use std::{
+    future::Future,
+    task::{Poll, Waker},
+};
 
 use asteroid_mq_model::{
     connection::{EdgeConnectionError, EdgeNodeConnection},
@@ -105,14 +108,14 @@ where
             ReconnectStatusProj::Reconnecting { future: _, wakers } => {
                 wakers.push(cx.waker().clone());
                 Poll::Pending
-            },
+            }
             ReconnectStatusProj::Sleeping { future: _, wakers } => {
                 wakers.push(cx.waker().clone());
                 Poll::Pending
-            },
+            }
             ReconnectStatusProj::Connected => {
                 if this.connection.is_closed() {
-                    tracing::warn!("connection is not ready, reconnecting");       
+                    tracing::warn!("connection is not ready, reconnecting");
                     let reconnect_future = this.connection.reconnect();
                     this.reconnect_status.set(ReconnectStatus::Reconnecting {
                         future: reconnect_future,
@@ -156,7 +159,12 @@ where
                         Ok(new_connection) => {
                             let retry_times = *this.retry_times;
                             let reconnected_times = *this.reconnected_times;
-                            tracing::info!(retry_times, reconnected_times, wakers_count = wakers.len(), "reconnect success");
+                            tracing::info!(
+                                retry_times,
+                                reconnected_times,
+                                wakers_count = wakers.len(),
+                                "reconnect success"
+                            );
                             for waker in wakers {
                                 waker.wake_by_ref();
                             }
@@ -175,7 +183,7 @@ where
                     let reconnect_future = this.connection.reconnect();
                     this.reconnect_status.set(ReconnectStatus::Reconnecting {
                         future: reconnect_future,
-                        wakers
+                        wakers,
                     });
                     continue;
                 }
@@ -185,7 +193,7 @@ where
                         let reconnect_future = this.connection.reconnect();
                         this.reconnect_status.set(ReconnectStatus::Reconnecting {
                             future: reconnect_future,
-                            wakers: vec![]
+                            wakers: vec![],
                         });
                         continue;
                     }
@@ -257,7 +265,7 @@ where
         let reconnect_future = this.connection.reconnect();
         this.reconnect_status.set(ReconnectStatus::Reconnecting {
             future: reconnect_future,
-            wakers: vec![]
+            wakers: vec![],
         });
         self.poll_next(cx)
     }
